@@ -92,6 +92,7 @@ module DatastoreServer
 
   # Number of servers is based on the number of CPUs.
   def self.number_of_servers()
+    return 1
     # If this is NaN then it returns 0
     num_procs = `cat /proc/cpuinfo | grep processor | wc -l`.to_i
     if num_procs == 0

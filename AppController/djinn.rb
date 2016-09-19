@@ -379,7 +379,7 @@ class Djinn
 
   # We need to leave some extra RAM available for the system to operate
   # safely.
-  SAFE_MEM = 500
+  SAFE_MEM = 10
 
   # A regular expression that can be used to match any character that is not
   # acceptable to use in a hostname:port string, used to filter out unacceptable

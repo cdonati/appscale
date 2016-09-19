@@ -313,8 +313,9 @@ class DatastoreProxy(AppDBInterface):
     remaining_retries = INITIAL_CONNECT_RETRIES
     while True:
       try:
-        self.cluster = Cluster(self.hosts)
+        self.cluster = Cluster(self.hosts, control_connection_timeout=None)
         self.session = self.cluster.connect(KEYSPACE)
+        self.session.default_timeout = None
         break
       except cassandra.cluster.NoHostAvailable as connection_error:
         remaining_retries -= 1
