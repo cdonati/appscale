@@ -314,6 +314,11 @@ class _VersionedLibrary(object):
 
 _SUPPORTED_LIBRARIES = [
     _VersionedLibrary(
+        'bson',
+        'https://api.mongodb.com/python/current/',
+        'The bson library included in pymongo.',
+        ['']),
+    _VersionedLibrary(
         'django',
         'http://www.djangoproject.com/',
         'A full-featured web application framework for Python.',
@@ -360,6 +365,11 @@ _SUPPORTED_LIBRARIES = [
         'A library for creating and transforming images.',
         ['1.1.7']),
     _VersionedLibrary(
+        'psycopg2',
+        'http://initd.org/psycopg/',
+        'A Python-PostgreSQL Database Adapter.',
+        ['2.4.5']),
+    _VersionedLibrary(
         'PyAMF',
         'http://www.pyamf.org/',
         'A library that provides (AMF) Action Message Format functionality.',
@@ -370,6 +380,11 @@ _SUPPORTED_LIBRARIES = [
         'A library of cryptogoogle.appengine._internal.graphy functions such as random number generation.',
         ['2.3', '2.6'],
         ),
+    _VersionedLibrary(
+        'pymongo',
+        'https://api.mongodb.com/python/current/',
+        'A Python driver for MongoDB',
+        ['3.4.0']),
     _VersionedLibrary(
         'setuptools',
         'http://pypi.python.org/pypi/setuptools',

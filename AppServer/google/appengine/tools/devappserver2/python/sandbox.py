@@ -42,12 +42,14 @@ from google.appengine.tools.devappserver2.python import stubs
 CODING_MAGIC_COMMENT_RE = re.compile('coding[:=]\s*([-\w.]+)')
 DEFAULT_ENCODING = 'ascii'
 
-_C_MODULES = frozenset(['numpy', 'Crypto', 'lxml', 'PIL'])
+_C_MODULES = frozenset(['numpy', 'Crypto', 'lxml', 'PIL',
+                        'pymongo', 'bson', 'psycopg2'])
 
 NAME_TO_CMODULE_WHITELIST_REGEX = {
     'numpy': re.compile(r'numpy(\..*)?$'),
     'pycrypto': re.compile(r'Crypto(\..*)?$'),
     'lxml': re.compile(r'lxml(\..*)?$'),
+    'psycopg2': re.compile(r'psycopg2(\..*)?$'),
     'PIL': re.compile(r'(PIL(\..*)?|_imaging|_imagingft|_imagingmath)$'),
 }
 
