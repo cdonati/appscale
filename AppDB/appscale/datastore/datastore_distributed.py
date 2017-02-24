@@ -1341,21 +1341,24 @@ class DatastoreDistributed():
        A validated database result.
     """
     final_result = []
-    while 1: 
-      result = self.datastore_batch.range_query(
-        dbconstants.APP_ENTITY_TABLE,
-        APP_ENTITY_SCHEMA,
+    while 1:
+      references = self.datastore_batch.range_query(
+        dbconstants.KINDLESS_INDEX,
+        dbconstants.KINDLESS_SCHEMA,
         startrow,
         endrow,
         limit,
         offset=0,
         start_inclusive=start_inclusive,
-        end_inclusive=end_inclusive)
+        end_inclusive=end_inclusive
+      )
+
+      result = self.__fetch_entities(references)
 
       prev_len = len(result)
       last_result = None
       if result:
-        last_result = result[-1].keys()[0]
+        last_result = references[-1].keys()[0]
       else: 
         break
 
@@ -1369,7 +1372,7 @@ class DatastoreDistributed():
       else:
         break
 
-    return self.__extract_entities(final_result)
+    return final_result
 
   def kindless_query(self, query, filter_info):
     """ Performs kindless queries where queries are performed 

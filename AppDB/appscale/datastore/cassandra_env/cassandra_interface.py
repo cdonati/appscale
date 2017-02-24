@@ -137,6 +137,10 @@ def deletions_for_entity(entity, composite_indices=()):
                     'key': kind_key,
                     'operation': Operations.DELETE})
 
+  deletions.append({'table': dbconstants.KINDLESS_INDEX,
+                    'key': entity_key,
+                    'operation': Operations.DELETE})
+
   return deletions
 
 
@@ -264,6 +268,11 @@ def mutations_for_entity(entity, txn, current_value=None,
                       'key': key,
                       'operation': Operations.PUT,
                       'values': reference_value})
+
+  mutations.append({'table': dbconstants.KINDLESS_INDEX,
+                    'key': entity_key,
+                    'operation': Operations.PUT,
+                    'values': reference_value})
 
   return mutations
 
