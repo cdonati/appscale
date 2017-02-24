@@ -441,7 +441,7 @@ class DatastoreDistributed():
         start_inclusive=start_inclusive,
       )
 
-      pb_entities = self.__fetch_entities(references, app_id)
+      pb_entities = self.__fetch_entities(references)
       entities = [entity_pb.EntityProto(entity) for entity in pb_entities]
 
       self.insert_composite_indexes(entities, [index])
@@ -1040,12 +1040,11 @@ class DatastoreDistributed():
 
     return True
 
-  def __fetch_entities_from_row_list(self, rowkeys, app_id):
+  def __fetch_entities_from_row_list(self, rowkeys):
     """ Given a list of keys fetch the entities from the entity table.
     
     Args:
       rowkeys: A list of strings which are keys to the entitiy table.
-      app_id: A string, the application identifier.
     Returns:
       A list of entities.
     """
@@ -1077,18 +1076,17 @@ class DatastoreDistributed():
         rowkeys.append(ent)
     return rowkeys
 
-  def __fetch_entities(self, refs, app_id):
+  def __fetch_entities(self, refs):
     """ Given a list of references, get the entities.
 
     Args:
       refs: key/value pairs where the values contain a reference to
             the entitiy table.
-      app_id: A string, the application identifier.
     Returns:
       A list of validated entities.
     """
     rowkeys = self.__extract_rowkeys_from_refs(refs)
-    return self.__fetch_entities_from_row_list(rowkeys, app_id)
+    return self.__fetch_entities_from_row_list(rowkeys)
 
   def __fetch_entities_dict(self, refs, app_id):
     """ Given a list of references, return the entities as a dictionary.
@@ -1579,7 +1577,7 @@ class DatastoreDistributed():
         end_inclusive=end_inclusive
       )
 
-      new_entities = self.__fetch_entities(references, clean_app_id(query.app()))
+      new_entities = self.__fetch_entities(references)
       entities.extend(new_entities)
 
       # If we have enough valid entities to satisfy the query, we're done.
@@ -2596,8 +2594,7 @@ class DatastoreDistributed():
         potential_entities = self.__extract_entities_from_composite_indexes(
           query, references)
       else:
-        potential_entities = self.__fetch_entities(
-          references, clean_app_id(query.app()))
+        potential_entities = self.__fetch_entities(references)
 
       if len(multiple_equality_filters) > 0:
         self.logger.debug('Detected multiple equality filters on a repeated '
