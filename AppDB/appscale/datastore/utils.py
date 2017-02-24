@@ -598,6 +598,27 @@ def tx_partition(app, txid):
   return bytearray(struct.pack('<q', murmur_int))
 
 
+def entity_partition(key):
+  """ Prefix an entity key with a hash.
+
+  This distributes keys evenly with the ByteOrderedPartitioner.
+
+  Args:
+    key: A string containing an entity key.
+  Returns:
+    A bytearray that can be used as the entity partition key.
+  """
+  murmur_int = mmh3.hash(key)
+  hash = struct.pack('i', murmur_int)
+  return hash + key
+
+
+def unhash_result(result):
+  hashed_key = result.keys()[0]
+  value = result[hashed_key]
+  return {hashed_key[4:]: value}
+
+
 def encode_entity_table_key(key):
   """ Create a key that can be used for the entities table.
 

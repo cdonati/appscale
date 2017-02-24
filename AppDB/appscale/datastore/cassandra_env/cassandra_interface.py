@@ -32,6 +32,7 @@ from ..unpackaged import APPSCALE_PYTHON_APPSERVER
 from ..utils import clean_app_id
 from ..utils import create_key
 from ..utils import encode_index_pb
+from ..utils import entity_partition
 from ..utils import get_composite_index_keys
 from ..utils import get_composite_indexes_rows
 from ..utils import get_entity_key
@@ -128,7 +129,7 @@ def deletions_for_entity(entity, composite_indices=()):
 
   entity_key = get_entity_key(prefix, entity.key().path())
   deletions.append({'table': dbconstants.APP_ENTITY_TABLE,
-                    'key': entity_key,
+                    'key': entity_partition(entity_key),
                     'operation': Operations.DELETE})
 
   kind_key = get_kind_key(prefix, entity.key().path())
@@ -232,7 +233,7 @@ def mutations_for_entity(entity, txn, current_value=None,
   entity_value = {dbconstants.APP_ENTITY_SCHEMA[0]: entity.Encode(),
                   dbconstants.APP_ENTITY_SCHEMA[1]: str(txn)}
   mutations.append({'table': dbconstants.APP_ENTITY_TABLE,
-                    'key': entity_key,
+                    'key': entity_partition(entity_key),
                     'operation': Operations.PUT,
                     'values': entity_value})
 
@@ -352,6 +353,24 @@ class DatastoreProxy(AppDBInterface):
       message = 'Exception during batch_get_entity'
       logging.exception(message)
       raise AppScaleDBConnectionError(message)
+
+  def fetch_entities(self, keys):
+    """ Retrieve entities for a set of keys.
+
+    Args:
+      keys: An iterable containing strings that specify entity keys.
+    Returns:
+      A dictionary mapping row keys to entities.
+    """
+    hashed_entity_keys = [entity_partition(key) for key in keys]
+    hashed_results = self.batch_get_entity(
+      dbconstants.APP_ENTITY_TABLE, hashed_entity_keys,
+      dbconstants.APP_ENTITY_SCHEMA)
+    response = {}
+    for key in keys:
+      hashed_key = entity_partition(key)
+      response[key] = hashed_results[hashed_key]
+    return response
 
   def batch_put_entity(self, table_name, row_keys, column_names, cell_values,
                        ttl=None):

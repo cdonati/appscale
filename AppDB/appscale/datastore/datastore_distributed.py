@@ -513,8 +513,7 @@ class DatastoreDistributed():
       prefix = self.get_table_prefix(entity)
       entity_keys.append(get_entity_key(prefix, entity.key().path()))
 
-    current_values = self.datastore_batch.batch_get_entity(
-      dbconstants.APP_ENTITY_TABLE, entity_keys, APP_ENTITY_SCHEMA)
+    current_values = self.datastore_batch.fetch_entities(entity_keys)
 
     by_group = {}
     for entity in entities:
@@ -568,8 +567,7 @@ class DatastoreDistributed():
       entity_keys.append(get_entity_key(prefix, key.path()))
 
     # Must fetch the entities to get the keys of indexes before deleting.
-    current_values = self.datastore_batch.batch_get_entity(
-      dbconstants.APP_ENTITY_TABLE, entity_keys, APP_ENTITY_SCHEMA)
+    current_values = self.datastore_batch.fetch_entities(entity_keys)
 
     for key in entity_keys:
       if not current_values[key]:
@@ -831,10 +829,7 @@ class DatastoreDistributed():
       index_key = str(encode_index_pb(key.path()))
       prefix = self.get_table_prefix(key)
       row_keys.append(self._SEPARATOR.join([prefix, index_key]))
-    result = self.datastore_batch.batch_get_entity(
-      dbconstants.APP_ENTITY_TABLE,
-      row_keys,
-      APP_ENTITY_SCHEMA)
+    result = self.datastore_batch.fetch_entities(row_keys)
     return result, row_keys
 
   def dynamic_get(self, app_id, get_request, get_response):
@@ -987,8 +982,7 @@ class DatastoreDistributed():
     else:   
       # Fetch the entity from the datastore in order to get the property
       # values.
-      ret = self.datastore_batch.batch_get_entity(
-        dbconstants.APP_ENTITY_TABLE, [last_result_key], APP_ENTITY_SCHEMA)
+      ret = self.datastore_batch.fetch_entities([last_result_key])
 
       if APP_ENTITY_SCHEMA[0] not in ret[last_result_key]:
         message = '{} not found in {}'.format(
@@ -1055,8 +1049,7 @@ class DatastoreDistributed():
     Returns:
       A list of entities.
     """
-    result = self.datastore_batch.batch_get_entity(
-      dbconstants.APP_ENTITY_TABLE, rowkeys, APP_ENTITY_SCHEMA)
+    result = self.datastore_batch.fetch_entities(rowkeys)
     entities = []
     for key in rowkeys:
       if key in result and APP_ENTITY_SCHEMA[0] in result[key]:
@@ -1119,8 +1112,7 @@ class DatastoreDistributed():
     Returns:
       A dictionary of validated entities.
     """
-    results = self.datastore_batch.batch_get_entity(
-      dbconstants.APP_ENTITY_TABLE, rowkeys, APP_ENTITY_SCHEMA)
+    results = self.datastore_batch.fetch_entities(rowkeys)
 
     clean_results = {}
     for key in rowkeys:
@@ -3233,8 +3225,7 @@ class DatastoreDistributed():
                            for key, _ in metadata['puts'].iteritems()]
       entity_table_keys.extend([encode_entity_table_key(key)
                                 for key in metadata['deletes']])
-      current_values = self.datastore_batch.batch_get_entity(
-        dbconstants.APP_ENTITY_TABLE, entity_table_keys, APP_ENTITY_SCHEMA)
+      current_values = self.datastore_batch.fetch_entities(entity_table_keys)
 
       batch = []
       entity_changes = []

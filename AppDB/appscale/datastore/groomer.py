@@ -936,7 +936,9 @@ class DatastoreGroomer(threading.Thread):
     while True:
       try:
         logging.debug('Fetching {} entities'.format(self.BATCH_SIZE))
-        entities = self.get_entity_batch(last_key)
+        hashed_entities = self.get_entity_batch(last_key)
+
+        entities = [utils.unhash_result(result) for result in hashed_entities]
 
         if not entities:
           break
@@ -944,7 +946,7 @@ class DatastoreGroomer(threading.Thread):
         for entity in entities:
           self.process_entity(entity)
 
-        last_key = entities[-1].keys()[0]
+        last_key = hashed_entities[-1].keys()[0]
         self.entities_checked += len(entities)
         if time.time() > self.last_logged + self.LOG_PROGRESS_FREQUENCY:
           logging.info('Checked {} entities'.format(self.entities_checked))
@@ -1144,24 +1146,6 @@ class DatastoreGroomer(threading.Thread):
         'id': self.CLEAN_ENTITIES_TASK,
         'description': 'clean up entities',
         'function': self.clean_up_entities,
-        'args': []
-      },
-      {
-        'id': self.CLEAN_ASC_INDICES_TASK,
-        'description': 'clean up ascending indices',
-        'function': self.clean_up_indexes,
-        'args': [datastore_pb.Query_Order.ASCENDING]
-      },
-      {
-        'id': self.CLEAN_DSC_INDICES_TASK,
-        'description': 'clean up descending indices',
-        'function': self.clean_up_indexes,
-        'args': [datastore_pb.Query_Order.DESCENDING]
-      },
-      {
-        'id': self.CLEAN_KIND_INDICES_TASK,
-        'description': 'clean up kind indices',
-        'function': self.clean_up_kind_indices,
         'args': []
       },
       {
