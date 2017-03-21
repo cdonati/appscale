@@ -29,6 +29,7 @@ import os
 import re
 import socket
 import sys
+import traceback
 import urllib
 import urllib2
 import urlparse
@@ -521,6 +522,10 @@ class AbstractRpcServer(object):
     if 'AUTH_DOMAIN' in os.environ:
       auth_domain = os.environ['AUTH_DOMAIN'].lower()
 
+    if timeout is not None:
+      logging.warning('Timeout has been set to {}'.format(timeout))
+      logging.warning('request: {}'.format(repr(payload)))
+      logging.warning('traceback: {}'.format(traceback.extract_stack()))
     old_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(timeout)
     try:
