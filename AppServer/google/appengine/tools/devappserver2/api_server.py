@@ -183,9 +183,10 @@ class APIServer(wsgi_server.WsgiServer):
       api_response = _execute_request(request).Encode()
       response.set_response(api_response)
     except Exception, e:
-      logging.debug('Exception while handling %s\n%s',
+      logging.warning('Exception while handling %s\n%s',
                     request,
                     traceback.format_exc())
+      logging.warning('took %0.4f sec', time.time() - start_time)
       response.set_exception(pickle.dumps(e))
       if isinstance(e, apiproxy_errors.ApplicationError):
         application_error = response.mutable_application_error()
