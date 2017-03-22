@@ -596,6 +596,9 @@ class DatastoreDistributed():
       ZKTransactionException: If we are unable to acquire/release ZooKeeper locks.
     """
     entities = put_request.entity_list()
+    if len(entities) < 5:
+      for entity in entities:
+        self.logger.debug('key: {}'.format(entity.key()))
 
     num_of_required_ids = 0
     for entity in entities:
