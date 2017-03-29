@@ -101,6 +101,13 @@ case "$DIST" in
         ;;
 esac
 
+# Use the latest rabbitmq-server release.
+echo 'deb http://www.rabbitmq.com/debian/ testing main' > \
+  /etc/apt/sources.list.d/rabbitmq.list
+wget -O- https://www.rabbitmq.com/rabbitmq-release-signing-key.asc | \
+  apt-key add -
+apt-get update
+
 # This will install dependencies from control.$DIST (ie distro specific
 # packages).
 PACKAGES="$(find debian -regex ".*\/control\.${DIST}\$" -exec mawk -f debian/package-list.awk {} +)"
