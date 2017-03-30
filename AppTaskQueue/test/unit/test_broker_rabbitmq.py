@@ -20,7 +20,7 @@ class TestBrokerRabbitMQ(unittest.TestCase):
        .should_receive("read").and_return("192.168.0.1")
     flexmock(file_io) \
        .should_receive("write").and_return(None)
-    expected = "amqp://guest:guest@192.168.0.1:5672//"
+    expected = "amqp://guest:guest@localhost:5672//"
     self.assertEquals(rabbitmq.get_connection_string(), expected)
 
 if __name__ == "__main__":
