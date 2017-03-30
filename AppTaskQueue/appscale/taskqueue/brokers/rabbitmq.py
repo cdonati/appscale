@@ -22,7 +22,7 @@ def get_connection_string():
   """
   raw_ips = file_io.read(RABBITMQ_LOCATION_FILE)
   ips = raw_ips.split('\n')
-  rabbitmq_ip = ips[0]
+  rabbitmq_ip = 'localhost'
 
   return 'amqp://guest:guest@' + rabbitmq_ip + ':' + \
          str(RABBITMQ_PORT) + '//'
