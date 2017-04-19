@@ -66,13 +66,17 @@ fi
 export APPSCALE_HOME_RUNTIME=`pwd`
 export CONFIG_DIR="/etc/appscale"
 
-# Wheezy does not have HAProxy in its main repositories.
-if [ "${DIST}" = "wheezy" ]; then
-    echo deb http://httpredir.debian.org/debian wheezy-backports main > \
-      /etc/apt/sources.list.d/backports.list
-    curl https://haproxy.debian.net/bernat.debian.org.gpg | apt-key add -
-fi
-
+case "$DIST" in
+    precise|trusty)
+        apt-get install software-properties-common
+        add-apt-repository -y ppa:vbernat/haproxy-1.5
+        ;;
+    wheezy)
+        echo deb http://httpredir.debian.org/debian wheezy-backports main > \
+          /etc/apt/sources.list.d/backports.list
+        curl https://haproxy.debian.net/bernat.debian.org.gpg | apt-key add -
+        ;;
+esac
 
 # Ensure we have apt-add-repository. On some very small/custom builds it
 # may be missing (for example docker).
