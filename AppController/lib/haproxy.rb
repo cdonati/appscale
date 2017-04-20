@@ -169,7 +169,8 @@ module HAProxy
   #   name        : the name of the server
   def self.create_app_config(servers, my_private_ip, listen_port, name)
     config = "# Create a load balancer for the #{name} application\n"
-    config << "listen #{name} #{my_private_ip}:#{listen_port}\n"
+    config << "listen #{name}"
+    config << "  bind #{my_private_ip}:#{listen_port}\n"
     servers.each do |server|
       config << HAProxy.server_config(name, "#{server['ip']}:#{server['port']}") + "\n"
     end
