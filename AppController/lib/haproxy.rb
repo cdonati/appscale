@@ -245,7 +245,8 @@ module HAProxy
     end
 
     config = "# Create a load balancer for the app #{app_name} \n"
-    config << "listen #{full_app_name} #{private_ip}:#{listen_port} \n"
+    config << "listen #{full_app_name}\n"
+    config << "  bind #{private_ip}:#{listen_port}\n"
     config << servers.join("\n")
 
     config_path = File.join(SITES_ENABLED_PATH,
