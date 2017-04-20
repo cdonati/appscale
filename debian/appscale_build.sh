@@ -69,7 +69,7 @@ export CONFIG_DIR="/etc/appscale"
 case "$DIST" in
     precise|trusty)
         apt-get install software-properties-common
-        add-apt-repository -y ppa:vbernat/haproxy-1.5
+        add-apt-repository -y ppa:vbernat/haproxy-1.6
         ;;
     wheezy)
         echo deb http://httpredir.debian.org/debian wheezy-backports main > \
