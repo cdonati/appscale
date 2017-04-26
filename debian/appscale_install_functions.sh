@@ -373,7 +373,7 @@ installservice()
     update-rc.d -f appscale-controller defaults
 
     # Make sure AppScale pidfile directory exists.
-    mkdir -p /var/run/appscale
+    mkdir -pv /var/run/appscale
 }
 
 postinstallservice()
