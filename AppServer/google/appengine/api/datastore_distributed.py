@@ -27,6 +27,7 @@ import datetime
 import logging
 import os
 import time
+import socket
 import sys
 import threading
 import warnings
@@ -344,13 +345,19 @@ class DatastoreDistributed(apiproxy_stub.APIProxyStub):
       api_request.set_request_id(request_id)
 
     api_response = remote_api_pb.Response()
-    api_response = api_request.sendCommand(self.__datastore_location,
-      tag,
-      api_response,
-      1,
-      self.__is_encrypted, 
-      KEY_LOCATION,
-      CERT_LOCATION)
+    try:
+      api_response = api_request.sendCommand(
+        self.__datastore_location,
+        tag,
+        api_response,
+        1,
+        self.__is_encrypted,
+        KEY_LOCATION,
+        CERT_LOCATION)
+    except socket.timeout:
+      raise apiproxy_errors.ApplicationError(
+        datastore_pb.Error.TIMEOUT,
+        'Connection timed out when making datastore request')
 
     if not api_response or not api_response.has_response():
       raise datastore_errors.InternalError(
