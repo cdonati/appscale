@@ -182,7 +182,10 @@ class APIServer(wsgi_server.WsgiServer):
       request.ParseFromString(wsgi_input)
       api_response = _execute_request(request).Encode()
       response.set_response(api_response)
-    except Exception, e:
+    except Exception as e:
+      duration_ms = int(round((time.time() - start_time) * 1000))
+      logging.exception(
+        '{} failed after {}ms'.format(request.request_id(), duration_ms))
       logging.debug('Exception while handling %s\n%s',
                     request,
                     traceback.format_exc())
