@@ -24,6 +24,7 @@ index functions, transaction functions.
 
 import collections
 import datetime
+import errno
 import logging
 import os
 import time
@@ -354,10 +355,12 @@ class DatastoreDistributed(apiproxy_stub.APIProxyStub):
         self.__is_encrypted,
         KEY_LOCATION,
         CERT_LOCATION)
-    except socket.timeout:
-      raise apiproxy_errors.ApplicationError(
-        datastore_pb.Error.TIMEOUT,
-        'Connection timed out when making datastore request')
+    except socket.error as socket_error:
+      if socket_error.errno == errno.ETIMEDOUT:
+        raise apiproxy_errors.ApplicationError(
+          datastore_pb.Error.TIMEOUT,
+          'Connection timed out when making datastore request')
+      raise
 
     if not api_response or not api_response.has_response():
       raise datastore_errors.InternalError(
