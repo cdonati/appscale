@@ -38,7 +38,7 @@ How to set up
    starts 2x the number of cores on the machine.
 
 .. _Google Cloud Datastore: https://cloud.google.com/datastore/
-.. _Start a Cassandra cluster: http://cassandra.apache.org/doc/latest\
-/getting_started/index.html
-.. _Start a ZooKeeper cluster: https://zookeeper.apache.org/doc/trunk\
-/zookeeperStarted.html
+.. _Start a Cassandra cluster:
+   http://cassandra.apache.org/doc/latest/getting_started/index.html
+.. _Start a ZooKeeper cluster:
+   https://zookeeper.apache.org/doc/trunk/zookeeperStarted.html
