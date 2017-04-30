@@ -10,23 +10,23 @@ How to set up
 
 1. `Start a Cassandra cluster`_
 
-  * You can use cassandra.yaml and cassandra-env.sh in
-    appscale/datastore/cassandra-env/templates as a starting point if you
-    replace all options that start with "APPSCALE-"
-  * Make sure you use the ByteOrderedPartitioner
-  * Specifying num_tokens as 1 for all nodes is recommended if you want to be
-    able to rebalance your cluster
+   * You can use cassandra.yaml and cassandra-env.sh in
+     appscale/datastore/cassandra-env/templates as a starting point if you
+     replace all options that start with "APPSCALE-"
+   * Make sure you use the ByteOrderedPartitioner
+   * Specifying num_tokens as 1 for all nodes is recommended if you want to be
+     able to rebalance your cluster
 
 2. `Start a ZooKeeper cluster`_
 3. Install the appscale-datastore Python package with ``pip install ./AppDB``
 4. Create the following files (the file names are not applicable to Cassandra,
    but they are an artifact from when AppScale used different databases):
 
-  * /etc/appscale/masters: This should contain the private IP address of any
-    one of the Cassandra machines.
-  * /etc/appscale/slaves: This should contain the IP addresses of the
-    remaining machines in the cluster. Each address should be on a different
-    line.
+   * /etc/appscale/masters: This should contain the private IP address of any
+     one of the Cassandra machines.
+   * /etc/appscale/slaves: This should contain the IP addresses of the
+     remaining machines in the cluster. Each address should be on a different
+     line.
 
 5. Create a file called /etc/appscale/zookeeper_locations.json with the content
    ``{"locations":["zk-ip-1", "zk-ip-2"]}`` (with real IP addresses).
