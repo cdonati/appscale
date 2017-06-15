@@ -2082,19 +2082,25 @@ class Djinn
     last_print = Time.now.to_i
 
     until @kill_sig_received do
+      Djinn.log_info('starting duty loop')
+
       # We want to ensure monit stays up all the time, since we rely on
       # it for services and AppServers.
       unless MonitInterface.start_monit()
         Djinn.log_warn("Monit was not running: restarted it.")
       end
 
+      Djinn.log_info('writing db info')
       write_database_info
+      Djinn.log_info('updating firewall')
       update_firewall
+      Djinn.log_info('writing zk locations')
       write_zookeeper_locations
 
       # This call will block if we cannot reach a zookeeper node, but will
       # be very fast if we have an available connection. The function sets
       # the state in case we are looking for a zookeeper server.
+      Djinn.log_info('picking zk')
       pick_zookeeper(@zookeeper_data)
 
       @state = "Done starting up AppScale, now in heartbeat mode"
@@ -2110,18 +2116,22 @@ class Djinn
       if my_node.is_shadow?
         flush_log_buffer
         update_node_info_cache
+        Djinn.log_info('backing up appcontroller state')
         backup_appcontroller_state
 
         APPS_LOCK.synchronize {
           # Check all apps that should be running are ready to run.
+          Djinn.log_info('checking running apps')
           check_running_apps
 
+          Djinn.log_info('loading apps')
           # Starts apps that are not running yet but they should.
           apps_to_load = @app_names - @apps_loaded
           apps_to_load.each { |app|
             setup_app_dir(app, true)
             setup_appengine_application(app)
           }
+          Djinn.log_info('scaling deployment')
           scale_deployment
         }
       elsif !restore_appcontroller_state
@@ -2129,12 +2139,15 @@ class Djinn
         next
       end
 
+      Djinn.log_info('checking role change')
       # We act here if options or roles for this node changed.
       check_role_change(old_options, old_jobs)
 
+      Djinn.log_info('checking running appservers')
       # Check the running, terminated, pending AppServers.
       check_running_appservers
 
+      Djinn.log_info('checking stopped apps')
       # Detect applications that have been undeployed and terminate all
       # running AppServers.
       check_stopped_apps
@@ -2142,6 +2155,7 @@ class Djinn
       # Load balancers and shadow need to check/update nginx/haproxy.
       if my_node.is_load_balancer?
         APPS_LOCK.synchronize {
+          Djinn.log_info('checking haproxy')
           check_haproxy
         }
       end
@@ -2158,6 +2172,7 @@ class Djinn
         last_print = Time.now.to_i
       end
 
+      Djinn.log_info('sleeping')
       Kernel.sleep(DUTY_CYCLE)
     end
   end
