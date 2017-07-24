@@ -80,9 +80,6 @@ _MAJOR_VERSION_ID_PATTERN = r'^(?:(?:(%s):)?)(%s)$' % (MODULE_ID_RE_STRING,
 
 _MAJOR_VERSION_ID_RE = re.compile(_MAJOR_VERSION_ID_PATTERN)
 
-_REQUEST_ID_PATTERN = r'^[\da-fA-F]+$'
-_REQUEST_ID_RE = re.compile(_REQUEST_ID_PATTERN)
-
 
 class Error(Exception):
   """Base error class for this module."""
@@ -962,10 +959,6 @@ def fetch(start_time=None,
       raise InvalidArgumentError('request_ids must not be empty')
     if len(request_ids) != len(set(request_ids)):
       raise InvalidArgumentError('request_ids must not contain duplicates')
-    for request_id in request_ids:
-      if not _REQUEST_ID_RE.match(request_id):
-        raise InvalidArgumentError(
-            '%s is not a valid request log id' % request_id)
     request.request_id_list()[:] = request_ids
 
   prototype_request = kwargs.get('prototype_request')
