@@ -16,7 +16,7 @@ from utils.utils import KEY_DIRECTORY
 from utils.utils import ssh
 
 # The percentage difference allowed between an actual and ideal load.
-MAX_DRIFT = .3
+MAX_DRIFT = .01
 
 
 class InvalidUnits(Exception):
