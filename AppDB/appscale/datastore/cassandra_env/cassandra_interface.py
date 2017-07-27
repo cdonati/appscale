@@ -1198,7 +1198,7 @@ class DatastoreProxy(AppDBInterface):
         metadata['start'] = result.start_time
         metadata['is_xg'] = result.is_xg
         metadata['in_progress'] = set()
-        if metadata['in_progress'] is not None:
+        if result.in_progress is not None:
           metadata['in_progress'] = set(
             struct.unpack('q' * int(len(result.in_progress) / 8),
                           result.in_progress))

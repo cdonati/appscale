@@ -1,6 +1,7 @@
 from __future__ import division
 import logging
 import os
+import random
 import sys
 
 from appscale.common.constants import LOG_FORMAT
@@ -114,18 +115,14 @@ def equalize(node1, node2):
     logging.info('Moving {} MiB from {} to {}'.format(
       mb_to_move, node1['ip'], node2['ip']))
     percentile = 100 - int((to_move / node1['load']) * 100)
-    new_token = ssh(node1['ip'], keyname,
-                    'appscale-get-token {}'.format(percentile),
-                    method=check_output).strip()
+    new_token = ''.join(random.choice('0123456789abcdef') for n in xrange(32))
     repair = [new_token, node1['token']]
     cleanup_ip = node1['ip']
   else:
     logging.info('Moving {} MiB from {} to {}'.format(
       mb_to_move, node2['ip'], node1['ip']))
     percentile = int((to_move / node2['load']) * 100)
-    new_token = ssh(node2['ip'], keyname,
-                    'appscale-get-token {}'.format(percentile),
-                    method=check_output).strip()
+    new_token = ''.join(random.choice('0123456789abcdef') for n in xrange(32))
     repair = [node1['token'], new_token]
     cleanup_ip = node2['ip']
 
