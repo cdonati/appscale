@@ -685,11 +685,6 @@ class DevelopmentServer(object):
     self._running_modules.append(self._dispatcher)
     self._dispatcher.start(apis.port, request_data)
 
-    admin = admin_server.AdminServer(options.admin_host, options.admin_port,
-                                     self._dispatcher, configuration, xsrf_path)
-    admin.start()
-    self._running_modules.append(admin)
-
   def stop(self):
     """Stops all running devappserver2 modules."""
     while self._running_modules:
