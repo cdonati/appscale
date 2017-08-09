@@ -774,6 +774,9 @@ class DatastoreDistributed():
 
     self.update_journal(row_keys, row_values, txn_hash)
 
+    for kind_key in kind_row_keys:
+      logging.info('kind index: {}'.format(repr(kind_key)))
+
     self.datastore_batch.batch_put_entity(dbconstants.APP_KIND_TABLE,
                                           kind_row_keys,
                                           dbconstants.APP_KIND_SCHEMA, 
