@@ -1081,6 +1081,10 @@ class DatastoreDistributed():
       for ii in rev_group_rows:
         rev_row_values[str(ii[0])] = {'reference': str(ii[1])}
     
+    logging.info('Writing indexes')
+    for key in row_keys:
+      logging.info('index key: {}'.format(repr(key)))
+
     # TODO update all indexes in parallel
     self.datastore_batch.batch_put_entity(dbconstants.ASC_PROPERTY_TABLE, 
                           row_keys, 
@@ -1253,6 +1257,7 @@ class DatastoreDistributed():
       txn_hash: A mapping of root keys to transaction IDs.
       composite_indexes: A list of entity_pb.CompositeIndex.
     """
+    logging.info('Writing entities')
     sorted_entities = sorted((self.get_table_prefix(x), x) for x in entities)
     for prefix, group in itertools.groupby(sorted_entities, lambda x: x[0]):
       keys = [e.key() for e in entities]
@@ -2586,6 +2591,9 @@ class DatastoreDistributed():
     # references in order to satisfy the query.
     entities = []
     current_limit = limit
+    logging.info('start row: {}'.format(startrow))
+    logging.info('end row: {}'.format(endrow))
+    logging.info('limit: {}'.format(current_limit))
     while True:
       references = self.datastore_batch.range_query(
         dbconstants.APP_KIND_TABLE,
@@ -2597,8 +2605,10 @@ class DatastoreDistributed():
         start_inclusive=start_inclusive,
         end_inclusive=end_inclusive
       )
+      logging.info('fetched {} references'.format(len(references)))
 
       new_entities = self.__fetch_entities(references, clean_app_id(query.app()))
+      logging.info('found {} entities for refs'.format(len(new_entities)))
       entities.extend(new_entities)
 
       # If we have enough valid entities to satisfy the query, we're done.
@@ -2625,6 +2635,7 @@ class DatastoreDistributed():
       # Start from the last reference fetched.
       last_startrow = startrow
       startrow = references[-1].keys()[0]
+      logging.info('new startrow: {}'.format(repr(startrow)))
       start_inclusive = self._DISABLE_INCLUSIVITY
 
       if startrow == last_startrow:
