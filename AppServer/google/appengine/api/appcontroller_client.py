@@ -329,6 +329,19 @@ class AppControllerClient():
       app_id, appserver_ip, port, self.secret)
 
 
+  def remove_routing_for_appserver(self, version_key, ip, port):
+    """ Instructs the AppController to stop routing traffic to an AppServer.
+
+    Args:
+      version_key: A string specifying the version key.
+      ip: A string specifying the location of the AppServer instance.
+      port: An integer specifying the location of the AppServer instance.
+    """
+    return self.call(
+      self.MAX_RETRIES, self.server.remove_routing_for_appserver, version_key,
+      ip, port, self.secret)
+
+
   def add_routing_for_blob_server(self):
     """ Tells the AppController to begin routing traffic to the
         BlobServer(s).
