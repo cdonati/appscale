@@ -4000,7 +4000,7 @@ class Djinn
     HelperFunctions.sleep_until_port_is_open(ip, SSH_PORT)
 
     # Ensure we don't have an old host key for this host.
-    Djinn.log_run("ssh-keygen -f '~/.ssh/known_hosts' -R #{ip}")
+    Djinn.log_run("ssh-keygen -R #{ip}")
 
     # Get the username to use for ssh (depends on environments).
     if ["ec2", "euca"].include?(@options['infrastructure'])
@@ -4433,6 +4433,12 @@ HOSTS
     # a default route.
     configure_uaserver()
 
+    # HAProxy must be running so that the UAServer can be accessed.
+    if HAProxy.valid_config?(HAProxy::SERVICES_MAIN_FILE) &&
+        !MonitInterface.is_running?(:service_haproxy)
+      HAProxy.services_start
+    end
+
     # Volume is mounted, let's finish the configuration of static files.
     if my_node.is_shadow? and not my_node.is_appengine?
       write_app_logrotate()
@@ -4442,6 +4448,12 @@ HOSTS
     if my_node.is_load_balancer?
       configure_db_haproxy
       Djinn.log_info("DB HAProxy configured")
+
+      # Make HAProxy instance stats accessible after a reboot.
+      if HAProxy.valid_config?(HAProxy::MAIN_CONFIG_FILE) &&
+          !MonitInterface.is_running?(:apps_haproxy)
+        HAProxy.apps_start
+      end
     end
 
     write_locations
@@ -5119,9 +5131,7 @@ HOSTS
       delta_appservers = get_scaling_info_for_app(app_name)
       if delta_appservers > 0
         Djinn.log_debug("Considering scaling up app #{app_name}.")
-        unless try_to_scale_up(app_name, delta_appservers)
-          needed_appservers += delta_appservers
-        end
+        needed_appservers += try_to_scale_up(app_name, delta_appservers)
       elsif delta_appservers < 0
         Djinn.log_debug("Considering scaling down app #{app_name}.")
         try_to_scale_down(app_name, delta_appservers.abs)
@@ -5503,7 +5513,8 @@ HOSTS
   #   app_name: A String containing the application ID.
   #   delta_appservers: The desired number of new AppServers.
   # Returns:
-  #   A boolean indicating if the desired AppServers were started.
+  #   An Integer indicating the number of AppServers we didn't start (0
+  #     if we started all).
   def try_to_scale_up(app_name, delta_appservers)
     # Select an appengine machine if it has enough resources to support
     # another AppServer for this app.
@@ -5609,20 +5620,18 @@ HOSTS
     }
     Djinn.log_debug("Hosts available to scale #{app_name}: #{available_hosts}.")
 
-    # If we're this far, no room is available for AppServers, so try to
-    # add a new node instead.
-    if available_hosts.empty?
-      Djinn.log_info("No AppServer available to scale #{app_name}")
-      return false
-    end
-
     # Since we may have 'clumps' of the same host (say a very big
     # appengine machine) we shuffle the list of candidate here.
     available_hosts.shuffle!
 
     # We prefer candidate that are not already running the application, so
     # ensure redundancy for the application.
-    delta_appservers.downto(1) {
+    delta_appservers.downto(1) { |delta|
+      if available_hosts.empty?
+        Djinn.log_info("No appengine node is available to scale #{app_name}.")
+        return delta
+      end
+
       appserver_to_use = nil
       available_hosts.each { |host|
         unless current_hosts.include?(host)
@@ -5642,13 +5651,11 @@ HOSTS
 
       Djinn.log_info("Adding a new AppServer on #{appserver_to_use} for #{app_name}.")
       @app_info_map[app_name]['appengine'] << "#{appserver_to_use}:-1"
-
-      # If we ran our of available hosts, we'll have to wait for the
-      # next cycle to add more AppServers.
-      break if available_hosts.empty?
     }
+
+    # We started all desired AppServers.
     @last_decision[app_name] = Time.now.to_i
-    return true
+    return 0
   end
 
 
@@ -5811,29 +5818,11 @@ HOSTS
     Djinn.log_info("Starting #{app_language} app #{app} on " +
       "#{@my_private_ip}:#{appengine_port}")
 
-    # The IP we use to reach this deployment: it will be used by XMPP, and
-    # dashboard (authentication) redirections.
-    login_ip = @options['login']
-
     app_manager = AppManagerClient.new(my_node.private_ip)
     begin
-      version_details = ZKInterface.get_version_details(
-        app, DEFAULT_SERVICE, DEFAULT_VERSION)
-    rescue VersionNotFound
-      Djinn.log_warn("#{app} not found when starting AppServer")
-      return false
-    end
-
-    max_app_mem = Integer(@options['max_memory'])
-    if version_details.key?('instanceClass')
-      instance_class = version_details['instanceClass'].to_sym
-      max_app_mem = INSTANCE_CLASSES.fetch(instance_class, max_app_mem)
-    end
-
-    begin
-      app_manager.start_app(app, appengine_port, login_ip,
-        app_language, HelperFunctions.get_app_env_vars(app), max_app_mem,
-        get_shadow.private_ip)
+      app_manager.start_app(
+        app, DEFAULT_SERVICE, DEFAULT_VERSION, appengine_port,
+        HelperFunctions.get_app_env_vars(app))
       @pending_appservers["#{app}:#{appengine_port}"] = Time.new
       Djinn.log_info("Done adding AppServer for #{app}.")
     rescue FailedNodeException => error
