@@ -334,8 +334,8 @@ class AppControllerClient():
 
     Args:
       version_key: A string specifying the version key.
-      ip: A string specifying the location of the AppServer instance.
-      port: An integer specifying the location of the AppServer instance.
+      ip: A string specifying the IP address or hostname of the AppServer.
+      port: An integer specifying the port the AppServer instance is using.
     """
     return self.call(
       self.MAX_RETRIES, self.server.remove_routing_for_appserver, version_key,
