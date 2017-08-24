@@ -9,6 +9,7 @@ import socket
 import tarfile
 
 from appscale.common.constants import HTTPCodes
+from appscale.common.constants import VERSION_PATH_SEPARATOR
 from appscale.taskqueue import constants as tq_constants
 from appscale.taskqueue.constants import InvalidQueueConfiguration
 from kazoo.exceptions import NoNodeError
@@ -19,8 +20,7 @@ from .constants import (
   JAVA,
   SOURCES_DIRECTORY,
   Types,
-  UNPACK_ROOT,
-  VERSION_PATH_SEPARATOR
+  UNPACK_ROOT
 )
 from .instance_manager.utils import copy_modified_jars
 from .instance_manager.utils import remove_conflicting_jars
