@@ -294,7 +294,7 @@ module HAProxy
       return false
     end
 
-    config = "# Create a load balancer for the app #{app_name} \n"
+    config = "# Create a load balancer for #{version_key}\n"
     config << "listen #{full_version_name}\n"
     config << "  bind #{private_ip}:#{listen_port}\n"
     config << servers.join("\n")
@@ -536,25 +536,29 @@ CONFIG
       # Make sure the application name is correct (application name can be
       # prefix of others application names), and ignore the service
       # summary lines.
-      next if parsed_info[APP_NAME_INDEX] != full_app_name
+      next if parsed_info[APP_NAME_INDEX] != full_version_name
       next if parsed_info[SERVICE_NAME_INDEX] == "FRONTEND"
       next if parsed_info[SERVICE_NAME_INDEX] == "BACKEND"
 
       if parsed_info[SERVER_STATUS_INDEX] == "DOWN"
-        failed << parsed_info[SERVICE_NAME_INDEX].sub(/^#{full_app_name}-/,'')
+        failed << parsed_info[SERVICE_NAME_INDEX].sub(/^#{full_version_name}-/,'')
       else
-        running << parsed_info[SERVICE_NAME_INDEX].sub(/^#{full_app_name}-/,'')
+        running << parsed_info[SERVICE_NAME_INDEX].sub(/^#{full_version_name}-/,'')
       end
     }
     if running.length > HelperFunctions::NUM_ENTRIES_TO_PRINT
-      Djinn.log_debug("Haproxy: found #{running.length} running AppServers for #{app}.")
+      Djinn.log_debug("Haproxy: found #{running.length} running AppServers " +
+                      "for #{version_key}.")
     else
-      Djinn.log_debug("Haproxy: found these running AppServer for #{app}: #{running}.")
+      Djinn.log_debug("Haproxy: found these running AppServers for " +
+                      "#{version_key}: #{running}.")
     end
     if failed.length > HelperFunctions::NUM_ENTRIES_TO_PRINT
-      Djinn.log_debug("Haproxy: found #{failed.length} failed AppServers for #{app}.")
+      Djinn.log_debug("Haproxy: found #{failed.length} failed AppServers " +
+                      "for #{version_key}.")
     else
-      Djinn.log_debug("Haproxy: found these failed AppServer for #{app}: #{failed}.")
+      Djinn.log_debug("Haproxy: found these failed AppServers for " +
+                      "#{version_key}: #{failed}.")
     end
     return running, failed
   end

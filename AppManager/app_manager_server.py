@@ -393,8 +393,7 @@ def stop_app_instance(version_key, port):
   Returns:
     True on success, False otherwise.
   """
-  project_id, service_id, version_id = version_key.split(
-    VERSION_PATH_SEPARATOR)
+  project_id = version_key.split(VERSION_PATH_SEPARATOR)[0]
 
   if not misc.is_app_name_valid(project_id):
     raise BadConfigurationException(

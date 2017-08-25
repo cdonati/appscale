@@ -271,7 +271,7 @@ def remove_old_archives(project_id, service_id, version):
     service_id: A string specifying a service ID.
     version: A dictionary containing version details.
   """
-  prefix = constants.VERSION_PATH_SEPARATOR.join(
+  prefix = VERSION_PATH_SEPARATOR.join(
     [project_id, service_id, version['id']])
   current_name = os.path.basename(version['deployment']['zip']['sourceUrl'])
   old_sources = [os.path.join(SOURCES_DIRECTORY, archive) for archive

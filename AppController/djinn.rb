@@ -1706,6 +1706,25 @@ class Djinn
     end
   end
 
+  # Removes a project listing from the UAServer.
+  #
+  # Args:
+  #   project_id: A string specifying a project ID.
+  def delete_project_record(project_id)
+    begin
+      uac = UserAppClient.new(my_node.private_ip, @@secret)
+      if not uac.does_app_exist?(project_id)
+        Djinn.log_info("(stop_version) #{project_id} does not exist.")
+      else
+        result = uac.delete_app(project_id)
+        Djinn.log_debug("(stop_version) delete_app returned: #{result}.")
+      end
+    rescue FailedNodeException
+      Djinn.log_warn("(stop_version) delete_app: failed to talk " +
+                     "to the UserAppServer.")
+    end
+  end
+
   # Removes a version and stops all AppServers hosting it.
   #
   # Args:
@@ -1733,25 +1752,11 @@ class Djinn
       return "false: #{project_id} is a reserved app."
     end
     Djinn.log_info("Shutting down #{version_key}")
-    result = ""
 
     # Since stopping an application can take some time, we do it in a
     # thread.
     Thread.new {
-      if service_id == DEFAULT_SERVICE
-        begin
-          uac = UserAppClient.new(my_node.private_ip, @@secret)
-          if not uac.does_app_exist?(project_id)
-            Djinn.log_info("(stop_version) #{project_id} does not exist.")
-          else
-            result = uac.delete_app(project_id)
-            Djinn.log_debug("(stop_version) delete_app returned: #{result}.")
-          end
-        rescue FailedNodeException
-          Djinn.log_warn("(stop_version) delete_app: failed to talk " +
-                         "to the UserAppServer.")
-        end
-      end
+      delete_project_record(project_id) if service_id == DEFAULT_SERVICE
 
       # If this node has any information about AppServers for this version,
       # clear that information out.
@@ -1820,7 +1825,7 @@ class Djinn
     # Notify nodes, and remove any running AppServer of the application.
     restart_versions(versions_to_restart)
 
-    Djinn.log_info("Done updating apps: #{apps}.")
+    Djinn.log_info("Done updating #{versions}.")
     return 'OK'
   end
 
@@ -2706,15 +2711,15 @@ class Djinn
     return BAD_SECRET_MSG unless valid_secret?(secret)
 
     unless my_node.is_shadow?
-       # We need to send the call to the shadow.
-       Djinn.log_debug("Sending routing call for #{version_key} to shadow.")
-       acc = AppControllerClient.new(get_shadow.private_ip, @@secret)
-       begin
-         return acc.add_routing_for_appserver(version_key, ip, port)
-       rescue FailedNodeException => except
-         Djinn.log_warn("Failed to forward routing call to shadow (#{get_shadow}).")
-         return NOT_READY
-       end
+      # We need to send the call to the shadow.
+      Djinn.log_debug("Sending routing call for #{version_key} to shadow.")
+      acc = AppControllerClient.new(get_shadow.private_ip, @@secret)
+      begin
+        return acc.add_routing_for_appserver(version_key, ip, port)
+      rescue FailedNodeException => except
+        Djinn.log_warn("Failed to forward routing call to shadow (#{get_shadow}).")
+        return NOT_READY
+      end
     end
 
     project_id, service_id, version_id = version_key.split('_')
@@ -4837,7 +4842,6 @@ HOSTS
         next unless info['appengine']
 
         pending_count = 0
-        project_id = version_key.split('_')[0]
         @pending_appservers.each { |instance_key, _|
           pending_count += 1 if instance_key.split(':')[0] == version_key
         }
@@ -5357,7 +5361,7 @@ HOSTS
     @total_req_seen[version_key] = 0
     @last_sampling_time[version_key] = Time.now.to_i
     @last_decision[version_key] = 0 unless @last_decision.key?(version_key)
-    @initialized_apps[version_key] = true
+    @initialized_versions[version_key] = true
   end
 
 
