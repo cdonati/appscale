@@ -9,9 +9,9 @@ APP_LOG_SIZE = 250 * 1024 * 1024
 
 # Patterns that match jars that should be stripped from version sources.
 CONFLICTING_JARS = [
-  'appengine-api-1.0-sdk-*.jar',
-  'appengine-api-stubs-*.jar',
-  'appengine-api-labs-*.jar',
+  'appengine-api-1.0-sdk*.jar',
+  'appengine-api-stubs*.jar',
+  'appengine-api-labs*.jar',
   'appengine-jsr107cache-*.jar',
   'jsr107cache-*.jar',
   'appengine-mapreduce*.jar',
