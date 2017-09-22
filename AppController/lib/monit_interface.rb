@@ -62,7 +62,7 @@ module MonitInterface
       Djinn.log_info("Starting #{process_name} with command #{full_start_cmd}")
     }
 
-    self.run_cmd('service monit reload', true) if reload_monit
+    self.run_cmd('monit reload', true) if reload_monit
     self.run_cmd("#{MONIT} start -g #{watch}")
   end
 
@@ -78,7 +78,7 @@ CONFIG
 
     monit_file = "#{MONIT_CONFIG}/appscale-#{watch}.cfg"
     reload_required = self.update_config(monit_file, config)
-    self.run_cmd('service monit reload', true) if reload_required
+    self.run_cmd('monit reload', true) if reload_required
     self.run_cmd("#{MONIT} start #{watch}")
   end
 
@@ -94,7 +94,7 @@ CONFIG
 
     monit_file = "#{MONIT_CONFIG}/appscale-#{watch}.cfg"
     reload_required = self.update_config(monit_file, config)
-    self.run_cmd('service monit reload', true) if reload_required
+    self.run_cmd('monit reload', true) if reload_required
     self.run_cmd("#{MONIT} start #{watch}")
   end
 
@@ -143,7 +143,7 @@ CONFIG
       Djinn.log_info("Found multiple monit config matches for #{watch}: #{config}.")
     end
     FileUtils.rm_rf(config)
-    self.run_cmd('service monit reload', true)
+    self.run_cmd('monit reload', true)
   end
 
   def self.service_config(process_name, group, start_cmd, env_vars, mem)
