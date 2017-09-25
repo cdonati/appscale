@@ -674,6 +674,11 @@ upgradepip()
             # Account for the change in the path to the pip binary.
             hash -r
             ;;
+        jessie)
+            # The system's pip does not allow updating itself.
+            easy_install --upgrade pip
+            hash -r
+            ;;
     esac
 }
 
