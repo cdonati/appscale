@@ -15,6 +15,16 @@ set -e
 
 # We need to update the package cache and list first, to ensure we don't
 # get errors when installing basic packages.
+lock_wait_start=$SECONDS
+printed_status=false
+while fuser /var/lib/apt/lists/lock; do
+    if [ "${printed_status}" = false ]; then
+        echo "Waiting for another process to update package lists"
+        printed_status=true
+    fi
+    if (($SECONDS - $lock_wait_start > 30)); then break; fi
+    sleep 1
+done
 echo -n "Updating package list and cache ..."
 ${PKG_CMD} update > /dev/null
 echo "done."
@@ -50,6 +60,19 @@ echo "Press Ctrl-C if this is not correct"
 
 # Let's wait few seconds to allow a Ctrl-C if building is not desirable.
 sleep 5
+
+
+# Wait up to 2 min for the dpkg lock to become available.
+lock_wait_start=$SECONDS
+printed_status=false
+while fuser /var/lib/dpkg/lock; do
+    if [ "${printed_status}" = false ]; then
+        echo "Waiting for another process to update packages"
+        printed_status=true
+    fi
+    if (($SECONDS - $lock_wait_start > 120)); then break; fi
+    sleep 1
+done
 
 # Let's check if we run in a docker container.
 export IN_DOCKER="no"
