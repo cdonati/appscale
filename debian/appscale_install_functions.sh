@@ -62,16 +62,35 @@ pipwrapper ()
 # Download a package from a mirror if it's not already cached.
 cachepackage() {
     CACHED_FILE="${PACKAGE_CACHE}/$1"
+    remote_file="${APPSCALE_PACKAGE_MIRROR}/$1"
     mkdir -p ${PACKAGE_CACHE}
     if [ -f ${CACHED_FILE} ]; then
         MD5=($(md5sum ${CACHED_FILE}))
         if [ "$MD5" = "$2" ]; then
             return 0
+        else
+            echo "Incorrect md5sum for ${CACHED_FILE}. Removing it."
+            rm ${CACHED_FILE}
         fi
     fi
 
-    echo "Fetching $1 from $APPSCALE_PACKAGE_MIRROR"
-    curl ${CURL_OPTS} -o ${CACHED_FILE} "${APPSCALE_PACKAGE_MIRROR}/$1"
+    echo "Fetching ${remote_file}"
+    if ! curl ${CURL_OPTS} -o ${CACHED_FILE} --retry 5 -C - "${remote_file}";
+    then
+        echo "Error while downloading ${remote_file}"
+        return 1
+    fi
+
+    MD5=($(md5sum ${CACHED_FILE}))
+    if [ "$MD5" = "$2" ]; then
+        return 0
+    else
+        echo "Unable to download ${remote_file}. Try downloading it "\
+             "manually, copying it to ${CACHED_FILE}, and re-running the "\
+             "build."
+        rm ${CACHED_FILE}
+        return 1
+    fi
 }
 
 # This function is to disable the specify service so that it won't start
@@ -212,7 +231,7 @@ EOF
     chgrp adm /var/log/appscale
     chmod g+rwx /var/log/appscale
 
-    mkdir -pv /var/appscale/
+    mkdir -pv /var/appscale/version_assets
 
     # This puts in place the logrotate rules.
     if [ -d /etc/logrotate.d/ ]; then
@@ -412,10 +431,8 @@ installzookeeper()
         apt-get install -y zookeeper-server
     fi
 
-    # Trusty's kazoo version is too old, so use the version in Xenial.
-    case "$DIST" in
-        precise|trusty|wheezy) pipwrapper "kazoo==2.2.1" ;;
-    esac
+    # Use 2.4.0 to avoid NoNodeError for ChildrenWatches with no parents.
+    pipwrapper "kazoo==2.4.0"
 }
 
 installpycrypto()
@@ -504,6 +521,10 @@ postinstallrsyslog()
     sed -i 's/#module(load="imtcp")/module(load="imtcp")/' /etc/rsyslog.conf
     sed -i 's/#input(type="imtcp" port="514")/input(type="imtcp" port="514")/' /etc/rsyslog.conf
 
+    # Set up template for formatting combined application log messages.
+    cp ${APPSCALE_HOME}/common/appscale/common/templates/rsyslog-template.conf\
+        /etc/rsyslog.d/09-appscale.conf
+
     # Restart the service
     service rsyslog restart || true
 }
@@ -523,6 +544,13 @@ EOF
 
     # Check services every 5 seconds
     sed -i 's/set daemon.*/set daemon 5/' /etc/monit/monitrc
+
+    # Monitor cron.
+    if [ -e /etc/monit/conf-available/cron ] &&
+            [ -e /etc/monit/conf-enabled ] &&
+            [ ! -e /etc/monit/conf-enabled/cron ]; then
+        ln -s /etc/monit/conf-available/cron /etc/monit/conf-enabled
+    fi
 
     # Monit cannot start at boot time: in case of accidental reboot, it
     # would start processes out of order. The controller will restart

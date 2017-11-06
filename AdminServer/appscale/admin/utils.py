@@ -7,12 +7,18 @@ import os
 import shutil
 import socket
 import tarfile
-import time
 
+import random
+
+import collections
 from appscale.common.constants import HTTPCodes
+from appscale.common.constants import VERSION_PATH_SEPARATOR
 from appscale.taskqueue import constants as tq_constants
 from appscale.taskqueue.constants import InvalidQueueConfiguration
 from kazoo.exceptions import NoNodeError
+from tornado import gen, locks
+from tornado.ioloop import IOLoop
+
 from . import constants
 from .constants import (
   CustomHTTPError,
@@ -20,9 +26,12 @@ from .constants import (
   JAVA,
   SOURCES_DIRECTORY,
   Types,
-  UNPACK_ROOT,
-  VERSION_PATH_SEPARATOR
+  UNPACK_ROOT
 )
+from .instance_manager.utils import copy_modified_jars
+from .instance_manager.utils import remove_conflicting_jars
+
+logger = logging.getLogger('appscale-admin')
 
 
 def assert_fields_in_resource(required_fields, resource_name, resource):
@@ -169,61 +178,73 @@ def ensure_path(path):
       raise
 
 
-def extract_source(version, project_id):
+def extract_source(revision_key, location, runtime):
   """ Unpacks an archive to a given location.
 
   Args:
-    version: A dictionary containing version details.
-    project_id: A string specifying a project ID.
+    revision_key: A string specifying the revision key.
+    location: A string specifying the location of the source archive.
+    runtime: A string specifying the revision's runtime.
   Raises:
-    IOError if version source archive does not exist
+    IOError if version source archive does not exist.
+    InvalidSource if the source archive is not valid.
   """
-  project_base = os.path.join(UNPACK_ROOT, project_id)
-  shutil.rmtree(project_base, ignore_errors=True)
-  ensure_path(os.path.join(project_base, 'log'))
+  revision_base = os.path.join(UNPACK_ROOT, revision_key)
+  ensure_path(os.path.join(revision_base, 'log'))
 
-  app_path = os.path.join(project_base, 'app')
+  app_path = os.path.join(revision_base, 'app')
   ensure_path(app_path)
   # The working directory must be the target in order to validate paths.
+  original_cwd = os.getcwd()
   os.chdir(app_path)
 
-  source_path = version['deployment']['zip']['sourceUrl']
-  with tarfile.open(source_path, 'r:gz') as archive:
-    # Check if the archive is valid before extracting it.
-    has_config = False
-    for file_info in archive:
-      file_name = file_info.name
-      if not canonical_path(file_name).startswith(app_path):
-        message = 'Invalid location in archive: {}'.format(file_name)
-        raise CustomHTTPError(HTTPCodes.BAD_REQUEST, message=message)
+  if runtime == JAVA:
+    config_file_name = 'appengine-web.xml'
 
-      if file_info.issym() or file_info.islnk():
-        if not valid_link(file_name, file_info.linkname, app_path):
-          message = 'Invalid link in archive: {}'.format(file_name)
-          raise CustomHTTPError(HTTPCodes.BAD_REQUEST, message=message)
+    def is_version_config(path):
+      return path.endswith(config_file_name)
+  else:
+    config_file_name = 'app.yaml'
 
-      if version['runtime'] == JAVA:
-        if file_name.endswith('appengine-web.xml'):
+    def is_version_config(path):
+      return canonical_path(path) == os.path.join(app_path, config_file_name)
+
+  try:
+    with tarfile.open(location, 'r:gz') as archive:
+      # Check if the archive is valid before extracting it.
+      has_config = False
+      for file_info in archive:
+        file_name = file_info.name
+        if not canonical_path(file_name).startswith(app_path):
+          raise constants.InvalidSource(
+            'Invalid location in archive: {}'.format(file_name))
+
+        if file_info.issym() or file_info.islnk():
+          if not valid_link(file_name, file_info.linkname, app_path):
+            raise constants.InvalidSource(
+              'Invalid link in archive: {}'.format(file_name))
+
+        if is_version_config(file_name):
           has_config = True
-      else:
-        if canonical_path(file_name) == os.path.join(app_path, 'app.yaml'):
-          has_config = True
 
-    if not has_config:
-      if version['runtime'] == JAVA:
-        missing_file = 'appengine.web.xml'
-      else:
-        missing_file = 'app.yaml'
-      message = 'Archive must have {}'.format(missing_file)
-      raise CustomHTTPError(HTTPCodes.BAD_REQUEST, message=message)
+      if not has_config:
+        raise constants.InvalidSource(
+          'Archive must have {}'.format(config_file_name))
 
-    archive.extractall(path=app_path)
+      archive.extractall(path=app_path)
 
-  if version['runtime'] == GO:
-    try:
-      shutil.move(os.path.join(app_path, 'gopath'), project_base)
-    except IOError:
-      logging.debug('{} does not have a gopath directory'.format(project_id))
+    if runtime == GO:
+      try:
+        shutil.move(os.path.join(app_path, 'gopath'), revision_base)
+      except IOError:
+        logger.debug(
+          '{} does not have a gopath directory'.format(revision_key))
+
+    if runtime == JAVA:
+      remove_conflicting_jars(app_path)
+      copy_modified_jars(app_path)
+  finally:
+    os.chdir(original_cwd)
 
 
 def port_is_open(host, port):
@@ -252,7 +273,7 @@ def rename_source_archive(project_id, service_id, version):
   """
   new_filename = VERSION_PATH_SEPARATOR.join(
     [project_id, service_id, version['id'],
-     '{}.tar.gz'.format(int(time.time() * 1000))])
+     '{}.tar.gz'.format(version['revision'])])
   new_location = os.path.join(SOURCES_DIRECTORY, new_filename)
   os.rename(version['deployment']['zip']['sourceUrl'], new_location)
   return new_location
@@ -266,7 +287,7 @@ def remove_old_archives(project_id, service_id, version):
     service_id: A string specifying a service ID.
     version: A dictionary containing version details.
   """
-  prefix = constants.VERSION_PATH_SEPARATOR.join(
+  prefix = VERSION_PATH_SEPARATOR.join(
     [project_id, service_id, version['id']])
   current_name = os.path.basename(version['deployment']['zip']['sourceUrl'])
   old_sources = [os.path.join(SOURCES_DIRECTORY, archive) for archive
@@ -482,3 +503,106 @@ def queues_from_dict(payload):
     queues[name] = queue
 
   return {'queue': queues}
+
+
+class _PersistentWatch(object):
+
+  def __init__(self):
+
+    class CompliantLock(object):
+      """
+      A container which allows to organize compliant locking
+      of zk_node by making sure:
+       - update function won't be interrupted by another;
+       - sleep between retries can be interrupted by newer update;
+       - _PersistentWatch is able to identify and remove unused locks.
+      """
+      def __init__(self):
+        self.waiters = 0
+        self.lock = locks.Lock()
+        self.condition = locks.Condition()
+
+    # Dict of locks for zk_nodes (shared between all functions decorated
+    # by an instance of _PersistentWatch)
+    self._locks = collections.defaultdict(CompliantLock)
+
+  def __call__(self, node, func, backoff_base=2, backoff_multiplier=0.2,
+               backoff_threshold=300, max_retries=None,
+               retry_on_exception=None):
+    """ Wraps func with retry mechanism which runs up to max_retries attempts
+    with exponential backoff (sleep = backoff_multiplier * backoff_base**X).
+  
+    Args:
+      node: a string representing path to zookeeper node.
+      func: function or coroutine to wrap.
+      backoff_base: a number to use in backoff calculation.
+      backoff_multiplier: a number indicating initial backoff.
+      backoff_threshold: a number indicating maximum backoff.
+      max_retries: an integer indicating maximum number of retries.
+      retry_on_exception: a function receiving one argument: exception object
+        and returning True if retry makes sense for such exception.
+    Returns:
+      A tornado coroutine wrapping function with retry mechanism.
+    """
+    @gen.coroutine
+    def persistent_execute(*args, **kwargs):
+      retries = 0
+      backoff = backoff_multiplier
+      node_lock = self._locks[node]
+      result = None
+
+      # Wake older update calls (*)
+      node_lock.condition.notify_all()
+      node_lock.waiters += 1
+      with (yield node_lock.lock.acquire()):
+        node_lock.waiters -= 1
+
+        while True:
+          try:
+            result = func(*args, **kwargs)
+            if isinstance(result, gen.Future):
+              result = yield result
+            break
+
+          except Exception as e:
+
+            # Decide if retry is needed
+            if max_retries is not None and retries >= max_retries:
+              if not node_lock.waiters:
+                del self._locks[node]
+              raise
+            if retry_on_exception is not None and not retry_on_exception(e):
+              if not node_lock.waiters:
+                del self._locks[node]
+              raise
+
+            retries += 1
+
+            # Proceed with exponential backoff
+            backoff = backoff * backoff_base
+            if backoff > backoff_threshold:
+              backoff = backoff_threshold
+            sleep_time = backoff * (random.random() * 0.3 + 0.85)
+            # Report error to logs
+            logger.exception(u"Retry #{retry} in {sleep:0.1f}s"
+                             .format(retry=retries, sleep=sleep_time))
+
+            # (*) Sleep with one eye open, give up if newer update wakes you
+            now = IOLoop.current().time()
+            interrupted = yield node_lock.condition.wait(now + sleep_time)
+            if interrupted or node_lock.waiters:
+              logger.info("Giving up retrying because newer update came up")
+              if not node_lock.waiters:
+                del self._locks[node]
+              raise gen.Return()
+
+      if not node_lock.waiters:
+        del self._locks[node]
+      raise gen.Return(result)
+
+    return persistent_execute
+
+
+# Two different instances for having two locks namespaces
+retry_data_watch_coroutine = _PersistentWatch()
+retry_children_watch_coroutine = _PersistentWatch()

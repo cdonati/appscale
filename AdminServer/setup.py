@@ -5,16 +5,18 @@ from setuptools import setup
 install_requires = [
   'appscale-common',
   'kazoo',
+  'psutil',
   'PyYaml',
   'SOAPpy',
-  'tornado'
+  'tornado',
+  'mock',
 ]
 if sys.version_info < (3,):
   install_requires.append('futures')
 
 setup(
   name='appscale-admin',
-  version='0.0.1',
+  version='0.0.2',
   description='An implementation of the Google App Engine Admin API',
   author='AppScale Systems, Inc.',
   url='https://github.com/AppScale/appscale',
@@ -31,6 +33,10 @@ setup(
   ],
   namespace_packages=['appscale'],
   packages=['appscale',
-            'appscale.admin'],
-  entry_points={'console_scripts': ['appscale-admin=appscale.admin:main']}
+            'appscale.admin',
+            'appscale.admin.instance_manager'],
+  entry_points={'console_scripts': [
+    'appscale-admin=appscale.admin:main',
+    'appscale-stop-instance=appscale.admin.instance_manager.stop_instance:main'
+  ]}
 )

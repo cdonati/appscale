@@ -57,6 +57,7 @@ from google.appengine.api.system import system_stub
 from google.appengine.api.xmpp import xmpp_service_real # AS
 from google.appengine.datastore import datastore_sqlite_stub
 from google.appengine.datastore import datastore_stub_util
+from google.appengine.datastore import datastore_v4_stub
 
 from google.appengine.api import apiproxy_stub_map
 from google.appengine.api import datastore
@@ -316,11 +317,16 @@ def setup_stubs(
       'channel',
       channel_service_stub.ChannelServiceStub(request_data=request_data))
 
-  datastore = datastore_distributed.DatastoreDistributed(app_id, datastore_path,
-      require_indexes=datastore_require_indexes, trusted=trusted)
+  datastore = datastore_distributed.DatastoreDistributed(
+      app_id, datastore_path, require_indexes=datastore_require_indexes,
+      trusted=trusted, root_path=application_root)
 
   apiproxy_stub_map.apiproxy.ReplaceStub(
       'datastore_v3', datastore)
+
+  apiproxy_stub_map.apiproxy.RegisterStub(
+      'datastore_v4',
+      datastore_v4_stub.DatastoreV4Stub(app_id))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'file',

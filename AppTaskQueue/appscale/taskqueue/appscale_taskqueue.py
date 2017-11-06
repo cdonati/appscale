@@ -34,6 +34,9 @@ server = None
 # Global for Distributed TaskQueue.
 task_queue = None
 
+# A KazooClient for watching queue configuration.
+zk_client = None
+
 # Global stats.
 STATS = {}
 
@@ -63,9 +66,11 @@ class MainHandler(tornado.web.RequestHandler):
     app_data = request.headers['appdata']
     app_data  = app_data.split(':')
     app_id = app_data[0]
- 
+    version = request.headers['Version']
+    module = request.headers['Module']
+    app_info = {'app_id': app_id, 'version_id': version, 'module_id': module}
     if pb_type == "Request":
-      self.remote_request(app_id, http_request_data)
+      self.remote_request(app_info, http_request_data)
     else:
       self.unknown_request(app_id, http_request_data, pb_type)
 
@@ -81,13 +86,14 @@ class MainHandler(tornado.web.RequestHandler):
     self.write(json.dumps(tq_stats))
     self.finish()
 
-  def remote_request(self, app_id, http_request_data):
+  def remote_request(self, app_info, http_request_data):
     """ Receives a remote request to which it should give the correct
     response. The http_request_data holds an encoded protocol buffer of a
     certain type. Each type has a particular response type.
 
     Args:
-      app_id: The application ID that is sending this request.
+      app_info: A dictionary containing the application, module, and version ID
+        of the app that is sending this request.
       http_request_data: Encoded protocol buffer.
     """
     global task_queue    
@@ -99,7 +105,7 @@ class MainHandler(tornado.web.RequestHandler):
     errdetail = ""
     method = ""
     http_request_data = ""
-
+    app_id = app_info['app_id']
     if not apirequest.has_method():
       errcode = taskqueue_service_pb.TaskQueueServiceError.INVALID_REQUEST
       errdetail = "Method was not set in request"
@@ -136,10 +142,10 @@ class MainHandler(tornado.web.RequestHandler):
                                                  app_id,
                                                  http_request_data)
     elif method == "Add":
-      response, errcode, errdetail = task_queue.add(app_id,
+      response, errcode, errdetail = task_queue.add(app_info,
                                                  http_request_data)
     elif method == "BulkAdd":
-      response, errcode, errdetail = task_queue.bulk_add(app_id,
+      response, errcode, errdetail = task_queue.bulk_add(app_info,
                                                  http_request_data)
     elif method == "ModifyTaskLease":
       response, errcode, errdetail = task_queue.modify_task_lease(app_id,
@@ -205,6 +211,7 @@ def graceful_shutdown(*_):
   of requests as soon as the server has asynchronous handlers.
   """
   logger.info('Stopping server')
+  zk_client.stop()
   server.stop()
   io_loop = IOLoop.instance()
   io_loop.add_callback_from_signal(io_loop.stop)
@@ -222,7 +229,7 @@ def main():
   if args.verbose:
     logger.setLevel(logging.DEBUG)
 
-  global task_queue
+  global task_queue, zk_client
 
   zk_client = KazooClient(
     hosts=','.join(appscale_info.get_zk_node_ips()),

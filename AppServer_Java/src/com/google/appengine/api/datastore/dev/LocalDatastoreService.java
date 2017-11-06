@@ -196,6 +196,7 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
     private Map<String, LocalDatastoreService.SpecialProperty>  specialPropertyMap = Maps.newHashMap();
     private IndexesXml                          indexes                           = null;
     private HashMap<String, List<OnestoreEntity.CompositeIndex>>   compositeIndexCache    = new HashMap<String, List<OnestoreEntity.CompositeIndex>>();
+    private String appID;
 
     public void clearProfiles()
     {
@@ -251,6 +252,8 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
         String maxTxnLifetime = (String)properties.get(MAX_TRANSACTION_LIFETIME_PROPERTY);
         this.maxTransactionLifetimeMs = parseInt(maxTxnLifetime, this.maxTransactionLifetimeMs, MAX_TRANSACTION_LIFETIME_PROPERTY);
 
+        this.appID = properties.get("APP_NAME");
+
         String autoIdAllocationPolicyString = (String)properties.get("datastore.auto_id_allocation_policy");
         if (autoIdAllocationPolicyString != null) {
           try {
@@ -281,14 +284,14 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
 
         this.costAnalysis = new LocalDatastoreCostAnalysis(LocalCompositeIndexManager.getInstance());
 
-        setupIndexes(properties.get("user.dir"), properties.get("APP_NAME"));
+        setupIndexes(properties.get("user.dir"));
         
         logger.info(String.format("Local Datastore initialized: \n\tType: %s\n\tStorage: %s", 
           new Object[] { isHighRep() ? "High Replication" : "Master/Slave", 
           this.noStorage ? "In-memory" : this.backingStore }));
     }
 
-    private void setupIndexes(String appDir, String appName)
+    private void setupIndexes(String appDir)
     {
         IndexesXmlReader xmlReader = new IndexesXmlReader(appDir);
         indexes = xmlReader.readIndexesXml();
@@ -296,7 +299,7 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
         for (IndexesXml.Index index : indexes)
         {
             OnestoreEntity.CompositeIndex newCompositeIndex = requestedCompositeIndices.addIndex();
-            newCompositeIndex.setAppId(getAppId());
+            newCompositeIndex.setAppId(this.appID);
             OnestoreEntity.Index requestedIndex = newCompositeIndex.getMutableDefinition();
             requestedIndex.setAncestor(index.doIndexAncestors());
             requestedIndex.setEntityType(index.getKind());
@@ -317,7 +320,7 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
       }
         
       ApiBasePb.StringProto appId = new ApiBasePb.StringProto();
-      appId.setValue(appName); 
+      appId.setValue(this.appID);
       DatastoreV3Pb.CompositeIndices existing = getIndices( null, appId);  
       
       createAndDeleteIndexes(existing, requestedCompositeIndices);
@@ -726,18 +729,13 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
             return;
         }
 
-        String nginxPort = ResourceLoader.getNginxPort();
-
         String app = request.addRequests().get(0).getTransaction().getApp();
         TaskQueuePb.TaskQueueBulkAddRequest bulkAddRequest = request.clone();
         TaskQueuePb.TaskQueueBulkAddResponse bulkAddResponse = new TaskQueuePb.TaskQueueBulkAddResponse();
 
-        // Prepend task URLs with host and port.
+        // Set project ID for tasks.
         for (TaskQueuePb.TaskQueueAddRequest addRequest : bulkAddRequest.addRequests())
         {
-            String nginxHost = System.getProperty("NGINX_ADDR");
-            String fullTaskPath = "http://" + nginxHost + ":" + nginxPort + addRequest.getUrl();
-            addRequest.setUrl(fullTaskPath);
             addRequest.setAppId(app);
         }
 
@@ -1000,14 +998,8 @@ public final class LocalDatastoreService extends AbstractLocalRpcService
         }
 
         DatastoreV3Pb.AllocateIdsResponse response = new DatastoreV3Pb.AllocateIdsResponse();
-        proxy.doPost(getAppId(), "AllocateIds", req, response);
+        proxy.doPost(this.appID, "AllocateIds", req, response);
         return response;
-    }
-
-    private String getAppId()
-    {
-        String appId = System.getProperty(APPLICATION_ID_PROPERTY);
-        return appId;
     }
     
     public static enum AutoIdAllocationPolicy

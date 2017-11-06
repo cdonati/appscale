@@ -15,10 +15,13 @@ import urllib
 import tornado.escape
 import tornado.httpclient
 import tornado.web
+from appscale.admin.constants import DEFAULT_SERVICE
+from appscale.admin.constants import DEFAULT_VERSION
 from appscale.common import appscale_info, appscale_utils
-from appscale.common.constants import LOG_FORMAT
+from appscale.common.constants import LOG_FORMAT, ZK_PERSISTENT_RECONNECTS
 from appscale.common.ua_client import UAClient, UAException
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
+from kazoo.client import KazooClient
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.options import options
 
@@ -26,9 +29,63 @@ from appscale.hermes import constants, helper
 from appscale.hermes.handlers import MainHandler, TaskHandler, Respond404Handler
 from appscale.hermes.helper import JSONTags
 from appscale.hermes.stats import stats_app
+from appscale.hermes.stats import constants as stats_constants
+
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api.appcontroller_client import AppControllerException
+
+# A KazooClient for detecting configuration changes.
+zk_client = None
+
+
+class SensorDeployer(object):
+  """ Uploads the sensor app for registered deployments. """
+  def __init__(self, zk_client):
+    """ Creates new SensorDeployer object.
+
+    Args:
+      zk_client: A KazooClient.
+    """
+    self.zk_client = zk_client
+
+  def deploy(self):
+    """ Uploads the sensor app for registered deployments. """
+    deployment_id = helper.get_deployment_id()
+    # If deployment is not registered, then do nothing.
+    if not deployment_id:
+      return
+
+    ua_client = UAClient(appscale_info.get_db_master_ip(), options.secret)
+
+    # If the appscalesensor app is already running, then do nothing.
+    version_node = '/appscale/projects/{}/services/{}/versions/{}'.format(
+      constants.APPSCALE_SENSOR, DEFAULT_SERVICE, DEFAULT_VERSION)
+    if self.zk_client.exists(version_node) is not None:
+      return
+
+    pwd = appscale_utils.encrypt_password(constants.USER_EMAIL,
+                                          appscale_utils.random_password_generator())
+    if create_appscale_user(pwd, ua_client) and create_xmpp_user(pwd,
+                                                                 ua_client):
+      logging.debug("Created new user and now tarring app to be deployed.")
+      file_path = os.path.join(os.path.dirname(__file__), '../Apps/sensor')
+      app_dir_location = os.path.join(constants.APP_DIR_LOCATION,
+                                      constants.APPSCALE_SENSOR)
+      archive = tarfile.open(app_dir_location, "w|gz")
+      archive.add(file_path, arcname=constants.APPSCALE_SENSOR)
+      archive.close()
+
+      try:
+        logging.info("Deploying the sensor app for registered deployments.")
+        acc = appscale_info.get_appcontroller_client()
+        acc.upload_app(app_dir_location, constants.FILE_SUFFIX)
+      except AppControllerException:
+        logging.exception("AppControllerException while trying to deploy "
+                          "appscalesensor app.")
+    else:
+      logging.error("Error while creating or accessing the user to deploy "
+                    "appscalesensor app.")
 
 
 def poll():
@@ -92,44 +149,6 @@ def poll():
   helper.urlfetch_async(request)
 
 
-def deploy_sensor_app():
-  """ Uploads the sensor app for registered deployments. """
-
-  deployment_id = helper.get_deployment_id()
-  #If deployment is not registered, then do nothing.
-  if not deployment_id:
-    return
-
-  ua_client = UAClient(appscale_info.get_db_master_ip(), options.secret)
-
-  # If the appscalesensor app is already running, then do nothing.
-  if ua_client.is_app_enabled(constants.APPSCALE_SENSOR):
-    return
-
-  pwd = appscale_utils.encrypt_password(constants.USER_EMAIL,
-                                        appscale_utils.random_password_generator())
-  if create_appscale_user(pwd, ua_client) and create_xmpp_user(pwd, ua_client):
-    logging.debug("Created new user and now tarring app to be deployed.")
-    file_path = os.path.join(os.path.dirname(__file__), '../Apps/sensor')
-    app_dir_location = os.path.join(constants.APP_DIR_LOCATION,
-                                    constants.APPSCALE_SENSOR)
-    archive = tarfile.open(app_dir_location, "w|gz")
-    archive.add(file_path, arcname= constants.APPSCALE_SENSOR)
-    archive.close()
-
-    try:
-      logging.info("Deploying the sensor app for registered deployments.")
-      acc = appscale_info.get_appcontroller_client()
-      acc.upload_app(app_dir_location, constants.FILE_SUFFIX,
-                     constants.USER_EMAIL)
-    except AppControllerException:
-      logging.exception("AppControllerException while trying to deploy "
-        "appscalesensor app.")
-  else:
-    logging.error("Error while creating or accessing the user to deploy "
-      "appscalesensor app.")
-
-
 def create_appscale_user(password, uaserver):
   """ Creates the user account with the email address and password provided. """
   if uaserver.does_user_exist(constants.USER_EMAIL):
@@ -171,6 +190,7 @@ def create_xmpp_user(password, uaserver):
 def signal_handler(signal, frame):
   """ Signal handler for graceful shutdown. """
   logging.warning("Caught signal: {0}".format(signal))
+  zk_client.stop()
   IOLoop.instance().add_callback(shutdown)
 
 
@@ -183,18 +203,9 @@ def shutdown():
 def main():
   """ Main. """
   parser = argparse.ArgumentParser()
-  parser.add_argument('-v', '--verbose', action='store_true',
-                      help='Output debug-level logging')
-  parser.add_argument('--write-nodes-log', action='store_true',
-                      help='Write nodes stats CSV log (on master)')
-  parser.add_argument('--write-processes-log', action='store_true',
-                      help='Write short processes stats CSV log (on master)')
-  parser.add_argument('--write-detailed-processes-log', action='store_true',
-                      help='Write detailed processes stats CSV log (on master)')
-  parser.add_argument('--write-proxies-log', action='store_true',
-                      help='Write short proxies stats CSV log (on master)')
-  parser.add_argument('--write-detailed-proxies-log', action='store_true',
-                      help='Write detailed proxies stats CSV log (on master)')
+  parser.add_argument(
+    '-v', '--verbose', action='store_true',
+    help='Output debug-level logging')
   args = parser.parse_args()
 
   logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
@@ -211,11 +222,6 @@ def main():
   is_lb = (my_ip in appscale_info.get_load_balancer_ips())
 
   if is_master:
-    # Periodically checks if the deployment is registered and uploads the
-    # appscalesensor app for registered deployments.
-    PeriodicCallback(deploy_sensor_app,
-                     constants.UPLOAD_SENSOR_INTERVAL).start()
-
     # Periodically check with the portal for new tasks.
     # Note: Currently, any active handlers from the tornado app will block
     # polling until they complete.
@@ -224,14 +230,19 @@ def main():
     # Only master Hermes node handles /do_task route
     task_route = ('/do_task', TaskHandler)
 
-    if args.write_nodes_log:
-      stats_app.configure_node_stats_profiling()
-    if args.write_processes_log or args.write_detailed_processes_log:
-      stats_app.configure_processes_stats_profiling(
-        write_detailed_stats=args.write_detailed_processes_log)
-    if args.write_proxies_log or args.write_detailed_proxies_log:
-      stats_app.configure_proxies_stats_profiling(
-        write_detailed_stats=args.write_detailed_proxies_log)
+    global zk_client
+    zk_client = KazooClient(
+      hosts=','.join(appscale_info.get_zk_node_ips()),
+      connection_retry=ZK_PERSISTENT_RECONNECTS)
+    zk_client.start()
+    # Start watching profiling configs in ZooKeeper
+    stats_app.ProfilingManager(zk_client)
+
+    # Periodically checks if the deployment is registered and uploads the
+    # appscalesensor app for registered deployments.
+    sensor_deployer = SensorDeployer(zk_client)
+    PeriodicCallback(sensor_deployer.deploy,
+                     constants.UPLOAD_SENSOR_INTERVAL).start()
   else:
     task_route = ('/do_task', Respond404Handler,
                   dict(reason='Hermes slaves do not manage tasks from Portal'))

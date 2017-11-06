@@ -4,6 +4,7 @@ import sys
 from appscale.common import appscale_info
 from distutils.spawn import find_executable
 from . import file_io
+from .constants import VERSION_PATH_SEPARATOR
 
 # Directory with the task templates.
 TEMPLATE_DIR = os.path.join(
@@ -35,6 +36,7 @@ def create_config_file(watch, start_cmd, pidfile, port=None, env_vars=None,
     assert port is not None, 'When using check_port, port must be defined'
 
   process_name = watch
+  version_group = watch.rsplit(VERSION_PATH_SEPARATOR, 1)[0]
   if port is not None:
     process_name += '-{}'.format(port)
 
@@ -49,16 +51,16 @@ def create_config_file(watch, start_cmd, pidfile, port=None, env_vars=None,
   logfile = os.path.join(
     '/', 'var', 'log', 'appscale', '{}.log'.format(process_name))
 
-  stop = ('start-stop-daemon --stop --pidfile {0} --retry=TERM/20/KILL/5 && '
-          'rm {0}'.format(pidfile))
+  stop = 'appscale-stop-instance --watch {}'.format(process_name)
   if syslog_server is None:
     bash_exec = 'exec env {vars} {start_cmd} >> {log} 2>&1'.format(
       vars=env_vars_str, start_cmd=start_cmd, log=logfile)
   else:
-    bash_exec = 'exec env {vars} {start_cmd} 2>&1 | tee -a {log} | '\
-                'logger -t {watch} -u /tmp/ignored -n {syslog_server} -P 514'.\
-      format(vars=env_vars_str, start_cmd=start_cmd, log=logfile, watch=watch,
-             syslog_server=syslog_server)
+    bash_exec = (
+      'exec env {vars} {start_cmd} 2>&1 | tee -a {log} | '
+      'logger -t {version} -u /tmp/ignored -n {syslog_server} -P 514'
+    ).format(vars=env_vars_str, start_cmd=start_cmd, log=logfile,
+             version=version_group, syslog_server=syslog_server)
 
   start_line = ' '.join([
     start_stop_daemon,
@@ -73,7 +75,7 @@ def create_config_file(watch, start_cmd, pidfile, port=None, env_vars=None,
     output = template.read()
     output = output.format(
       process_name=process_name, match_clause='PIDFILE "{}"'.format(pidfile),
-      group=watch, start_line=start_line, stop_line=stop_line)
+      group=version_group, start_line=start_line, stop_line=stop_line)
 
   if max_memory is not None:
     output += '  if totalmem > {} MB for 10 cycles then restart\n'.format(
@@ -81,7 +83,7 @@ def create_config_file(watch, start_cmd, pidfile, port=None, env_vars=None,
 
   if check_port:
     private_ip = appscale_info.get_private_ip()
-    output += '  if failed host {} port {} then restart\n'.format(
+    output += '  if failed host {} port {} for 3 cycles then restart\n'.format(
       private_ip, port)
 
   config_file = os.path.join(MONIT_CONFIG_DIR,

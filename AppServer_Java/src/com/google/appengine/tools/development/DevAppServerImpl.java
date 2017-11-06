@@ -190,6 +190,13 @@ class DevAppServerImpl
     else
     {
         System.setProperty(APPLICATION_ID_PROPERTY, config.getAppId());
+        // AppScale: Set MODULE and VERSION env variables for taskqueue.
+        System.setProperty("MODULE", mainModule.getModuleName());
+        String versionId = config.getMajorVersionId();
+        if (versionId == null)
+          versionId = "v1";
+        System.setProperty("VERSION", versionId);
+        // End AppScale
     }
     logger.info("Dev App Server is now running");
     return this.shutdownLatch;
@@ -198,7 +205,8 @@ class DevAppServerImpl
   public void setInboundServicesProperty() {
     ImmutableSet.Builder setBuilder = ImmutableSet.builder();
 
-    for (ApplicationConfigurationManager.ModuleConfigurationHandle moduleConfigurationHandle : applicationConfigurationManager.getModuleConfigurationHandles()) {
+    for (Object uncastHandle : applicationConfigurationManager.getModuleConfigurationHandles()) {
+      ApplicationConfigurationManager.ModuleConfigurationHandle moduleConfigurationHandle = (ApplicationConfigurationManager.ModuleConfigurationHandle) uncastHandle;
       setBuilder.addAll(moduleConfigurationHandle.getModule().getAppEngineWebXml().getInboundServices());
     }
 

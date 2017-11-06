@@ -23,8 +23,19 @@ class CustomHTTPError(HTTPError):
     self.kwargs = kwargs
 
 
+class AccessTokenErrors:
+  INVALID_REQUEST = 'invalid_request'
+  INVALID_CLIENT = 'invalid_client'
+  INVALID_GRANT = 'invalid_grant'
+  INVALID_SCOPE = 'invalid_scope'
+  UNAUTHORIZED_CLIENT = 'unauthorized_client'
+  UNSUPPORTED_GRANT_TYPE = 'unsupported_grant_type'
+
+
 class Methods(object):
   """ The methods handled by the Admin API. """
+  DELETE_PROJECT = 'google.appengine.v1.Projects.DeleteProject'
+  DELETE_SERVICE = 'google.appengine.v1.Services.DeleteService'
   CREATE_VERSION = 'google.appengine.v1.Versions.CreateVersion'
   DELETE_VERSION = 'google.appengine.v1.Versions.DeleteVersion'
   UPDATE_VERSION = 'google.appengine.v1.Versions.UpdateVersion'
@@ -32,6 +43,16 @@ class Methods(object):
 
 class OperationTimeout(Exception):
   """ Indicates that an operation has taken too long. """
+  pass
+
+
+class InvalidConfiguration(Exception):
+  """ Indicates that a given configuration cannot be enforced. """
+  pass
+
+
+class InvalidSource(Exception):
+  """ Indicates that a revision's source code is invalid. """
   pass
 
 
@@ -56,7 +77,7 @@ UNPACK_ROOT = os.path.join('/', 'var', 'apps')
 DEFAULT_PORT = 17442
 
 # The default version for a service.
-DEFAULT_VERSION = 'default'
+DEFAULT_VERSION = 'v1'
 
 # The default service.
 DEFAULT_SERVICE = 'default'
@@ -76,8 +97,8 @@ IMMUTABLE_PROJECTS = [DASHBOARD_APP_ID]
 # The directory where source archives are stored.
 SOURCES_DIRECTORY = os.path.join('/', 'opt', 'appscale', 'apps')
 
-# The character used to separate portions of a complete version string.
-VERSION_PATH_SEPARATOR = '_'
+# The ZooKeeper location for storing project details.
+PROJECT_NODE_TEMPLATE = '/appscale/projects/{}'
 
 # The ZooKeeper location for storing version details.
 VERSION_NODE_TEMPLATE = ('/appscale/projects/{project_id}'

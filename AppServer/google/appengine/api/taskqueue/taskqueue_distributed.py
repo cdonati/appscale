@@ -219,16 +219,8 @@ class TaskQueueServiceStub(apiproxy_stub.APIProxyStub):
       self._AddTransactionalBulkTask(request, response)
       return response
 
-    port_file_location = os.path.join(
-      '/', 'etc', 'appscale', 'port-{}.txt'.format(self.__app_id))
-    with open(port_file_location) as port_file:
-      port = port_file.read().strip()
-
     for add_request in request.add_request_list():
       add_request.set_app_id(self.__app_id)
-      url = add_request.url()
-      url = "http://" + self.__nginx_host + ":" + port + url
-      add_request.set_url(url)
 
     self._RemoteSend(request, response, "BulkAdd", request_id)
     return response
@@ -431,7 +423,8 @@ class TaskQueueServiceStub(apiproxy_stub.APIProxyStub):
     """
     self._RemoteSend(request, response, "ModifyTaskLease", request_id)
 
-  def _RemoteSend(self, request, response, method, request_id=None):
+  def _RemoteSend(self, request, response, method, request_id=None,
+                  service_id=None, version_id=None):
     """Sends a request remotely to the taskqueue server.
 
     Args:
@@ -439,6 +432,8 @@ class TaskQueueServiceStub(apiproxy_stub.APIProxyStub):
       response: A protocol buffer response.
       method: The function which is calling the remote server.
       request_id: A string specifying a request ID.
+      service_id: A string specifying the client service ID.
+      version_id: A string specifying the client version ID.
     Raises:
       taskqueue_service_pb.InternalError:
     """

@@ -27,7 +27,7 @@ SMALL_WAIT = 2
 # away interfacing with monit directly.
 module MonitInterface
 
-  
+
   # The location on the local filesystem of the monit executable.
   MONIT = "/usr/bin/monit"
 
@@ -68,11 +68,12 @@ module MonitInterface
 
   # Starts a daemonized service. The start_cmd should be designed to start a
   # background process, and it should create its own pidfile.
-  def self.start_daemon(watch, start_cmd, stop_cmd, pidfile)
+  def self.start_daemon(watch, start_cmd, stop_cmd, pidfile, start_timeout=nil)
+    timeout_suffix = "with timeout #{start_timeout} seconds" if start_timeout
     config = <<CONFIG
 CHECK PROCESS #{watch} PIDFILE "#{pidfile}"
   group #{watch}
-  start program = "#{start_cmd}"
+  start program = "#{start_cmd}" #{timeout_suffix}
   stop program = "#{stop_cmd}"
 CONFIG
 
@@ -203,22 +204,39 @@ BOO
     return (not output == "")
   end
 
+  # Checks if an AppServer instance is running.
+  #
+  # Args:
+  #   version_key: A string specifying a version key.
+  #   port: An integer specifying a port.
+  # Returns:
+  #   A boolean indicating whether or not the instance is running.
+  def self.instance_running?(version_key, port)
+    output = self.run_cmd("#{MONIT} summary")
+    output.each_line { |entry|
+      next unless entry.include?(version_key)
+      next unless entry.include?(port.to_s)
+      return entry.include?('Running') || entry.include?('Initialized')
+    }
+    return false
+  end
+
   # This function returns a list of running applications: the
   # dev_appservers needs to still be monitored by monit.
   # Returns:
   #   A list of application:port records.
-  def self.running_appengines()
-    appengines = []
+  def self.running_appservers()
+    appservers = []
     output = self.run_cmd("#{MONIT} summary | grep -E 'app___.*(Running|Initializing)'")
-    appengines_raw = output.gsub! /Process 'app___(.*)-([0-9]*).*/, '\1:\2'
-    if appengines_raw
-      appengines_raw.split("\n").each{ |appengine|
-        appengines << appengine if !appengine.split(":")[1].nil?
+    appservers_raw = output.gsub! /Process 'app___(.*)-([0-9]*).*/, '\1:\2'
+    if appservers_raw
+      appservers_raw.split("\n").each{ |appengine|
+        appservers << appengine if !appengine.split(":")[1].nil?
       }
     end
 
-    Djinn.log_debug("Found these appservers processes running: #{appengines}.")
-    return appengines
+    Djinn.log_debug("Found these appservers processes running: #{appservers}.")
+    return appservers
   end
 
   private
