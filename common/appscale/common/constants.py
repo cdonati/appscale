@@ -12,6 +12,7 @@ class HTTPCodes(object):
   NOT_FOUND = 404
   INTERNAL_ERROR = 500
   NOT_IMPLEMENTED = 501
+  SERVICE_UNAVAILABLE = 503
 
 
 class MonitStates(object):

@@ -53,6 +53,7 @@ from appscale.common.deployment_config import ConfigInaccessible
 from appscale.common.deployment_config import DeploymentConfig
 from appscale.common.monit_app_configuration import MONIT_CONFIG_DIR
 from appscale.common.monit_interface import MonitOperator
+from appscale.common.monit_interface import MonitStates
 from appscale.common.monit_interface import ProcessNotFound
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 
@@ -421,6 +422,10 @@ def stop_app_instance(version_key, port):
     message = 'No entries exist for {}:{}'.format(version_key, port)
     raise HTTPError(HTTPCodes.INTERNAL_ERROR, message=message)
 
+  if monit_entries[watch] == MonitStates.PENDING:
+    raise HTTPError(HTTPCodes.SERVICE_UNAVAILABLE,
+                    message='Pending Monit operation')
+
   yield unmonitor_and_terminate(watch)
 
   yield monit_operator.reload()
@@ -447,6 +452,12 @@ def stop_app(version_key):
   monit_entries = yield monit_operator.get_entries()
   version_entries = [entry for entry in monit_entries
                      if entry.startswith(version_group)]
+
+  for entry in version_entries:
+    if monit_entries[entry] == MonitStates.PENDING:
+      raise HTTPError(HTTPCodes.SERVICE_UNAVAILABLE,
+                      message='Pending Monit operation for {}'.format(entry))
+
   for entry in version_entries:
     yield unmonitor_and_terminate(entry)
 
