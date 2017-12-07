@@ -10,6 +10,9 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 from tornado.options import options
 
+from appscale.common.async_retrying import (
+  retry_children_watch_coroutine, retry_data_watch_coroutine
+)
 from appscale.common.constants import (
   LOG_DIR,
   MonitStates,
@@ -18,6 +21,7 @@ from appscale.common.constants import (
 )
 from appscale.common.monit_app_configuration import create_config_file
 from appscale.common.monit_app_configuration import MONIT_CONFIG_DIR
+
 from .utils import ensure_path
 
 # The number of tasks the Celery worker can handle at a time.
@@ -178,8 +182,6 @@ class ProjectPushWorkerManager(object):
     Args:
       queue_config: A JSON string specifying queue configuration.
     """
-    main_io_loop = IOLoop.instance()
-
     # Prevent further watches if they are no longer needed.
     if queue_config is None:
       try:
@@ -193,7 +195,11 @@ class ProjectPushWorkerManager(object):
         self._stopped = True
         return False
 
-    main_io_loop.add_callback(self.update_worker, queue_config)
+    persistent_update_worker = retry_data_watch_coroutine(
+      self.queues_node, self.update_worker
+    )
+    main_io_loop = IOLoop.instance()
+    main_io_loop.add_callback(persistent_update_worker, queue_config)
 
 
 class GlobalPushWorkerManager(object):
@@ -241,5 +247,8 @@ class GlobalPushWorkerManager(object):
     Args:
       new_projects: A list of strings specifying all existing project IDs.
     """
+    persistent_update_project = retry_children_watch_coroutine(
+      '/appscale/projects', self.update_projects
+    )
     main_io_loop = IOLoop.instance()
-    main_io_loop.add_callback(self.update_projects, new_projects)
+    main_io_loop.add_callback(persistent_update_project, new_projects)
