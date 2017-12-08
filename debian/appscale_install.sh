@@ -60,6 +60,7 @@ case "$1" in
         installpsutil
         installapiclient
         installgosdk
+        installacc
         installcommon
         installadminserver
         installhermes
