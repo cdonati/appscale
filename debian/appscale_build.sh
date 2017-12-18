@@ -4,6 +4,8 @@
 # needed dependencies and configures them properly for AppScale.
 #
 
+echo "timing: in appscale build: $(date)"
+
 # Some basic check: we need a way to install packages.
 PKG_CMD="$(which apt-get)"
 if [ -z "${PKG_CMD}" ]; then
@@ -18,6 +20,8 @@ set -e
 echo -n "Updating package list and cache ..."
 ${PKG_CMD} update > /dev/null
 echo "done."
+
+echo "timing: after pkg update: $(date)"
 
 # We need to make sure we have lsb-release, before we use it. On
 # streamlined images (like docker) it may not be present.
@@ -114,6 +118,8 @@ if ! ${PKG_CMD} install -y --force-yes ${PACKAGES}; then
     echo "Fail to install depending packages for runtime."
     exit 1
 fi
+
+echo "timing: after pkg upgrade: $(date)"
 
 # This will remove all the conflicts packages.
 PACKAGES="$(find debian -regex ".*\/control\.${DIST}\$" -exec mawk -f debian/remove-list.awk {} +)"
