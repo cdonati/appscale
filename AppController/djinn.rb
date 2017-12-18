@@ -3063,6 +3063,9 @@ class Djinn
       ENV['EC2_SECRET_KEY'] = @options['ec2_secret_key']
       ENV['EC2_URL'] = @options['ec2_url']
     end
+
+    # Set the proper log level.
+    enforce_options
   end
 
   def got_all_data
@@ -4336,6 +4339,7 @@ HOSTS
     my_public = my_node.public_ip
     Djinn.log_run("rm -f /var/lib/ejabberd/*")
     Ejabberd.write_config_file(my_public)
+    Ejabberd.update_ctl_config
 
     # Monit does not have an entry for ejabberd yet. This allows a restart
     # with the new configuration if it is already running.
