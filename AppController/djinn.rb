@@ -3063,6 +3063,9 @@ class Djinn
       ENV['EC2_SECRET_KEY'] = @options['ec2_secret_key']
       ENV['EC2_URL'] = @options['ec2_url']
     end
+
+    # Set the proper log level.
+    enforce_options
   end
 
   def got_all_data
@@ -3229,12 +3232,15 @@ class Djinn
       threads << Thread.new {
         if my_node.is_db_master? or my_node.is_db_slave?
           start_groomer_service
+          verbose = @options['verbose'].downcase == 'true'
+          GroomerService.start_transaction_groomer(verbose)
         end
 
         start_backup_service
       }
     else
       stop_groomer_service
+      GroomerService.stop_transaction_groomer
       stop_backup_service
     end
 
@@ -4333,6 +4339,7 @@ HOSTS
     my_public = my_node.public_ip
     Djinn.log_run("rm -f /var/lib/ejabberd/*")
     Ejabberd.write_config_file(my_public)
+    Ejabberd.update_ctl_config
 
     # Monit does not have an entry for ejabberd yet. This allows a restart
     # with the new configuration if it is already running.
@@ -4775,7 +4782,7 @@ HOSTS
 
     if service_id == DEFAULT_SERVICE && version_id == DEFAULT_VERSION
       begin
-        start_xmpp_for_app(project_id, version_details['runtime'])
+        start_xmpp_for_app(project_id)
       rescue FailedNodeException
         Djinn.log_warn("Failed to start xmpp for application #{project_id}")
       end
@@ -5720,7 +5727,7 @@ HOSTS
   end
 
   # This function creates the xmpp account for 'app', as app@login_ip.
-  def start_xmpp_for_app(app, app_language)
+  def start_xmpp_for_app(app)
     watch_name = "xmpp-#{app}"
 
     # If we have it already running, nothing to do
@@ -5747,7 +5754,7 @@ HOSTS
     Djinn.log_debug("Created user [#{xmpp_user}] with password " \
       "[#{@@secret}] and hashed password [#{xmpp_pass}]")
 
-    if Ejabberd.does_app_need_receive?(app, app_language)
+    if Ejabberd.does_app_need_receive?(app)
       start_cmd = "#{PYTHON27} #{APPSCALE_HOME}/XMPPReceiver/" \
         "xmpp_receiver.py #{app} #{login_ip} #{@@secret}"
       MonitInterface.start(watch_name, start_cmd)
