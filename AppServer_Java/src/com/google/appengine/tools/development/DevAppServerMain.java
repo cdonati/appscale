@@ -369,16 +369,14 @@ public class DevAppServerMain {
             properties.putAll(DevAppServerMain.parsePropertiesList(DevAppServerMain.this.propertyOptions));
             server.setServiceProperties(properties);
 
-            server.start();
             try {
-               while (true) {
-                  Thread.sleep(3600000L);
-               }
-            } catch (InterruptedException e) {
-               System.out.println("Shutting down.");
-               System.exit(0);
+               server.start().await();
+            } catch (InterruptedException var10) {
+               ;
             }
 
+            System.out.println("Shutting down.");
+            System.exit(0);
          } catch (Exception ex) {
             ex.printStackTrace();
             System.exit(1);
