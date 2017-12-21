@@ -57,7 +57,6 @@ public class DevAppServerMain {
    private String appscale_version;
    private String admin_console_version;
    private static final String SECRET_LOCATION = "/etc/appscale/secret.key";
-   private static final String PREFIX = "When generating a war directory,";
 
    private static List<Option> getBuiltInOptions(DevAppServerMain main) {
       return Arrays.asList(new Option("h", "help", true) {
@@ -279,15 +278,6 @@ public class DevAppServerMain {
 
    }
 
-   private void validateArgsForWarGeneration( List<String> args ) {
-      ifNotWarGenConditionExit(this.externalResourceDir != null, "--external_resource_dir must also be specified.");
-
-      File appYamlFile = new File(this.externalResourceDir, "app.yaml");
-      ifNotWarGenConditionExit(appYamlFile.isFile(), "the external resource directory must contain a file named app.yaml.");
-
-      ifNotWarGenConditionExit(args.size() == 0, "the command line should not include a war directory argument.");
-   }
-
    @VisibleForTesting
    static Map<String, String> parsePropertiesList(List<String> properties) {
       Map parsedProperties = new HashMap();
@@ -308,13 +298,6 @@ public class DevAppServerMain {
       }
 
       return parsedProperties;
-   }
-
-   private static void ifNotWarGenConditionExit(boolean condition, String suffix) {
-      if (!condition) {
-         System.err.println("When generating a war directory, " + suffix);
-         System.exit(1);
-      }
    }
 
    class StartAction extends Action {
