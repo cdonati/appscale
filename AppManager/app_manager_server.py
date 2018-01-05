@@ -115,6 +115,7 @@ class BadConfigurationException(Exception):
   def __str__(self):
     return repr(self.value)
 
+
 class NoRedirection(urllib2.HTTPErrorProcessor):
   """ A url opener that does not automatically redirect. """
   def http_response(self, request, response):
@@ -157,6 +158,7 @@ def add_routing(version_key, port):
 
   logging.info(
     'Successfully established routing for {}:{}'.format(version_key, port))
+
 
 @gen.coroutine
 def start_app(version_key, config):
@@ -283,6 +285,7 @@ def start_app(version_key, config):
     logging.error("Error while setting up log rotation for application: {}".
       format(project_id))
 
+
 def setup_logrotate(app_name, log_size):
   """ Creates a logrotate script for the logs that the given application
       will create.
@@ -319,6 +322,7 @@ def setup_logrotate(app_name, log_size):
 
   return True
 
+
 def unmonitor(process_name, retries=5):
   """ Unmonitors a process.
 
@@ -344,6 +348,7 @@ def unmonitor(process_name, retries=5):
 
     raise
 
+
 @gen.coroutine
 def clean_old_sources():
   """ Removes source code for obsolete revisions. """
@@ -362,6 +367,7 @@ def clean_old_sources():
         active_revisions.add(revision_key)
 
   source_manager.clean_old_revisions(active_revisions=active_revisions)
+
 
 @gen.coroutine
 def unmonitor_and_terminate(watch):
@@ -386,6 +392,7 @@ def unmonitor_and_terminate(watch):
 
   IOLoop.current().spawn_callback(stop_instance, watch,
                                   MAX_INSTANCE_RESPONSE_TIME)
+
 
 @gen.coroutine
 def stop_app_instance(version_key, port):
@@ -422,6 +429,7 @@ def stop_app_instance(version_key, port):
   yield monit_operator.reload()
   yield clean_old_sources()
 
+
 @gen.coroutine
 def stop_app(version_key):
   """ Stops all process instances of a version on this machine.
@@ -453,6 +461,7 @@ def stop_app(version_key):
   yield monit_operator.reload()
   yield clean_old_sources()
 
+
 def remove_logrotate(app_name):
   """ Removes logrotate script for the given application.
 
@@ -472,6 +481,7 @@ def remove_logrotate(app_name):
     return False
 
   return True
+
 
 ############################################
 # Private Functions (but public for testing)
@@ -505,6 +515,7 @@ def wait_on_app(port):
     format(url, START_APP_TIMEOUT))
   return False
 
+
 def create_python_app_env(public_ip, app_name):
   """ Returns the environment variables the python application server uses.
 
@@ -521,6 +532,7 @@ def create_python_app_env(public_ip, app_name):
   env_vars['APPSCALE_HOME'] = constants.APPSCALE_HOME
   env_vars['PYTHON_LIB'] = "{0}/AppServer/".format(constants.APPSCALE_HOME)
   return env_vars
+
 
 def create_java_app_env(app_name):
   """ Returns the environment variables Java application servers uses.
@@ -542,6 +554,7 @@ def create_java_app_env(app_name):
     env_vars['GCS_HOST'] = '{scheme}://{host}:{port}'.format(**gcs_config)
 
   return env_vars
+
 
 def create_python27_start_cmd(app_name, login_ip, port, pidfile, revision_key):
   """ Creates the start command to run the python application server.
@@ -584,6 +597,7 @@ def create_python27_start_cmd(app_name, login_ip, port, pidfile, revision_key):
 
   return ' '.join(cmd)
 
+
 def locate_dir(path, dir_name):
   """ Locates a directory inside the given path.
 
@@ -613,6 +627,7 @@ def locate_dir(path, dir_name):
     return sorted_paths[0]
   else:
     return None
+
 
 def create_java_start_cmd(app_name, port, load_balancer_host, max_heap,
                           pidfile, revision_key):
