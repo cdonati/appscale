@@ -4872,6 +4872,8 @@ HOSTS
       end
     end
     known_instances = @app_info_map[version_key]['appservers']
+    Djinn.log_debug("known_instances (#{version_key}): #{known_instances}")
+    Djinn.log_debug("zk_instances: #{zk_instances}")
 
     zk_instances.each { |instance_key|
       next if known_instances.include?(instance_key)
@@ -4881,6 +4883,7 @@ HOSTS
       match = known_instances.index("#{ip}:-1")
       if match
         known_instances.delete_at(match)
+        Djinn.log_debug("Adding assigned instance: #{instance_key}")
       else
         Djinn.log_warn("Adding an unassigned instance: #{instance_key}.")
       end

@@ -730,6 +730,8 @@ def register_instance(revision_key, port):
     if isinstance(action, Exception):
       raise action
 
+  logging.info('Registered instance: {}'.format(instance_key))
+
 
 def declare_instance_nodes(running_instances, zk_client):
   """ Removes dead ZooKeeper instance entries and adds running ones.
