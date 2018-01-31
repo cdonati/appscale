@@ -4921,10 +4921,10 @@ HOSTS
       match = known_instances.index("#{ip}:-1")
       if match
         known_instances.delete_at(match)
+        known_instances << instance_key
       else
-        Djinn.log_warn("Adding an unassigned instance: #{instance_key}.")
+        Djinn.log_warn("Ignoring unassigned instance: #{instance_key}.")
       end
-      known_instances << instance_key
     }
 
     # Account for instances that have been stopped.
