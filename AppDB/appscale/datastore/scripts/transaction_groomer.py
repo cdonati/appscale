@@ -207,7 +207,9 @@ class ProjectGroomer(object):
     while True:
       tx_path, composite_indexes = yield self._worker_queue.get()
       try:
-        tx_time = yield self._resolve_txid(tx_path, composite_indexes)
+        tx_time = yield gen.with_timeout(
+          datetime.timedelta(seconds=60),
+          self._resolve_txid(tx_path, composite_indexes))
         if tx_time is None:
           self._txids_cleaned += 1
 
@@ -349,8 +351,9 @@ class ProjectGroomer(object):
       raise gen.Return(self._oldest_valid_tx_time)
 
     # Refresh these each time so that the indexes are fresh.
-    encoded_indexes = yield self._thread_pool.submit(
-      self._db_access.get_indices, self.project_id)
+    encoded_indexes = yield gen.with_timeout(
+      datetime.timedelta(seconds=60),
+      self._thread_pool.submit(self._db_access.get_indices, self.project_id))
     composite_indexes = [CompositeIndex(index) for index in encoded_indexes]
 
     for tx_path in children:
