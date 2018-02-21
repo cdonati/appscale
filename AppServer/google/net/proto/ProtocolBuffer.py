@@ -20,6 +20,7 @@
 
 import array
 import httplib
+import logging
 import os
 import re
 import struct
@@ -156,6 +157,7 @@ class ProtocolMessage:
                                 keyfile=keyfile,
                                 certfile=certfile)
     if resp.status != 200:
+      logging.warning('Full response: {}'.format(resp.read()))
       conn.close()
       raise ProtocolBufferReturnError(resp.status)
     if response is not None:
