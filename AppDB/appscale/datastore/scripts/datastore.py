@@ -907,6 +907,10 @@ def main():
     log_level=logger.getEffectiveLevel())
 
   server = tornado.httpserver.HTTPServer(pb_application)
-  server.listen(args.port)
+  try:
+    server.listen(args.port)
+  except Exception:
+    logging.warning('port: {}'.format(args.port))
+    raise
 
   IOLoop.current().start()
