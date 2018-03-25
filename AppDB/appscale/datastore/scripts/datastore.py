@@ -647,6 +647,8 @@ class MainHandler(tornado.web.RequestHandler):
       return (putresp_pb.Encode(), 0, "")
     except dbconstants.InternalError as error:
       return '', datastore_pb.Error.INTERNAL_ERROR, str(error)
+    except dbconstants.Timeout as error:
+      return '', datastore_pb.Error.TIMEOUT, str(error)
     except dbconstants.BadRequest as error:
       return '', datastore_pb.Error.BAD_REQUEST, str(error)
     except zktransaction.ZKBadRequest as zkie:
@@ -734,6 +736,8 @@ class MainHandler(tornado.web.RequestHandler):
       return (delresp_pb.Encode(), 0, "")
     except dbconstants.InternalError as error:
       return '', datastore_pb.Error.INTERNAL_ERROR, str(error)
+    except dbconstants.Timeout as error:
+      return '', datastore_pb.Error.TIMEOUT, str(error)
     except dbconstants.BadRequest as error:
       return '', datastore_pb.Error.BAD_REQUEST, str(error)
     except zktransaction.ZKBadRequest as zkie:
@@ -889,7 +893,7 @@ def main():
   datastore_batch = DatastoreFactory.getDatastore(
     args.type, log_level=logger.getEffectiveLevel())
   zookeeper = zktransaction.ZKTransaction(
-    host=zookeeper_locations, start_gc=True, db_access=datastore_batch,
+    host=zookeeper_locations, db_access=datastore_batch,
     log_level=logger.getEffectiveLevel())
 
   zookeeper.handle.add_listener(zk_state_listener)
