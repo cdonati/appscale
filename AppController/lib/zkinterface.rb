@@ -341,6 +341,7 @@ class ZKInterface
         }
       }
     }
+    Djinn.log_debug("active_versions: #{active_versions}")
     active_versions
   end
 
