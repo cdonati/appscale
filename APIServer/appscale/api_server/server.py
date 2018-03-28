@@ -9,10 +9,10 @@ from kazoo.client import KazooClient
 from tornado import web
 from tornado.ioloop import IOLoop
 
-from appscale.api_server import remote_api_pb2
 from appscale.api_server.app_identity import AppIdentityService
 from appscale.api_server.base_service import BaseService
 from appscale.api_server.constants import ApplicationError
+from appscale.api_server.remote_api import remote_api_pb2
 from appscale.common.constants import LOG_FORMAT
 from appscale.common.constants import PID_DIR
 from appscale.common.constants import ZK_PERSISTENT_RECONNECTS
@@ -42,6 +42,7 @@ class MainHandler(web.RequestHandler):
             api_response.response = service.make_call(api_request.method,
                                                       api_request.request)
         except ApplicationError as error:
+            logger.exception('ApplicationError')
             api_response.application_error.code = error.code
             api_response.application_error.detail = error.detail
         except Exception as error:

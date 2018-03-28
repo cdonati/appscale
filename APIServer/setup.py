@@ -28,7 +28,9 @@ setup(
     ],
     namespace_packages=['appscale'],
     packages=['appscale',
-              'appscale.api_server'],
+              'appscale.api_server',
+              'appscale.api_server.app_identity',
+              'appscale.api_server.remote_api'],
     entry_points={'console_scripts': [
         'appscale-api-server=appscale.api_server.server:main'
     ]}

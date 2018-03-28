@@ -7,8 +7,17 @@ from kazoo.exceptions import NoNodeError
 from kazoo.exceptions import NodeExistsError
 from tornado.ioloop import IOLoop
 
-from appscale.api_server import app_identity_service_pb2 as service_pb
 from appscale.api_server import crypto
+from appscale.api_server.app_identity.app_identity_service_pb2 import (
+    AppIdentityServiceError,
+    GetAccessTokenRequest,
+    GetAccessTokenResponse,
+    GetPublicCertificateForAppRequest,
+    GetPublicCertificateForAppResponse,
+    GetServiceAccountNameRequest,
+    GetServiceAccountNameResponse,
+    SignForAppRequest,
+    SignForAppResponse)
 from appscale.api_server.base_service import BaseService
 from appscale.api_server.constants import ApplicationError
 from appscale.api_server.constants import CallNotFound
@@ -19,9 +28,11 @@ from appscale.common.async_retrying import retry_children_watch_coroutine
 logger = logging.getLogger('appscale-api-server')
 
 
-class UnknownError(Exception):
+class UnknownError(ApplicationError):
     """ Indicates that the request cannot be completed at this time. """
-    pass
+    def __init__(self, message):
+        self.detail = message
+        self.code = AppIdentityServiceError.UNKNOWN_ERROR
 
 
 class AppIdentityService(BaseService):
@@ -29,16 +40,14 @@ class AppIdentityService(BaseService):
     SERVICE_NAME = 'app_identity_service'
 
     # The appropriate messages for each API call.
-    METHODS = {'SignForApp': (service_pb.SignForAppRequest,
-                              service_pb.SignForAppResponse),
-               'GetPublicCertificatesForApp': (
-                   service_pb.GetPublicCertificateForAppRequest,
-                   service_pb.GetPublicCertificateForAppResponse),
-               'GetServiceAccountName': (
-                   service_pb.GetServiceAccountNameRequest,
-                   service_pb.GetServiceAccountNameResponse),
-               'GetAccessToken': (service_pb.GetAccessTokenRequest,
-                                  service_pb.GetAccessTokenResponse)}
+    METHODS = {'SignForApp': (SignForAppRequest,
+                              SignForAppResponse),
+               'GetPublicCertificatesForApp': (GetPublicCertificateForAppRequest,
+                                               GetPublicCertificateForAppResponse),
+               'GetServiceAccountName': (GetServiceAccountNameRequest,
+                                         GetServiceAccountNameResponse),
+               'GetAccessToken': (GetAccessTokenRequest,
+                                  GetAccessTokenResponse)}
 
     def __init__(self, project_id, zk_client):
         """ Creates a new AppIdentityService.
@@ -167,39 +176,22 @@ class AppIdentityService(BaseService):
 
         if method == 'SignForApp':
             response.key_name = self._key.key_name
-            try:
-                response.signature_bytes = self.sign(request.bytes_to_sign)
-            except UnknownError as error:
-                logger.exception('Unable to sign bytes')
-                raise ApplicationError(service_pb.UNKNOWN_ERROR, str(error))
+            response.signature_bytes = self.sign(request.bytes_to_sign)
         elif method == 'GetPublicCertificatesForApp':
-            try:
-                public_certs = self.get_public_certificates()
-            except UnknownError as error:
-                logger.exception('Unable to get public certificates')
-                raise ApplicationError(service_pb.UNKNOWN_ERROR, str(error))
-
+            public_certs = self.get_public_certificates()
             for public_cert in public_certs:
                 cert = response.public_certificate_list.add()
                 cert.key_name = cert.key_name = public_cert.key_name
                 cert.x509_certificate_pem = public_cert.pem
         elif method == 'GetServiceAccountName':
-            try:
-                response.service_account_name = self.get_service_account_name()
-            except UnknownError as error:
-                logger.exception('Unable to get service account name')
-                raise ApplicationError(service_pb.UNKNOWN_ERROR, str(error))
+            response.service_account_name = self.get_service_account_name()
         elif method == 'GetAccessToken':
             service_account_id = None
             if request.HasField('service_account_id'):
                 service_account_id = request.service_account_id
 
-            try:
-                token = self.get_access_token(list(request.scope),
-                                              service_account_id)
-            except UnknownError as error:
-                logger.exception('Unable to get access token')
-                raise ApplicationError(service_pb.UNKNOWN_ERROR, str(error))
+            token = self.get_access_token(list(request.scope),
+                                          service_account_id)
 
             response.access_token = token.token
             response.expiration_time = token.expiration_time
