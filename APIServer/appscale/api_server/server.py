@@ -13,6 +13,7 @@ from appscale.api_server.app_identity import AppIdentityService
 from appscale.api_server.base_service import BaseService
 from appscale.api_server.constants import ApplicationError
 from appscale.api_server.remote_api import remote_api_pb2
+from appscale.common.appscale_info import get_headnode_ip
 from appscale.common.constants import LOG_FORMAT
 from appscale.common.constants import PID_DIR
 from appscale.common.constants import ZK_PERSISTENT_RECONNECTS
