@@ -14,7 +14,7 @@ from appscale.hermes.constants import SECRET_HEADER
 from appscale.hermes.stats import converter
 from appscale.hermes.stats.constants import STATS_REQUEST_TIMEOUT
 from appscale.hermes.stats.producers import (
-  proxy_stats, node_stats, process_stats
+  proxy_stats, node_stats, process_stats, rabbitmq_stats
 )
 
 
@@ -58,12 +58,12 @@ class ClusterStatsSource(object):
     stats_per_node = {
       ip: snapshot_or_err
       for ip, snapshot_or_err in stats_or_error_per_node.iteritems()
-      if not isinstance(snapshot_or_err, str)
+      if not isinstance(snapshot_or_err, (str, unicode))
     }
     failures = {
       ip: snapshot_or_err
       for ip, snapshot_or_err in stats_or_error_per_node.iteritems()
-      if isinstance(snapshot_or_err, str)
+      if isinstance(snapshot_or_err, (str, unicode))
     }
     logging.info("Fetched {stats} from {nodes} nodes in {elapsed:.1f}s."
                  .format(stats=self.stats_model.__name__,
@@ -74,7 +74,12 @@ class ClusterStatsSource(object):
   @gen.coroutine
   def _stats_from_node_async(self, node_ip, max_age, include_lists):
     if node_ip == appscale_info.get_private_ip():
-      snapshot = self.local_stats_source.get_current()
+      try:
+        snapshot = self.local_stats_source.get_current()
+      except Exception as err:
+        snapshot = unicode(err)
+        logging.exception(
+          u"Failed to prepare local stats: {err}".format(err=err))
     else:
       snapshot = yield self._fetch_remote_stats_async(
         node_ip, max_age, include_lists)
@@ -104,16 +109,16 @@ class ClusterStatsSource(object):
     if response.code >= 400:
       if response.body:
         logging.error(
-          "Failed to get stats from {url} ({code} {reason}, BODY: {body})"
+          u"Failed to get stats from {url} ({code} {reason}, BODY: {body})"
           .format(url=url, code=response.code, reason=response.reason,
                   body=response.body)
         )
       else:
         logging.error(
-          "Failed to get stats from {url} ({code} {reason})"
+          u"Failed to get stats from {url} ({code} {reason})"
           .format(url=url, code=response.code, reason=response.reason)
         )
-      raise gen.Return("{} {}".format(response.code, response.reason))
+      raise gen.Return(u"{} {}".format(response.code, response.reason))
 
     try:
       snapshot = json.loads(response.body)
@@ -142,3 +147,17 @@ class ClusterProxiesStatsSource(ClusterStatsSource):
   method_path = 'stats/local/proxies'
   stats_model = proxy_stats.ProxiesStatsSnapshot
   local_stats_source = proxy_stats.ProxiesStatsSource
+
+
+class ClusterRabbitMQStatsSource(ClusterStatsSource):
+  ips_getter = staticmethod(appscale_info.get_taskqueue_nodes)
+  method_path = 'stats/local/rabbitmq'
+  stats_model = rabbitmq_stats.RabbitMQStatsSnapshot
+  local_stats_source = rabbitmq_stats.RabbitMQStatsSource
+
+
+class ClusterPushQueueStatsSource(ClusterStatsSource):
+  ips_getter = staticmethod(lambda: [appscale_info.get_taskqueue_nodes()[0]])
+  method_path = 'stats/local/push_queues'
+  stats_model = rabbitmq_stats.PushQueueStatsSnapshot
+  local_stats_source = rabbitmq_stats.PushQueueStatsSource

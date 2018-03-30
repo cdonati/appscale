@@ -117,16 +117,18 @@ increaseconnections()
         # the modprobe command fails.
         modprobe ip_conntrack || true
 
-        echo "net.netfilter.nf_conntrack_max = 262144" >> /etc/sysctl.conf
-        echo "net.core.somaxconn = 20240" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_tw_recycle = 0" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_tw_reuse = 0" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_orphan_retries = 1" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_fin_timeout = 25" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_max_orphans = 8192" >> /etc/sysctl.conf
-        echo "net.ipv4.ip_local_port_range = 32768    61000" >> /etc/sysctl.conf
+        SYSCTL_CONFIG="/etc/sysctl.d/10-appscale.conf"
+        cat << EOF > ${SYSCTL_CONFIG}
+net.netfilter.nf_conntrack_max = 262144
+net.core.somaxconn = 20240
+net.ipv4.tcp_tw_reuse = 0
+net.ipv4.tcp_orphan_retries = 1
+net.ipv4.tcp_fin_timeout = 25
+net.ipv4.tcp_max_orphans = 8192
+net.ipv4.ip_local_port_range = 32768 61000
+EOF
 
-        /sbin/sysctl -p /etc/sysctl.conf
+        sysctl -p ${SYSCTL_CONFIG}
     fi
 }
 
@@ -238,8 +240,20 @@ installappserverjava()
     JAVA_SDK_PACKAGE_MD5="f5750b0c836870a3089096fd537a1272"
     cachepackage ${JAVA_SDK_PACKAGE} ${JAVA_SDK_PACKAGE_MD5}
 
+    # Remove older build target to prevent jar conflicts.
+    (cd ${JAVA_SDK_DIR} && ant clean-all)
+
     echo "Extracting Java SDK"
     unzip -q "${PACKAGE_CACHE}/${JAVA_SDK_PACKAGE}" -d ${JAVA_SDK_DIR}
+    EXTRACTED_SDK="${JAVA_SDK_DIR}/appengine-java-sdk-1.8.4"
+
+    # The jar included in the 1.8.4 SDK cannot compile JSP files under Java 8.
+    JSP_JAR="repackaged-appengine-eclipse-jdt-ecj.jar"
+    JSP_JAR_MD5="e85db8329dccbd18b8174a3b99513393"
+    cachepackage ${JSP_JAR} ${JSP_JAR_MD5}
+    OLD_JAR="repackaged-appengine-jasper-jdt-6.0.29.jar"
+    rm ${EXTRACTED_SDK}/lib/tools/jsp/${OLD_JAR}
+    cp ${PACKAGE_CACHE}/${JSP_JAR} ${EXTRACTED_SDK}/lib/tools/jsp/${JSP_JAR}
 
     # Compile source file.
     (cd ${JAVA_SDK_DIR} && ant install && ant clean-build)
@@ -417,6 +431,9 @@ postinstallrabbitmq()
         echo ${RMQ_CONFIG} > /etc/rabbitmq/rabbitmq.config
     fi
 
+    # Enable the management API.
+    echo "[rabbitmq_management]." > /etc/rabbitmq/enabled_plugins
+
     # After install it starts up, shut it down.
     rabbitmqctl stop || true
     disableservice rabbitmq-server
@@ -589,6 +606,24 @@ installdatastore()
 {
     pip install --upgrade --no-deps ${APPSCALE_HOME}/AppDB
     pip install ${APPSCALE_HOME}/AppDB
+}
+
+installapiserver()
+{
+    (cd APIServer && protoc --python_out=./appscale/api_server *.proto)
+    # This package needs to be installed in a virtualenv because the protobuf
+    # library conflicts with the google namespace in the SDK.
+    rm -rf /opt/appscale_api_server
+    virtualenv /opt/appscale_api_server
+
+    # The activate script fails under `set -u`.
+    unset_opt=$(shopt -po nounset)
+    set +u
+    (source /opt/appscale_api_server/bin/activate && \
+     pip install -U pip && \
+     pip install ${APPSCALE_HOME}/AppControllerClient ${APPSCALE_HOME}/common \
+     ${APPSCALE_HOME}/APIServer)
+    eval ${unset_opt}
 }
 
 prepdashboard()
