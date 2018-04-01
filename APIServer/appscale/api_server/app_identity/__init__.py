@@ -156,15 +156,17 @@ class AppIdentityService(BaseService):
 
         return self._key.sign(blob)
 
-    def make_call(self, method, encoded_request):
+    def make_call(self, method, encoded_request, request_id):
         """ Makes the appropriate API call for a given request.
 
         Args:
             method: A string specifying the API method.
             encoded_request: A binary type containing the request details.
+            request_id: A string specifying the request ID.
         Returns:
             A binary type containing the response details.
         """
+        del request_id
         if method not in self.METHODS:
             raise CallNotFound(
                 '{}.{} does not exist'.format(self.SERVICE_NAME, method))

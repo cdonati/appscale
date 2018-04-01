@@ -40,8 +40,8 @@ class MainHandler(web.RequestHandler):
         service = self.service_map.get(api_request.service_name,
                                        BaseService(api_request.service_name))
         try:
-            api_response.response = service.make_call(api_request.method,
-                                                      api_request.request)
+            api_response.response = service.make_call(
+                api_request.method, api_request.request, api_request.request_id)
         except ApplicationError as error:
             logger.exception('ApplicationError')
             api_response.application_error.code = error.code
