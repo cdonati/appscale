@@ -2,11 +2,13 @@
 
 import base64
 import logging
+import socket
 import struct
 import time
 
 from collections import deque
 import capnp
+from tornado import gen
 
 
 from appscale.api_server.log.log_service_pb2 import (
@@ -27,11 +29,23 @@ logger = logging.getLogger('appscale-api-server')
 MAX_APP_LOGS = 1000
 
 
+class ClientActions(object):
+    QUERY = 'q'
+    SET_PROJECT = 'a'
+
+
 class InvalidRequest(ApplicationError):
     """ Indicates that the request is invalid. """
     def __init__(self, message):
         self.detail = message
         self.code = LogServiceError.INVALID_REQUEST
+
+
+class StorageError(ApplicationError):
+    """ Indicates that there was a problem accessing the log storage layer. """
+    def __init__(self, message):
+        self.detail = message
+        self.code = LogServiceError.STORAGE_ERROR
 
 
 class RequestLog(object):
@@ -139,13 +153,11 @@ class LogService(BaseService):
 
     LOG_SERVER_PORT = 7422
 
-
-
     # The appropriate messages for each API call.
     METHODS = {'Flush': (FlushRequest, None),
                'LogRead': (LogReadRequest, LogReadResponse)}
 
-    def __init__(self, project_id, log_server_ip, log_writer):
+    def __init__(self, project_id, log_server_ip, log_writer, thread_pool):
         """ Creates a new AppIdentityService.
 
         Args:
@@ -159,6 +171,7 @@ class LogService(BaseService):
         self.log_server_ip = log_server_ip
         self.requests = {}
         self.writer = log_writer
+        self.thread_pool = thread_pool
 
     def start_request(self, request_log):
         """ Starts logging for a request.
@@ -190,11 +203,18 @@ class LogService(BaseService):
         request_log.end_time = time.time()
         self.writer.write_async(request_log)
 
+    @gen.coroutine
     def read(self, query):
-        encoded_query = query.to_capnp().to_bytes()
-        message_type = 'q'
-        message_length = struct.pack('I', len(encoded_query))
-        request = ''.join([message_type, message_length, encoded_query])
+        connection = yield self._connect()
+        try:
+            # Define the project for messages on this connection.
+            yield self._send(ClientActions.SET_PROJECT, self.project_id,
+                             connection)
+
+            yield self._send(ClientActions.QUERY, query.to_capnp().to_bytes(),
+                             connection)
+        finally:
+            connection.close()
 
         result_count = 0
         for rlBytes in self._query_log_server(rl.appId, packet):
@@ -208,6 +228,56 @@ class LogService(BaseService):
             logging.exception("Failed to retrieve logs")
             raise apiproxy_errors.ApplicationError(
                 log_service_pb.LogServiceError.INVALID_REQUEST)
+
+    @gen.coroutine
+    def _connect(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            yield self.thread_pool.submit(
+                sock.connect, (self.log_server_ip, self.LOG_SERVER_PORT))
+        except socket.error:
+            raise StorageError('Unable to connect to log server')
+
+        raise gen.Return(sock)
+
+    @gen.coroutine
+    def _send(self, action, message, sock):
+        message_length = struct.pack('I', len(message))
+        full_message = ''.join([action, message_length, self.project_id])
+        try:
+            yield self.thread_pool.submit(sock.sendall, full_message)
+        except socket.error:
+            raise StorageError('Unable to send message to log server')
+
+    def _receive(self, sock):
+        chunks = []
+        bytes_recd = 0
+        while bytes_recd < MSGLEN:
+            chunk = self.sock.recv(min(MSGLEN - bytes_recd, 2048))
+            if chunk == '':
+                raise RuntimeError("socket connection broken")
+            chunks.append(chunk)
+            bytes_recd = bytes_recd + len(chunk)
+        return ''.join(chunks)
+        sock.recv(4096)
+
+    def _query_log_server(self, packet):
+
+        log_server.send(packet)
+        fh = log_server.makefile('rb')
+        try:
+            buf = fh.read(_I_SIZE)
+            count, = struct.unpack('I', buf)
+            for _ in xrange(count):
+                buf = fh.read(_I_SIZE)
+                length, = struct.unpack('I', buf)
+                yield fh.read(length)
+        finally:
+            fh.close()
+        self._release_logserver_connection(key, log_server)
+    except socket.error, e:
+        _cleanup_logserver_connection(log_server)
+        raise
 
     def make_call(self, method, encoded_request, request_id):
         """ Makes the appropriate API call for a given request.

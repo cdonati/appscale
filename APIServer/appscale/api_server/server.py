@@ -8,8 +8,10 @@ import pickle
 from kazoo.client import KazooClient
 from tornado import web
 from tornado.ioloop import IOLoop
+from concurrent.futures import ThreadPoolExecutor
 
 from appscale.api_server.app_identity import AppIdentityService
+from appscale.api_server.log import LogService
 from appscale.api_server.base_service import BaseService
 from appscale.api_server.constants import ApplicationError
 from appscale.api_server.remote_api import remote_api_pb2
@@ -80,9 +82,12 @@ def main():
     zk_client = KazooClient(hosts=','.join(args.zookeeper_locations),
                             connection_retry=ZK_PERSISTENT_RECONNECTS)
     zk_client.start()
+    thread_pool = ThreadPoolExecutor(4)
+    log_server_ip = get_headnode_ip()
 
     service_map = {
-        'app_identity_service': AppIdentityService(args.project_id, zk_client)
+        'app_identity_service': AppIdentityService(args.project_id, zk_client),
+        'log_service': LogService(args.project_id, log_server_ip, None, thread_pool)
     }
 
     app = web.Application([
