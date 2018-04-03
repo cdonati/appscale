@@ -92,7 +92,7 @@ def main():
     log_service = LogService(args.project_id, get_headnode_ip())
     service_map = {
         'app_identity_service': AppIdentityService(args.project_id, zk_client),
-        'log_service': log_service
+        'logservice': log_service
     }
 
     app = web.Application([

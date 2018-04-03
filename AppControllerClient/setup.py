@@ -9,7 +9,10 @@ setup(
   license='Apache License 2.0',
   keywords='appscale google-app-engine python',
   platforms='Posix',
-  install_requires=['SOAPpy'],
+  install_requires=[
+    'SOAPpy',
+    'pbr'  # SOAPpy uses wstools, which tries to import from pbr.
+  ],
   classifiers=[
     'Development Status :: 3 - Alpha',
     'Intended Audience :: Developers',

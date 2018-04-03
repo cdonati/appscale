@@ -658,7 +658,7 @@ class Module(object):
 
           # AppScale: Use external API server to end request.
           if external_api_port is not None and module_runtime == 'python27':
-            end_request_url = 'http://localhost:{}/start_request'.format(
+            end_request_url = 'http://localhost:{}/end_request'.format(
               self._external_api_port)
             end_request_payload = json.dumps(
               {'request_id': request_id, 'status': status_code,

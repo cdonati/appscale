@@ -10,6 +10,7 @@ setup(
   keywords='appscale google-app-engine python',
   platforms='Posix',
   install_requires=[
+    'appscale-controller-client',
     'kazoo',
     'PyYAML',
     'future'
