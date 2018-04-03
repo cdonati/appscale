@@ -12,7 +12,7 @@ install_requires = [
     'tornado'
 ]
 if sys.version_info < (3,):
-    install_requires.append('futures')
+    install_requires.extend(['future', 'futures'])
 
 setup(
     name='appscale-api-server',
