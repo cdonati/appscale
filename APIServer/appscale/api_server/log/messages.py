@@ -168,7 +168,12 @@ class RequestLog(object):
             project_id: A string specifying the project ID.
             version_id: A string specifying the version ID.
             ip: A string specifying the user's IP address.
-            nickname: A string 
+            nickname: A string representing the user that made the request.
+            user_agent: A string specifying the user agent.
+            host: A string specifying the host that received the request.
+            method: A string specifying the HTTP method.
+            resource: A string specifying the path and parameters.
+            http_version: A string specifying the HTTP version.
         """
         self.request_id = request_id
         self.project_id = project_id
@@ -191,6 +196,7 @@ class RequestLog(object):
 
     @property
     def combined(self):
+        """ A string representing the request as a combined log entry. """
         date = time.strftime('%d/%b/%Y:%H:%M:%S %z', time.localtime(self.end_time))
         return ('{ip} - {nickname} [{date}] "{method} {resource} {ver}" '
                 '{status} {size} "{ua}"').format(
@@ -200,6 +206,7 @@ class RequestLog(object):
 
     @staticmethod
     def from_capnp(log):
+        """ Creates a RequestLog from a capnp RequestLog. """
         request_log = RequestLog(
             log.requestId, log.appId, log.versionId, log.ip, log.nickname,
             log.userAgent, log.host, log.method, log.resource, log.httpVersion)
@@ -216,6 +223,7 @@ class RequestLog(object):
         return request_log
 
     def to_capnp(self):
+        """ Creates a capnp RequestLog. """
         request_log = logging_capnp.RequestLog.new_message()
         for capnp_field in ['appId', 'versionId', 'requestId', 'ip', 'nickname',
                             'startTime', 'method', 'resource', 'httpVersion',
@@ -230,6 +238,7 @@ class RequestLog(object):
         return request_log
 
     def to_pb(self, include_app_logs):
+        """ Creates a protocol buffer RequestLog. """
         request_log = log_service_pb2.RequestLog()
         for pb_field in ['request_id', 'app_id', 'version_id', 'ip', 'nickname',
                          'user_agent', 'host', 'method', 'resource',

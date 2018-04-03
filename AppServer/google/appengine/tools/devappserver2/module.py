@@ -618,19 +618,23 @@ class Module(object):
         method = environ.get('REQUEST_METHOD', 'GET')
         http_version = environ.get('SERVER_PROTOCOL', 'HTTP/1.0')
 
-        logservice = apiproxy_stub_map.apiproxy.GetStub('logservice')
-        logservice.start_request(
-            request_id=request_id,
-            user_request_id=environ['REQUEST_LOG_ID'],
-            ip=environ.get('REMOTE_ADDR', ''),
-            app_id=self._module_configuration.application,
-            version_id=self._module_configuration.version_id,
-            nickname=email.split('@', 1)[0],
-            user_agent=environ.get('HTTP_USER_AGENT', ''),
-            host=hostname,
-            method=method,
-            resource=resource,
-            http_version=http_version)
+        args = {'request_id': request_id,
+                'ip': environ.get('REMOTE_ADDR', ''),
+                'version_id': self._module_configuration.version_id,
+                'nickname': email.split('@', 1)[0],
+                'user_agent': environ.get('HTTP_USER_AGENT', ''),
+                'host': hostname,
+                'method': method,
+                'resource': resource,
+                'http_version': http_version}
+        if self._module_configuration.runtime == 'python27':
+          args['project_id'] = self._module_configuration.application
+          pass
+        else:
+          args['user_request_id'] = environ['REQUEST_LOG_ID']
+          args['app_id'] = self._module_configuration.application
+          logservice = apiproxy_stub_map.apiproxy.GetStub('logservice')
+          logservice.start_request(**args)
 
       def wrapped_start_response(status, response_headers, exc_info=None):
         response_headers.append(('Server',

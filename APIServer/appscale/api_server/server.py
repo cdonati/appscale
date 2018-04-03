@@ -13,7 +13,8 @@ from tornado.ioloop import IOLoop
 from appscale.api_server.app_identity import AppIdentityService
 from appscale.api_server.base_service import BaseService
 from appscale.api_server.constants import ApplicationError
-from appscale.api_server.log import LogService
+from appscale.api_server.log import (EndRequestHandler, LogService,
+                                     StartRequestHandler)
 from appscale.api_server.remote_api import remote_api_pb2
 from appscale.common.appscale_info import get_headnode_ip
 from appscale.common.constants import LOG_FORMAT
@@ -88,13 +89,16 @@ def main():
                             connection_retry=ZK_PERSISTENT_RECONNECTS)
     zk_client.start()
 
+    log_service = LogService(args.project_id, get_headnode_ip())
     service_map = {
         'app_identity_service': AppIdentityService(args.project_id, zk_client),
-        'log_service': LogService(args.project_id, get_headnode_ip())
+        'log_service': log_service
     }
 
     app = web.Application([
-        ('/', MainHandler, {'service_map': service_map})
+        ('/', MainHandler, {'service_map': service_map}),
+        ('/end_request', EndRequestHandler, {'log_service': log_service}),
+        ('/start_request', EndRequestHandler, {'log_service': log_service})
     ])
     logger.info('Starting API server for {} on {}'.format(args.project_id,
                                                           args.port))

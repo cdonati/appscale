@@ -5,9 +5,9 @@ import socket
 import struct
 import threading
 
-from queue import Queue, Empty
+from queue import Empty, Queue
 
-from appscale.api_server.log.constants import LOG_SERVER_PORT, ClientActions
+from appscale.api_server.log.constants import ClientActions, LOG_SERVER_PORT
 from appscale.common.retrying import retry
 
 logger = logging.getLogger('appscale-api-server')
