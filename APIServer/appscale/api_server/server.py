@@ -98,7 +98,7 @@ def main():
     app = web.Application([
         ('/', MainHandler, {'service_map': service_map}),
         ('/end_request', EndRequestHandler, {'log_service': log_service}),
-        ('/start_request', EndRequestHandler, {'log_service': log_service})
+        ('/start_request', StartRequestHandler, {'log_service': log_service})
     ])
     logger.info('Starting API server for {} on {}'.format(args.project_id,
                                                           args.port))
