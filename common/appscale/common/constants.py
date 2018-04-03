@@ -38,8 +38,7 @@ JAVA_APPSERVER = APPSCALE_HOME + '/AppServer_Java'
 LOG_FORMAT = '%(asctime)s %(levelname)s %(filename)s:%(lineno)s %(message)s '
 
 # The location of the logging capnp definition file.
-#LOGGING_CAPNP = os.path.join(APPSCALE_HOME, 'LogService', 'logging.capnp')
-LOGGING_CAPNP = os.path.join('/home', 'cdonati', 'projects', 'appscale', 'LogService', 'logging.capnp')
+LOGGING_CAPNP = os.path.join(APPSCALE_HOME, 'LogService', 'logging.capnp')
 
 # The location of the file containing the load balancer IPs.
 LOAD_BALANCER_IPS_LOC = '/etc/appscale/load_balancer_ips'
