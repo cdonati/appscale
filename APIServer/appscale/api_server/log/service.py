@@ -30,7 +30,7 @@ class LogService(BaseService):
     SERVICE_NAME = 'logservice'
 
     # The appropriate messages for each API call.
-    METHODS = {'Flush': (FlushRequest, None),
+    METHODS = {'Flush': (FlushRequest, lambda: None),
                'LogRead': (LogReadRequest, LogReadResponse)}
 
     def __init__(self, project_id, log_server_ip):
