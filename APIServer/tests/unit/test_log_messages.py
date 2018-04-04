@@ -37,7 +37,7 @@ class TestAppLog(unittest.TestCase):
         app_log = AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1)
         line_capnp = app_log.to_capnp()
         self.assertEqual(line_capnp.time, TIMESTAMP_USEC)
-        self.assertEqual(line_capnp.level, LOG_LEVEL_WARNING)
+        self.assertEqual(line_capnp.level, LOG_LEVEL_INFO)
         self.assertEqual(line_capnp.message, MESSAGE_1)
         # Ensure no exceptions are raised when serializing message.
         line_capnp.encoded_bytes()
@@ -47,7 +47,7 @@ class TestAppLog(unittest.TestCase):
         app_log = AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1)
         line_pb = app_log.to_log_line()
         self.assertEqual(line_pb.time, TIMESTAMP_USEC)
-        self.assertEqual(line_pb.level, LOG_LEVEL_WARNING)
+        self.assertEqual(line_pb.level, LOG_LEVEL_INFO)
         self.assertEqual(line_pb.log_message, MESSAGE_1)
         # Ensure no exceptions are raised when serializing message.
         line_pb.SerializeToString()
