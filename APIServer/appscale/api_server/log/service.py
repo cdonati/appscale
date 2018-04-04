@@ -136,7 +136,7 @@ class LogService(BaseService):
             log_group.ParseFromString(request.logs)
             try:
                 self.requests[request_id].app_logs.extend(
-                    [AppLog.from_pb(line) for line in log_group.request.log_line])
+                    [AppLog.from_pb(line) for line in log_group.log_line])
             except IndexError:
                 raise InvalidRequest('Request not found')
         elif method == 'LogRead':

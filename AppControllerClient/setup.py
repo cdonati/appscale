@@ -9,7 +9,7 @@ setup(
   license='Apache License 2.0',
   keywords='appscale google-app-engine python',
   platforms='Posix',
-  install_requires=['SOAPpy'],
+  install_requires=['SOAPpy', 'pbr'],
   classifiers=[
     'Development Status :: 3 - Alpha',
     'Intended Audience :: Developers',

@@ -229,6 +229,8 @@ class RequestLog(object):
                             'userAgent', 'host', 'method', 'resource',
                             'httpVersion', 'status', 'responseSize', 'offset']:
             field = self.CAPNP_FIELDS.get(capnp_field, capnp_field)
+            import logging
+            logging.warning('field: {}/{}, value: {}'.format(field, capnp_field, repr(getattr(self, field))))
             setattr(request_log, capnp_field, getattr(self, field))
 
         request_log.startTime = int(self.start_time * 1000 * 1000)
