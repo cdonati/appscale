@@ -49,6 +49,9 @@ class MainHandler(web.RequestHandler):
             if isinstance(response, gen.Future):
                 response = yield response
 
+            if response is None:
+                raise gen.Return()
+
             api_response.response = response
         except ApplicationError as error:
             logger.exception('ApplicationError')
