@@ -149,7 +149,7 @@ end
 namespace :apiserver do
 
   task :test do
-    sh '/opt/appscale_api_server/bin/python -m unittest discover -b -v -s APIServer/tests'
+    sh '/opt/appscale_api_server/bin/python -m unittest discover -b -v -s APIServer/tests/unit'
   end
 
 end
