@@ -121,7 +121,11 @@ class AppLog(object):
     @staticmethod
     def from_pb(app_log_pb):
         """ Creates a new AppLog from a LogLine. """
-        return AppLog(app_log_pb.time, app_log_pb.level, app_log_pb.message)
+        if isinstance(app_log_pb, log_service_pb2.UserAppLogLine):
+            time = app_log_pb.timestamp_usec
+        else:
+            time = app_log_pb.time
+        return AppLog(time, app_log_pb.level, app_log_pb.message)
 
     def to_capnp(self):
         """ Creates a new capnp AppLog object. """
@@ -218,8 +222,7 @@ class RequestLog(object):
         if log.offset:
             request_log.offset = log.offset
 
-        request_log.app_logs.extend(
-            [AppLog(line.time, line.level, line.message) for line in log.appLogs])
+        request_log.app_logs.extend([AppLog.from_pb(line) for line in log.appLogs])
         return request_log
 
     def to_capnp(self):
@@ -229,9 +232,9 @@ class RequestLog(object):
                             'userAgent', 'host', 'method', 'resource',
                             'httpVersion', 'status', 'responseSize', 'offset']:
             field = self.CAPNP_FIELDS.get(capnp_field, capnp_field)
-            import logging
-            logging.warning('field: {}/{}, value: {}'.format(field, capnp_field, repr(getattr(self, field))))
-            setattr(request_log, capnp_field, getattr(self, field))
+            value = getattr(self, field)
+            if value is not None:
+                setattr(request_log, capnp_field, value)
 
         request_log.startTime = int(self.start_time * 1000 * 1000)
         request_log.endTime = int(self.end_time * 1000 * 1000)
