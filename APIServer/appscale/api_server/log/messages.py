@@ -121,11 +121,16 @@ class AppLog(object):
     @staticmethod
     def from_pb(app_log_pb):
         """ Creates a new AppLog from a LogLine. """
-        if isinstance(app_log_pb, log_service_pb2.UserAppLogLine):
-            time = app_log_pb.timestamp_usec
-        else:
+        if isinstance(app_log_pb, log_service_pb2.LogLine):
             time = app_log_pb.time
-        return AppLog(time, app_log_pb.level, app_log_pb.message)
+            message = app_log_pb.log_message
+        elif isinstance(app_log_pb, log_service_pb2.UserAppLogLine):
+            time = app_log_pb.timestamp_usec
+            message = app_log_pb.message
+        else:
+            raise InvalidRequest('Incompatible protobuffer type')
+
+        return AppLog(time, app_log_pb.level, message)
 
     def to_capnp(self):
         """ Creates a new capnp AppLog object. """
@@ -135,7 +140,7 @@ class AppLog(object):
         log_line.message = self.message
         return log_line
 
-    def to_pb(self):
+    def to_log_line(self):
         """ Creates a new LogLine object. """
         log_line = log_service_pb2.LogLine()
         log_line.time = self.time
@@ -265,6 +270,6 @@ class RequestLog(object):
         request_log.url_map_entry = ''
 
         if include_app_logs:
-            request_log.line = [line.to_pb() for line in self.app_logs]
+            request_log.line = [line.to_log_line() for line in self.app_logs]
 
         return request_log

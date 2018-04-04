@@ -26,7 +26,7 @@ class TestAppLog(unittest.TestCase):
         line_pb = log_service_pb2.UserAppLogLine()
         line_pb.timestamp_usec = current_time_us
         line_pb.level = LOG_LEVEL_WARNING
-        line_pb.log_message = message
+        line_pb.message = message
         app_log = AppLog.from_pb(line_pb)
         self.assertEqual(app_log.time, current_time_us)
         self.assertEqual(app_log.level, LOG_LEVEL_WARNING)
