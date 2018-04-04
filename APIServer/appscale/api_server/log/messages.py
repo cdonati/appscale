@@ -145,7 +145,7 @@ class AppLog(object):
         log_line = log_service_pb2.LogLine()
         log_line.time = self.time
         log_line.level = self.level
-        log_line.message = self.message
+        log_line.log_message = self.message
         return log_line
 
 
