@@ -50,7 +50,7 @@ class MainHandler(web.RequestHandler):
                 response = yield response
 
             if response is None:
-                raise gen.Return()
+                return
 
             api_response.response = response
         except ApplicationError as error:
