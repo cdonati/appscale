@@ -40,7 +40,7 @@ class TestAppLog(unittest.TestCase):
         self.assertEqual(line_capnp.level, LOG_LEVEL_INFO)
         self.assertEqual(line_capnp.message, MESSAGE_1)
         # Ensure no exceptions are raised when serializing message.
-        line_capnp.encoded_bytes()
+        line_capnp.to_bytes()
 
     def test_to_log_line(self):
         # Test encoding to protobuffer.
