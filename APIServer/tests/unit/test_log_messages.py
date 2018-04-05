@@ -151,6 +151,8 @@ class TestRequestLog(unittest.TestCase):
         self.assertEqual(request_log.start_time, TIMESTAMP)
         self.assertEqual(request_log.end_time, TIMESTAMP)
         self.assertEqual(request_log.offset, None)
-        self.assertEqual(request_log.app_logs,
-                         [AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1),
-                          AppLog(TIMESTAMP_USEC, LOG_LEVEL_WARNING, MESSAGE_1)])
+        for index, capnp_line in enumerate([app_log_1, app_log_2]):
+            pb_line = request_log.app_logs[index]
+            self.assertEqual(pb_line.time, capnp_line.time)
+            self.assertEqual(pb_line.level, capnp_line.level)
+            self.assertEqual(pb_line.message, capnp_line.message)
