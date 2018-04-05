@@ -275,7 +275,6 @@ class RequestLog(object):
                 setattr(request_log, pb_field, value)
 
         if self.offset:
-            request_log.offset = log_service_pb2.LogOffset()
             request_log.offset.request_id = base64.b64encode(self.offset)
 
         # TODO: Implement the following fields.
