@@ -210,7 +210,7 @@ class RequestLog(object):
         """ A string representing the request as a combined log entry. """
         timestamp = time.localtime(self.end_time / 1000 / 1000)
         date = time.strftime('%d/%b/%Y:%H:%M:%S %z', timestamp)
-        return ('{ip} - {nickname} [{date}] "{method} {resource} {ver}" '
+        return ('{ip} - {nickname} [{date}] "{method} {resource} HTTP/{ver}" '
                 '{status} {size} "{ua}"').format(
             ip=self.ip, nickname=self.nickname, date=date, method=self.method,
             resource=self.resource, ver=self.http_version, status=self.status,
