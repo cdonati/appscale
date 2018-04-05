@@ -56,7 +56,7 @@ class TestLogQuery(unittest.TestCase):
         module_version.version_id = 'v1'
         request.start_time = TIMESTAMP_USEC
         request.end_time = TIMESTAMP_USEC
-        request.offset.request_id = 'request1'
+        request.offset.request_id = base64.b64encode('request1')
         request.minimum_log_level = LOG_LEVEL_INFO
         request.include_app_logs = True
         request.count = 5
@@ -65,7 +65,7 @@ class TestLogQuery(unittest.TestCase):
         self.assertEqual(log_query.version_id, 'v1')
         self.assertEqual(log_query.start_time, TIMESTAMP_USEC)
         self.assertEqual(log_query.end_time, TIMESTAMP_USEC)
-        self.assertEqual(log_query.offset, base64.b64encode('request1'))
+        self.assertEqual(log_query.offset, 'request1')
         self.assertEqual(log_query.minimum_log_level, LOG_LEVEL_INFO)
         self.assertEqual(log_query.include_app_logs, True)
         self.assertListEqual(log_query.request_ids, [])
@@ -75,14 +75,14 @@ class TestLogQuery(unittest.TestCase):
         log_query = LogQuery('default', 'v1')
         log_query.start_time = TIMESTAMP
         log_query.end_time = TIMESTAMP
-        log_query.offset = base64.b64encode('request1')
+        log_query.offset = 'request1'
         log_query.minimum_log_level = LOG_LEVEL_INFO
         log_query.include_app_logs = True
         log_query.count = 5
         capnp_query = log_query.to_capnp()
         self.assertEqual(capnp_query.startTime, TIMESTAMP_USEC)
         self.assertEqual(capnp_query.endTime, TIMESTAMP_USEC)
-        self.assertEqual(capnp_query.offset, base64.b64encode('request1'))
+        self.assertEqual(capnp_query.offset, 'request1')
         self.assertEqual(capnp_query.minimumLogLevel, LOG_LEVEL_INFO)
         self.assertEqual(capnp_query.includeAppLogs, True)
         self.assertEqual(capnp_query.versionIds, [':'.join(['default', 'v1'])])
