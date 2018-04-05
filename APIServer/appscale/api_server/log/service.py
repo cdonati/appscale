@@ -94,6 +94,7 @@ class LogService(BaseService):
         Raises:
             StorageError when unable to communicate with the log server.
         """
+        logger.warning('query: {}'.format(query))
         connection = yield self._connect()
         try:
             # Define the project for messages on this connection.
@@ -185,7 +186,7 @@ class LogService(BaseService):
             StorageError when unable to send the message.
         """
         message_length = struct.pack('I', len(message))
-        full_message = ''.join([action, message_length, self.project_id])
+        full_message = ''.join([action, message_length, message])
         try:
             yield self._thread_pool.submit(sock.sendall, full_message)
         except socket.error:
