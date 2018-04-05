@@ -210,7 +210,8 @@ class TestRequestLog(unittest.TestCase):
 
         request_log_pb = request_log.to_pb(include_app_logs=True)
         self.assertEqual(request_log_pb.app_id, PROJECT)
-        self.assertEqual(request_log_pb.version_id, 'service1:v1')
+        self.assertEqual(request_log_pb.module_id, 'service1')
+        self.assertEqual(request_log_pb.version_id, 'v1')
         self.assertEqual(request_log_pb.request_id, 'request1')
         self.assertEqual(request_log_pb.ip, '192.168.33.9')
         self.assertEqual(request_log_pb.nickname, 'bob')
