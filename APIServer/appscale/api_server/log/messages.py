@@ -197,7 +197,7 @@ class RequestLog(object):
         self.resource = resource
         self.http_version = http_version
 
-        self.service_id = None
+        self.service_id = 'default'
         self.status = None
         self.response_size = None
 
