@@ -59,12 +59,12 @@ class LogQuery(object):
         if not module_version.version_id:
             raise InvalidRequest('Request must set module_version.version_id')
 
-        conflicting_fields = {'request_id': ['start_time', 'end_time', 'offset']}
-        for field, conflicting_fields in conflicting_fields.items():
-            for conflicting_field in conflicting_fields:
-                if request.HasField(field) and request.HasField(conflicting_field):
-                    raise InvalidRequest("{} and {} can't both be specified".
-                                         format(field, conflicting_field))
+        # A request list conflicts with other filters.
+        conflicting_fields = ['start_time', 'end_time', 'offset']
+        for field in conflicting_fields:
+            if request.request_id and request.HasField(field):
+                raise InvalidRequest(
+                    "request_id and {} can't both be specified".format(field))
 
         query = LogQuery(module_version.module_id, module_version.version_id)
         for pb_field in ['start_time', 'end_time', 'minimum_log_level',
@@ -138,14 +138,6 @@ class AppLog(object):
         log_line.time = self.time
         log_line.level = self.level
         log_line.message = self.message
-        return log_line
-
-    def to_log_line(self):
-        """ Creates a new LogLine object. """
-        log_line = log_service_pb2.LogLine()
-        log_line.time = self.time
-        log_line.level = self.level
-        log_line.log_message = self.message
         return log_line
 
 
@@ -270,6 +262,10 @@ class RequestLog(object):
         request_log.url_map_entry = ''
 
         if include_app_logs:
-            request_log.line = [line.to_log_line() for line in self.app_logs]
+            for line in self.app_logs:
+                log_line = request_log.line.add()
+                log_line.time = line.time
+                log_line.level = line.level
+                log_line.log_message = line.message
 
         return request_log

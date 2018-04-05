@@ -46,16 +46,6 @@ class TestAppLog(unittest.TestCase):
         # Ensure no exceptions are raised when serializing message.
         line_capnp.to_bytes()
 
-    def test_to_log_line(self):
-        # Test encoding to protobuffer.
-        app_log = AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1)
-        line_pb = app_log.to_log_line()
-        self.assertEqual(line_pb.time, TIMESTAMP_USEC)
-        self.assertEqual(line_pb.level, LOG_LEVEL_INFO)
-        self.assertEqual(line_pb.log_message, MESSAGE_1)
-        # Ensure no exceptions are raised when serializing message.
-        line_pb.SerializeToString()
-
 
 class TestLogQuery(unittest.TestCase):
     def test_from_pb(self):
@@ -66,7 +56,7 @@ class TestLogQuery(unittest.TestCase):
         module_version.version_id = 'v1'
         request.start_time = TIMESTAMP_USEC
         request.end_time = TIMESTAMP_USEC
-        request.offset.request_id = 'offset'
+        request.offset.request_id = 'request1'
         request.minimum_log_level = LOG_LEVEL_INFO
         request.include_app_logs = True
         request.count = 5
@@ -75,8 +65,29 @@ class TestLogQuery(unittest.TestCase):
         self.assertEqual(log_query.version_id, 'v1')
         self.assertEqual(log_query.start_time, TIMESTAMP)
         self.assertEqual(log_query.end_time, TIMESTAMP)
-        self.assertEqual(log_query.offset, base64.b64encode('offset'))
+        self.assertEqual(log_query.offset, base64.b64encode('request1'))
         self.assertEqual(log_query.minimum_log_level, LOG_LEVEL_INFO)
         self.assertEqual(log_query.include_app_logs, True)
         self.assertListEqual(log_query.request_ids, [])
         self.assertEqual(log_query.count, 5)
+
+    def test_to_capnp(self):
+        log_query = LogQuery('default', 'v1')
+        log_query.start_time = TIMESTAMP
+        log_query.end_time = TIMESTAMP
+        log_query.offset = base64.b64encode('request1')
+        log_query.minimum_log_level = LOG_LEVEL_INFO
+        log_query.include_app_logs = True
+        log_query.count = 5
+        capnp_query = log_query.to_capnp()
+        self.assertEqual(capnp_query.startTime, TIMESTAMP_USEC)
+        self.assertEqual(capnp_query.endTime, TIMESTAMP_USEC)
+        self.assertEqual(capnp_query.offset, base64.b64encode('request1'))
+        self.assertEqual(capnp_query.minimumLogLevel, LOG_LEVEL_INFO)
+        self.assertEqual(capnp_query.includeAppLogs, True)
+        self.assertEqual(capnp_query.versionIds, [':'.join(['default', 'v1'])])
+        self.assertEqual(capnp_query.requestIds, [])
+        self.assertEqual(capnp_query.count, 5)
+        self.assertEqual(capnp_query.reverse, False)
+        # Ensure no exceptions are raised when serializing message.
+        capnp_query.to_bytes()
