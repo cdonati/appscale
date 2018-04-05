@@ -87,7 +87,7 @@ class TestLogQuery(unittest.TestCase):
         self.assertEqual(capnp_query.includeAppLogs, True)
         self.assertEqual(list(capnp_query.versionIds),
                          [':'.join(['default', 'v1'])])
-        self.assertEqual(capnp_query.requestIds, [])
+        self.assertEqual(list(capnp_query.requestIds), [])
         self.assertEqual(capnp_query.count, 5)
         self.assertEqual(capnp_query.reverse, False)
         # Ensure no exceptions are raised when serializing message.
