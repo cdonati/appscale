@@ -119,8 +119,7 @@ class TestRequestLog(unittest.TestCase):
         request_log_capnp = logging_capnp.RequestLog.new_message()
         request_log_capnp.requestId = 'request1'
         request_log_capnp.appId = PROJECT
-        request_log_capnp.moduleId = 'service1'
-        request_log_capnp.versionId = 'v1'
+        request_log_capnp.versionId = 'service1:v1'
         request_log_capnp.ip = '192.168.33.9'
         request_log_capnp.nickname = 'bob'
         request_log_capnp.userAgent = 'ua string'
@@ -168,9 +167,8 @@ class TestRequestLog(unittest.TestCase):
         app_logs = [AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1),
                     AppLog(TIMESTAMP_USEC, LOG_LEVEL_WARNING, MESSAGE_1)]
         request_log = RequestLog(
-            'request1', PROJECT, 'v1', '192.168.33.9', 'bob', 'ua string',
-            '192.168.33.10', 'GET', '/', '1.0')
-        request_log.service_id = 'service1'
+            'request1', PROJECT, 'service1', 'v1', '192.168.33.9', 'bob',
+            'ua string', '192.168.33.10', 'GET', '/', '1.0')
         request_log.status = 200
         request_log.response_size = 100
         request_log.start_time = TIMESTAMP_USEC
@@ -180,8 +178,7 @@ class TestRequestLog(unittest.TestCase):
         request_log_capnp = request_log.to_capnp()
         self.assertEqual(request_log_capnp.requestId, 'request1')
         self.assertEqual(request_log_capnp.appId, PROJECT)
-        self.assertEqual(request_log_capnp.moduleId, 'service1')
-        self.assertEqual(request_log_capnp.versionId, 'v1')
+        self.assertEqual(request_log_capnp.versionId, 'service1:v1')
         self.assertEqual(request_log_capnp.ip, '192.168.33.9')
         self.assertEqual(request_log_capnp.nickname, 'bob')
         self.assertEqual(request_log_capnp.userAgent, 'ua string')
@@ -203,9 +200,8 @@ class TestRequestLog(unittest.TestCase):
         app_logs = [AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1),
                     AppLog(TIMESTAMP_USEC, LOG_LEVEL_WARNING, MESSAGE_1)]
         request_log = RequestLog(
-            'request1', PROJECT, 'v1', '192.168.33.9', 'bob', 'ua string',
-            '192.168.33.10', 'GET', '/', '1.0')
-        request_log.service_id = 'service1'
+            'request1', PROJECT, 'service1', 'v1', '192.168.33.9', 'bob',
+            'ua string', '192.168.33.10', 'GET', '/', '1.0')
         request_log.status = 200
         request_log.response_size = 100
         request_log.start_time = TIMESTAMP_USEC
@@ -214,8 +210,7 @@ class TestRequestLog(unittest.TestCase):
 
         request_log_pb = request_log.to_pb(include_app_logs=True)
         self.assertEqual(request_log_pb.app_id, PROJECT)
-        self.assertEqual(request_log_pb.module_id, 'service1')
-        self.assertEqual(request_log_pb.version_id, 'v1')
+        self.assertEqual(request_log_pb.version_id, 'service1:v1')
         self.assertEqual(request_log_pb.request_id, 'request1')
         self.assertEqual(request_log_pb.ip, '192.168.33.9')
         self.assertEqual(request_log_pb.nickname, 'bob')

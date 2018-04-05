@@ -25,13 +25,11 @@ class StartRequestHandler(web.RequestHandler):
             raise web.HTTPError(HTTPCodes.BAD_REQUEST,
                                 'Payload must be valid JSON')
 
-        service_id = args.pop('service_id')
         try:
             request_log = RequestLog(**args)
         except TypeError as error:
             raise web.HTTPError(HTTPCodes.BAD_REQUEST, str(error))
 
-        request_log.service_id = service_id
         self.log_service.start_request(request_log)
 
 

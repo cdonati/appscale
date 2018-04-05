@@ -623,7 +623,6 @@ class Module(object):
         # AppScale: Use external API server to start request.
         args = {'request_id': request_id,
                 'ip': environ.get('REMOTE_ADDR', ''),
-                'version_id': self._module_configuration.version_id,
                 'nickname': email.split('@', 1)[0],
                 'user_agent': environ.get('HTTP_USER_AGENT', ''),
                 'host': hostname,
@@ -635,6 +634,7 @@ class Module(object):
         if external_api_port is not None and module_runtime == 'python27':
           args['project_id'] = self._module_configuration.application
           args['service_id'] = self._module_configuration.module_name
+          args['version_id'] = self._module_configuration.major_version
           start_request_url = 'http://localhost:{}/start_request'.format(
             self._external_api_port)
           try:
@@ -646,6 +646,7 @@ class Module(object):
         else:
           args['user_request_id'] = environ['REQUEST_LOG_ID']
           args['app_id'] = self._module_configuration.application
+          args['version_id'] = self._module_configuration.version_id
           logservice = apiproxy_stub_map.apiproxy.GetStub('logservice')
           logservice.start_request(**args)
 

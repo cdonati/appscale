@@ -170,13 +170,14 @@ class RequestLog(object):
                     'userAgent': 'user_agent',
                     'appLogs': 'app_logs'}
 
-    def __init__(self, request_id, project_id, version_id, ip, nickname,
-                 user_agent, host, method, resource, http_version):
+    def __init__(self, request_id, project_id, service_id, version_id, ip,
+                 nickname, user_agent, host, method, resource, http_version):
         """ Creates a new RequestLog object.
 
         Args:
             request_id: A string specifying the request ID.
             project_id: A string specifying the project ID.
+            service_id: A string specifying the service ID.
             version_id: A string specifying the version ID.
             ip: A string specifying the user's IP address.
             nickname: A string representing the user that made the request.
@@ -188,6 +189,7 @@ class RequestLog(object):
         """
         self.request_id = request_id
         self.project_id = project_id
+        self.service_id = service_id
         self.version_id = version_id
         self.ip = ip
         self.nickname = nickname
@@ -197,7 +199,6 @@ class RequestLog(object):
         self.resource = resource
         self.http_version = http_version
 
-        self.service_id = 'default'
         self.status = None
         self.response_size = None
 
@@ -222,11 +223,16 @@ class RequestLog(object):
     @staticmethod
     def from_capnp(log):
         """ Creates a RequestLog from a capnp RequestLog. """
+        service_id = 'default'
+        if ':' in log.versionId:
+            service_id, version_id = log.versionId.split(':')
+        else:
+            version_id = log.versionId
+
         request_log = RequestLog(
-            log.requestId, log.appId, log.versionId, log.ip, log.nickname,
+            log.requestId, log.appId, service_id, version_id, log.ip, log.nickname,
             log.userAgent, log.host, log.method, log.resource, log.httpVersion)
 
-        request_log.service_id = log.moduleId
         request_log.status = log.status
         request_log.response_size = log.responseSize
         request_log.start_time = log.startTime
