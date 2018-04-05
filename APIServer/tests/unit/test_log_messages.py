@@ -85,7 +85,8 @@ class TestLogQuery(unittest.TestCase):
         self.assertEqual(capnp_query.offset, 'request1')
         self.assertEqual(capnp_query.minimumLogLevel, LOG_LEVEL_INFO)
         self.assertEqual(capnp_query.includeAppLogs, True)
-        self.assertEqual(capnp_query.versionIds, [':'.join(['default', 'v1'])])
+        self.assertEqual(list(capnp_query.versionIds),
+                         [':'.join(['default', 'v1'])])
         self.assertEqual(capnp_query.requestIds, [])
         self.assertEqual(capnp_query.count, 5)
         self.assertEqual(capnp_query.reverse, False)
