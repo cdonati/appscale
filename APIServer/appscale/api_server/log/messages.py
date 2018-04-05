@@ -106,7 +106,7 @@ class LogQuery(object):
 
     def __repr__(self):
         attributes = ', '.join(['{}={}'.format(key, val)
-                                for key, val in self.__dict__])
+                                for key, val in self.__dict__.items()])
         return '<LogQuery: {}>'.format(attributes)
 
 
