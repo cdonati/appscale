@@ -161,3 +161,36 @@ class TestRequestLog(unittest.TestCase):
             self.assertEqual(pb_line.time, capnp_line.time)
             self.assertEqual(pb_line.level, capnp_line.level)
             self.assertEqual(pb_line.message, capnp_line.message)
+
+    def test_to_capnp(self):
+        app_logs = [AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1),
+                    AppLog(TIMESTAMP_USEC, LOG_LEVEL_WARNING, MESSAGE_1)]
+        request_log = RequestLog(
+            'request1', PROJECT, 'v1', '192.168.33.9', 'bob', 'ua string',
+            '192.168.33.10', 'GET', '/', '1.0')
+        request_log.status = 200
+        request_log.response_size = 100
+        request_log.start_time = TIMESTAMP_USEC
+        request_log.end_time = TIMESTAMP_USEC
+        request_log.app_logs = app_logs
+
+        request_log_capnp = request_log.to_capnp()
+        self.assertEqual(request_log_capnp.requestId, 'request1')
+        self.assertEqual(request_log_capnp.appId, PROJECT)
+        self.assertEqual(request_log_capnp.versionId, 'v1')
+        self.assertEqual(request_log_capnp.ip, '192.168.33.9')
+        self.assertEqual(request_log_capnp.nickname, 'bob')
+        self.assertEqual(request_log_capnp.userAgent, 'ua string')
+        self.assertEqual(request_log_capnp.host, '192.168.33.10')
+        self.assertEqual(request_log_capnp.method, 'GET')
+        self.assertEqual(request_log_capnp.resource, '/')
+        self.assertEqual(request_log_capnp.httpVersion, '1.0')
+        self.assertEqual(request_log_capnp.status, 200)
+        self.assertEqual(request_log_capnp.responseSize, 100)
+        self.assertEqual(request_log_capnp.startTime, TIMESTAMP_USEC)
+        self.assertEqual(request_log_capnp.endTime, TIMESTAMP_USEC)
+        for index, line in enumerate(app_logs):
+            capnp_line = request_log_capnp.appLogs[index]
+            self.assertEqual(line.time, capnp_line.time)
+            self.assertEqual(line.level, capnp_line.level)
+            self.assertEqual(line.message, capnp_line.message)
