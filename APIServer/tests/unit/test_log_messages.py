@@ -66,7 +66,6 @@ class TestLogQuery(unittest.TestCase):
         module_version.version_id = 'v1'
         request.start_time = TIMESTAMP_USEC
         request.end_time = TIMESTAMP_USEC
-        request.offset = log_service_pb2.LogOffset()
         request.offset.request_id = 'offset'
         request.minimum_log_level = LOG_LEVEL_INFO
         request.include_app_logs = True
