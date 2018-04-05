@@ -104,9 +104,6 @@ class LogQuery(object):
 
         return query
 
-    def __repr__(self):
-        return str(self.__dict__)
-
 
 class AppLog(object):
     """ Represents an application log line. """
