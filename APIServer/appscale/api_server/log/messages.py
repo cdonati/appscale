@@ -241,15 +241,15 @@ class RequestLog(object):
     def to_capnp(self):
         """ Creates a capnp RequestLog. """
         request_log = logging_capnp.RequestLog.new_message()
-        for capnp_field in ['requestId', 'appId', 'moduleId', 'versionId', 'ip',
-                            'nickname', 'userAgent', 'host', 'method', 'resource',
-                            'httpVersion', 'status', 'responseSize', 'offset',
-                            'startTime', 'endTime']:
+        for capnp_field in ['requestId', 'appId', 'ip', 'nickname', 'userAgent',
+                            'host', 'method', 'resource', 'httpVersion', 'status',
+                            'responseSize', 'offset', 'startTime', 'endTime']:
             field = self.CAPNP_FIELDS.get(capnp_field, capnp_field)
             value = getattr(self, field)
             if value is not None:
                 setattr(request_log, capnp_field, value)
 
+        request_log.versionId = ':'.join([self.service_id, self.version_id])
         app_logs = request_log.init('appLogs', len(self.app_logs))
         for index, line in enumerate(self.app_logs):
             app_logs[index] = line.to_capnp()
