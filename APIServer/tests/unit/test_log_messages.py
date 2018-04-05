@@ -1,4 +1,5 @@
-from appscale.api_server.log.messages import AppLog, LogQuery, RequestLog
+from appscale.api_server.log.messages import (AppLog, logging_capnp, LogQuery,
+                                              RequestLog)
 from appscale.api_server.log import log_service_pb2
 import unittest
 import time
@@ -85,10 +86,61 @@ class TestLogQuery(unittest.TestCase):
         self.assertEqual(capnp_query.offset, 'request1')
         self.assertEqual(capnp_query.minimumLogLevel, LOG_LEVEL_INFO)
         self.assertEqual(capnp_query.includeAppLogs, True)
-        self.assertEqual(list(capnp_query.versionIds),
-                         [':'.join(['default', 'v1'])])
-        self.assertEqual(list(capnp_query.requestIds), [])
+        self.assertListEqual(list(capnp_query.versionIds),
+                             [':'.join(['default', 'v1'])])
+        self.assertListEqual(list(capnp_query.requestIds), [])
         self.assertEqual(capnp_query.count, 5)
         self.assertEqual(capnp_query.reverse, True)
         # Ensure no exceptions are raised when serializing message.
         capnp_query.to_bytes()
+
+class TestRequestLog(unittest.TestCase):
+    def test_from_capnp(self):
+        app_log_1 = logging_capnp.AppLog.new_message()
+        app_log_1.time = TIMESTAMP_USEC
+        app_log_1.level = LOG_LEVEL_INFO
+        app_log_1.message = MESSAGE_1
+
+        app_log_2 = logging_capnp.AppLog.new_message()
+        app_log_2.time = TIMESTAMP_USEC
+        app_log_2.level = LOG_LEVEL_WARNING
+        app_log_2.message = MESSAGE_1
+
+        request_log_capnp = logging_capnp.RequestLog.new_message()
+        request_log_capnp.requestId = 'request1'
+        request_log_capnp.appId = PROJECT
+        request_log_capnp.versionId = 'v1'
+        request_log_capnp.ip = '192.168.33.9'
+        request_log_capnp.nickname = 'bob'
+        request_log_capnp.userAgent = 'ua string'
+        request_log_capnp.host = '192.168.33.10'
+        request_log_capnp.method = 'GET'
+        request_log_capnp.resource = '/'
+        request_log_capnp.httpVersion = '1.0'
+        request_log_capnp.status = 200
+        request_log_capnp.responseSize = 100
+        request_log_capnp.startTime = TIMESTAMP_USEC
+        request_log_capnp.endTime = TIMESTAMP_USEC
+        app_logs = request_log_capnp.init('appLogs', 2)
+        app_logs[0] = app_log_1
+        app_logs[1] = app_log_2
+
+        request_log = RequestLog.from_capnp(request_log_capnp)
+        self.assertEqual(request_log.request_id, 'request1')
+        self.assertEqual(request_log.project_id, PROJECT)
+        self.assertEqual(request_log.version_id, 'v1')
+        self.assertEqual(request_log.ip, '192.168.33.9')
+        self.assertEqual(request_log.nickname, 'bob')
+        self.assertEqual(request_log.user_agent, 'ua string')
+        self.assertEqual(request_log.host, '192.168.33.10')
+        self.assertEqual(request_log.method, 'GET')
+        self.assertEqual(request_log.resource, '/')
+        self.assertEqual(request_log.http_version, '1.0')
+        self.assertEqual(request_log.status, 200)
+        self.assertEqual(request_log.response_size, 100)
+        self.assertEqual(request_log.start_time, TIMESTAMP)
+        self.assertEqual(request_log.end_time, TIMESTAMP)
+        self.assertEqual(request_log.offset, None)
+        self.assertEqual(request_log.app_logs,
+                         [AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1),
+                          AppLog(TIMESTAMP_USEC, LOG_LEVEL_WARNING, MESSAGE_1)])
