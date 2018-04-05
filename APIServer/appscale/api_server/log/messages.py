@@ -226,6 +226,7 @@ class RequestLog(object):
             log.requestId, log.appId, log.versionId, log.ip, log.nickname,
             log.userAgent, log.host, log.method, log.resource, log.httpVersion)
 
+        request_log.service_id = log.moduleId
         request_log.status = log.status
         request_log.response_size = log.responseSize
         request_log.start_time = log.startTime
