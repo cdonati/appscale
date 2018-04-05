@@ -105,7 +105,7 @@ class LogQuery(object):
         return query
 
     def __repr__(self):
-        return self.__dict__
+        return str(self.__dict__)
 
 
 class AppLog(object):
