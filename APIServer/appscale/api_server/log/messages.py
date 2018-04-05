@@ -135,6 +135,11 @@ class AppLog(object):
 
         return AppLog(time, app_log_pb.level, message)
 
+    @staticmethod
+    def from_capnp(capnp_line):
+        """ Creates a new AppLog from a capnp AppLog. """
+        return AppLog(capnp_line.time, capnp_line.level, capnp_line.message)
+
     def to_capnp(self):
         """ Creates a new capnp AppLog object. """
         log_line = logging_capnp.AppLog.new_message()
@@ -222,7 +227,8 @@ class RequestLog(object):
         if log.offset:
             request_log.offset = log.offset
 
-        request_log.app_logs.extend([AppLog.from_pb(line) for line in log.appLogs])
+        request_log.app_logs.extend(
+            [AppLog.from_capnp(line) for line in log.appLogs])
         return request_log
 
     def to_capnp(self):

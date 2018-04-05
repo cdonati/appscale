@@ -38,6 +38,16 @@ class TestAppLog(unittest.TestCase):
         self.assertEqual(app_log.level, LOG_LEVEL_WARNING)
         self.assertEqual(app_log.message, MESSAGE_1)
 
+    def test_from_capnp(self):
+        line = logging_capnp.AppLog.new_message()
+        line.time = TIMESTAMP_USEC
+        line.level = LOG_LEVEL_INFO
+        line.message = MESSAGE_1
+        app_log = AppLog.from_capnp(line)
+        self.assertEqual(app_log.time, TIMESTAMP_USEC)
+        self.assertEqual(app_log.level, LOG_LEVEL_INFO)
+        self.assertEqual(app_log.message, MESSAGE_1)
+
     def test_to_capnp(self):
         app_log = AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1)
         line_capnp = app_log.to_capnp()
