@@ -73,8 +73,8 @@ class TestLogQuery(unittest.TestCase):
 
     def test_to_capnp(self):
         log_query = LogQuery('default', 'v1')
-        log_query.start_time = TIMESTAMP
-        log_query.end_time = TIMESTAMP
+        log_query.start_time = TIMESTAMP_USEC
+        log_query.end_time = TIMESTAMP_USEC
         log_query.offset = 'request1'
         log_query.minimum_log_level = LOG_LEVEL_INFO
         log_query.include_app_logs = True
