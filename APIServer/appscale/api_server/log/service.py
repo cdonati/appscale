@@ -82,7 +82,7 @@ class LogService(BaseService):
 
         request_log.status = status
         request_log.response_size = response_size
-        request_log.end_time = time.time()
+        request_log.end_time = int(time.time() * 1000 * 1000)
         self._writer.write_async(request_log)
 
     @gen.coroutine
