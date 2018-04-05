@@ -148,8 +148,8 @@ class TestRequestLog(unittest.TestCase):
         self.assertEqual(request_log.http_version, '1.0')
         self.assertEqual(request_log.status, 200)
         self.assertEqual(request_log.response_size, 100)
-        self.assertEqual(request_log.start_time, TIMESTAMP)
-        self.assertEqual(request_log.end_time, TIMESTAMP)
+        self.assertEqual(request_log.start_time, TIMESTAMP_USEC)
+        self.assertEqual(request_log.end_time, TIMESTAMP_USEC)
         self.assertEqual(request_log.offset, None)
         for index, capnp_line in enumerate([app_log_1, app_log_2]):
             pb_line = request_log.app_logs[index]

@@ -40,8 +40,8 @@ class LogQuery(object):
         """
         self.service_id = service_id
         self.version_id = version_id
-        self.start_time = None
-        self.end_time = None
+        self.start_time = None  # Unix timestamp in microseconds
+        self.end_time = None  # Unix timestamp in microseconds
         self.offset = None
         self.minimum_log_level = None
         self.include_app_logs = False
@@ -117,7 +117,7 @@ class AppLog(object):
             level: An integer specifying a logging level.
             message: A string containing the log line.
         """
-        self.time = timestamp
+        self.time = timestamp  # Unix timestamp in microseconds
         self.level = level
         self.message = message
 
@@ -198,15 +198,18 @@ class RequestLog(object):
         self.status = None
         self.response_size = None
 
-        self.start_time = time.time()
+        # Unix timestamps in microseconds
+        self.start_time = int(time.time() * 1000 * 1000)
         self.end_time = None
+
         self.offset = None
         self.app_logs = deque(maxlen=self.MAX_APP_LOGS)
 
     @property
     def combined(self):
         """ A string representing the request as a combined log entry. """
-        date = time.strftime('%d/%b/%Y:%H:%M:%S %z', time.localtime(self.end_time))
+        timestamp = time.localtime(self.end_time / 1000 / 1000)
+        date = time.strftime('%d/%b/%Y:%H:%M:%S %z', timestamp)
         return ('{ip} - {nickname} [{date}] "{method} {resource} {ver}" '
                 '{status} {size} "{ua}"').format(
             ip=self.ip, nickname=self.nickname, date=date, method=self.method,
@@ -222,8 +225,8 @@ class RequestLog(object):
 
         request_log.status = log.status
         request_log.response_size = log.responseSize
-        request_log.start_time = log.startTime / 1000 / 1000
-        request_log.end_time = log.endTime / 1000 / 1000
+        request_log.start_time = log.startTime
+        request_log.end_time = log.endTime
         if log.offset:
             request_log.offset = log.offset
 
@@ -236,14 +239,13 @@ class RequestLog(object):
         request_log = logging_capnp.RequestLog.new_message()
         for capnp_field in ['requestId', 'appId', 'versionId', 'ip', 'nickname',
                             'userAgent', 'host', 'method', 'resource',
-                            'httpVersion', 'status', 'responseSize', 'offset']:
+                            'httpVersion', 'status', 'responseSize', 'offset',
+                            'startTime', 'endTime']:
             field = self.CAPNP_FIELDS.get(capnp_field, capnp_field)
             value = getattr(self, field)
             if value is not None:
                 setattr(request_log, capnp_field, value)
 
-        request_log.startTime = int(self.start_time * 1000 * 1000)
-        request_log.endTime = int(self.end_time * 1000 * 1000)
         app_logs = request_log.init('appLogs', len(self.app_logs))
         for index, line in enumerate(self.app_logs):
             app_logs[index] = line.to_capnp()
@@ -255,12 +257,11 @@ class RequestLog(object):
         request_log = log_service_pb2.RequestLog()
         for pb_field in ['request_id', 'app_id', 'version_id', 'ip', 'nickname',
                          'user_agent', 'host', 'method', 'resource',
-                         'http_version', 'status', 'response_size', 'combined']:
+                         'http_version', 'status', 'response_size', 'combined',
+                         'start_time', 'end_time']:
             field = self.PROTO_FIELDS.get(pb_field, pb_field)
             setattr(request_log, pb_field, getattr(self, field))
 
-        request_log.start_time = int(self.start_time * 1000 * 1000)
-        request_log.end_time = int(self.end_time * 1000 * 1000)
         if self.offset:
             request_log.offset = log_service_pb2.LogOffset()
             request_log.offset.request_id = base64.b64encode(self.offset)
