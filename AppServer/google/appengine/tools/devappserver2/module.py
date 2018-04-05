@@ -634,6 +634,7 @@ class Module(object):
         module_runtime = self._module_configuration.runtime
         if external_api_port is not None and module_runtime == 'python27':
           args['project_id'] = self._module_configuration.application
+          args['service_id'] = self._module_configuration.module_name
           start_request_url = 'http://localhost:{}/start_request'.format(
             self._external_api_port)
           try:
