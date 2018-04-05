@@ -151,6 +151,11 @@ class TestRequestLog(unittest.TestCase):
         self.assertEqual(request_log.start_time, TIMESTAMP_USEC)
         self.assertEqual(request_log.end_time, TIMESTAMP_USEC)
         self.assertEqual(request_log.offset, None)
+        date_str = time.strftime('%d/%b/%Y:%H:%M:%S %z',
+                                 time.localtime(TIMESTAMP_USEC / 1000 / 1000))
+        combined = ('192.168.33.9 - bob [{}] "GET / HTTP/1.0" 200 100 '
+                    '"ua string"').format(date_str)
+        self.assertEqual(request_log.combined, combined)
         for index, capnp_line in enumerate([app_log_1, app_log_2]):
             pb_line = request_log.app_logs[index]
             self.assertEqual(pb_line.time, capnp_line.time)
