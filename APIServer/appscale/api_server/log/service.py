@@ -147,7 +147,6 @@ class LogService(BaseService):
 
             # TODO: Only include offset if there are more results.
             if len(response.log) == query.count and request_logs:
-                response.offset = LogOffset()
                 response.offset.request_id = request_logs[-1].offset
 
         if response is None:
