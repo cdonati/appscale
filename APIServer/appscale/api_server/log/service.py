@@ -209,7 +209,9 @@ class LogService(BaseService):
             metadata = yield self._thread_pool.submit(handle.read, metadata_length)
             message_count, = struct.unpack('I', metadata)
             for _ in range(message_count):
-                size = yield self._thread_pool.submit(handle.read, metadata_length)
+                metadata = yield self._thread_pool.submit(handle.read,
+                                                          metadata_length)
+                size, = struct.unpack('I', metadata)
                 message = yield self._thread_pool.submit(handle.read, size)
                 request_log = logging_capnp.RequestLog.from_bytes(message)
                 request_logs.append(RequestLog.from_capnp(request_log))
