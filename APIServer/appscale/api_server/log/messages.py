@@ -76,8 +76,8 @@ class LogQuery(object):
         if request.request_id:
             query.request_ids = request.request_id
 
-        if request.offset:
-            query.offset = base64.b64decode(request.offset)
+        if request.HasField('offset'):
+            query.offset = base64.b64decode(request.offset.request_id)
 
         return query
 
