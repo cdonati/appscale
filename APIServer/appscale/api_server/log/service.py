@@ -31,7 +31,7 @@ class LogService(BaseService):
 
     # The appropriate messages for each API call.
     METHODS = {'Flush': (FlushRequest, lambda: None),
-               'LogRead': (LogReadRequest, LogReadResponse)}
+               'Read': (LogReadRequest, LogReadResponse)}
 
     def __init__(self, project_id, log_server_ip):
         """ Creates a new AppIdentityService.
@@ -139,7 +139,7 @@ class LogService(BaseService):
                     [AppLog.from_pb(line) for line in log_group.log_line])
             except IndexError:
                 raise InvalidRequest('Request not found')
-        elif method == 'LogRead':
+        elif method == 'Read':
             query = LogQuery.from_pb(request)
             request_logs = yield self.fetch(query)
             response.log = [log.to_pb(query.include_app_logs)
