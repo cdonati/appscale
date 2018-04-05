@@ -155,10 +155,12 @@ class RequestLog(object):
     MAX_APP_LOGS = 1000
 
     # Protobuffer fields that are named differently than the attributes.
-    PROTO_FIELDS = {'app_id': 'project_id'}
+    PROTO_FIELDS = {'app_id': 'project_id',
+                    'module_id': 'service_id'}
 
     # Cap'n Proto fields that are named differently than the attributes.
     CAPNP_FIELDS = {'appId': 'project_id',
+                    'moduleId': 'service_id',
                     'versionId': 'version_id',
                     'requestId': 'request_id',
                     'startTime': 'start_time',
@@ -195,6 +197,7 @@ class RequestLog(object):
         self.resource = resource
         self.http_version = http_version
 
+        self.service_id = None
         self.status = None
         self.response_size = None
 
@@ -237,8 +240,8 @@ class RequestLog(object):
     def to_capnp(self):
         """ Creates a capnp RequestLog. """
         request_log = logging_capnp.RequestLog.new_message()
-        for capnp_field in ['requestId', 'appId', 'versionId', 'ip', 'nickname',
-                            'userAgent', 'host', 'method', 'resource',
+        for capnp_field in ['requestId', 'appId', 'moduleId', 'versionId', 'ip',
+                            'nickname', 'userAgent', 'host', 'method', 'resource',
                             'httpVersion', 'status', 'responseSize', 'offset',
                             'startTime', 'endTime']:
             field = self.CAPNP_FIELDS.get(capnp_field, capnp_field)
@@ -255,12 +258,14 @@ class RequestLog(object):
     def to_pb(self, include_app_logs):
         """ Creates a protocol buffer RequestLog. """
         request_log = log_service_pb2.RequestLog()
-        for pb_field in ['request_id', 'app_id', 'version_id', 'ip', 'nickname',
-                         'user_agent', 'host', 'method', 'resource',
+        for pb_field in ['request_id', 'app_id', 'module_id', 'version_id', 'ip',
+                         'nickname', 'user_agent', 'host', 'method', 'resource',
                          'http_version', 'status', 'response_size', 'combined',
                          'start_time', 'end_time']:
             field = self.PROTO_FIELDS.get(pb_field, pb_field)
-            setattr(request_log, pb_field, getattr(self, field))
+            value = getattr(self, field)
+            if value is not None:
+                setattr(request_log, pb_field, value)
 
         if self.offset:
             request_log.offset = log_service_pb2.LogOffset()

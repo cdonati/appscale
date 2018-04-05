@@ -142,7 +142,8 @@ class LogService(BaseService):
         elif method == 'LogRead':
             query = LogQuery.from_pb(request)
             request_logs = yield self.fetch(query)
-            response.log = [log.to_pb() for log in request_logs]
+            response.log = [log.to_pb(query.include_app_logs)
+                            for log in request_logs]
 
             # TODO: Only include offset if there are more results.
             if len(response.log) == query.count and request_logs:

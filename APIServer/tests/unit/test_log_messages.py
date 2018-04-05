@@ -119,6 +119,7 @@ class TestRequestLog(unittest.TestCase):
         request_log_capnp = logging_capnp.RequestLog.new_message()
         request_log_capnp.requestId = 'request1'
         request_log_capnp.appId = PROJECT
+        request_log_capnp.moduleId = 'service1'
         request_log_capnp.versionId = 'v1'
         request_log_capnp.ip = '192.168.33.9'
         request_log_capnp.nickname = 'bob'
@@ -138,6 +139,7 @@ class TestRequestLog(unittest.TestCase):
         request_log = RequestLog.from_capnp(request_log_capnp)
         self.assertEqual(request_log.request_id, 'request1')
         self.assertEqual(request_log.project_id, PROJECT)
+        self.assertEqual(request_log.service_id, 'service1')
         self.assertEqual(request_log.version_id, 'v1')
         self.assertEqual(request_log.ip, '192.168.33.9')
         self.assertEqual(request_log.nickname, 'bob')
@@ -168,6 +170,7 @@ class TestRequestLog(unittest.TestCase):
         request_log = RequestLog(
             'request1', PROJECT, 'v1', '192.168.33.9', 'bob', 'ua string',
             '192.168.33.10', 'GET', '/', '1.0')
+        request_log.service_id = 'service1'
         request_log.status = 200
         request_log.response_size = 100
         request_log.start_time = TIMESTAMP_USEC
@@ -177,6 +180,7 @@ class TestRequestLog(unittest.TestCase):
         request_log_capnp = request_log.to_capnp()
         self.assertEqual(request_log_capnp.requestId, 'request1')
         self.assertEqual(request_log_capnp.appId, PROJECT)
+        self.assertEqual(request_log_capnp.moduleId, 'service1')
         self.assertEqual(request_log_capnp.versionId, 'v1')
         self.assertEqual(request_log_capnp.ip, '192.168.33.9')
         self.assertEqual(request_log_capnp.nickname, 'bob')
@@ -194,3 +198,39 @@ class TestRequestLog(unittest.TestCase):
             self.assertEqual(line.time, capnp_line.time)
             self.assertEqual(line.level, capnp_line.level)
             self.assertEqual(line.message, capnp_line.message)
+
+    def test_to_pb(self):
+        app_logs = [AppLog(TIMESTAMP_USEC, LOG_LEVEL_INFO, MESSAGE_1),
+                    AppLog(TIMESTAMP_USEC, LOG_LEVEL_WARNING, MESSAGE_1)]
+        request_log = RequestLog(
+            'request1', PROJECT, 'v1', '192.168.33.9', 'bob', 'ua string',
+            '192.168.33.10', 'GET', '/', '1.0')
+        request_log.service_id = 'service1'
+        request_log.status = 200
+        request_log.response_size = 100
+        request_log.start_time = TIMESTAMP_USEC
+        request_log.end_time = TIMESTAMP_USEC
+        request_log.app_logs = app_logs
+
+        request_log_pb = request_log.to_pb(include_app_logs=True)
+        self.assertEqual(request_log_pb.app_id, PROJECT)
+        self.assertEqual(request_log_pb.module_id, 'default')
+        self.assertEqual(request_log_pb.version_id, 'v1')
+        self.assertEqual(request_log_pb.request_id, 'request1')
+        self.assertEqual(request_log_pb.ip, '192.168.33.9')
+        self.assertEqual(request_log_pb.nickname, 'bob')
+        self.assertEqual(request_log_pb.start_time, TIMESTAMP_USEC)
+        self.assertEqual(request_log_pb.end_time, TIMESTAMP_USEC)
+        self.assertEqual(request_log_pb.method, 'GET')
+        self.assertEqual(request_log_pb.resource, '/')
+        self.assertEqual(request_log_pb.http_version, '1.0')
+        self.assertEqual(request_log_pb.status, 200)
+        self.assertEqual(request_log_pb.response_size, 100)
+        self.assertEqual(request_log_pb.user_agent, 'ua string')
+        self.assertEqual(request_log_pb.host, '192.168.33.10')
+        self.assertEqual(request_log_pb.finished, True)
+        for index, line in enumerate(app_logs):
+            pb_line = request_log_pb.line[index]
+            self.assertEqual(line.time, pb_line.time)
+            self.assertEqual(line.level, pb_line.level)
+            self.assertEqual(line.message, pb_line.message)
