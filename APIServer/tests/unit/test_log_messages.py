@@ -233,4 +233,4 @@ class TestRequestLog(unittest.TestCase):
             pb_line = request_log_pb.line[index]
             self.assertEqual(line.time, pb_line.time)
             self.assertEqual(line.level, pb_line.level)
-            self.assertEqual(line.message, pb_line.message)
+            self.assertEqual(line.message, pb_line.log_message)
