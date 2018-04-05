@@ -2,13 +2,17 @@ from appscale.api_server.log.messages import AppLog, LogQuery, RequestLog
 from appscale.api_server.log import log_service_pb2
 import unittest
 import time
+import base64
 
 LOG_LEVEL_INFO = 1
 LOG_LEVEL_WARNING = 2
 
 MESSAGE_1 = 'show me what you got'
 
-TIMESTAMP_USEC = int(time.time() * 1000 * 1000)
+PROJECT = 'guestbook'
+
+TIMESTAMP = time.time()
+TIMESTAMP_USEC = int(TIMESTAMP * 1000 * 1000)
 
 
 class TestAppLog(unittest.TestCase):
@@ -51,3 +55,29 @@ class TestAppLog(unittest.TestCase):
         self.assertEqual(line_pb.log_message, MESSAGE_1)
         # Ensure no exceptions are raised when serializing message.
         line_pb.SerializeToString()
+
+
+class TestLogQuery(unittest.TestCase):
+    def test_from_pb(self):
+        request = log_service_pb2.LogReadRequest()
+        request.app_id = PROJECT
+        module_version = request.module_version.add()
+        module_version.module_id = 'default'
+        module_version.version_id = 'v1'
+        request.start_time = TIMESTAMP_USEC
+        request.end_time = TIMESTAMP_USEC
+        request.offset = log_service_pb2.LogOffset()
+        request.offset.request_id = 'offset'
+        request.minimum_log_level = LOG_LEVEL_INFO
+        request.include_app_logs = True
+        request.count = 5
+        log_query = LogQuery.from_pb(request)
+        self.assertEqual(log_query.service_id, 'default')
+        self.assertEqual(log_query.version_id, 'v1')
+        self.assertEqual(log_query.start_time, TIMESTAMP)
+        self.assertEqual(log_query.end_time, TIMESTAMP)
+        self.assertEqual(log_query.offset, base64.b64encode('offset'))
+        self.assertEqual(log_query.minimum_log_level, LOG_LEVEL_INFO)
+        self.assertEqual(log_query.include_app_logs, True)
+        self.assertListEqual(log_query.request_ids, [])
+        self.assertEqual(log_query.count, 5)
