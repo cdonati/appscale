@@ -68,10 +68,13 @@ class LogQuery(object):
 
         query = LogQuery(module_version.module_id, module_version.version_id)
         for pb_field in ['start_time', 'end_time', 'minimum_log_level',
-                         'include_app_logs', 'request_id', 'count']:
+                         'include_app_logs', 'count']:
             field = cls.PROTO_FIELDS.get(pb_field, pb_field)
             if request.HasField(pb_field):
                 setattr(query, field, getattr(request, pb_field))
+
+        if request.request_id:
+            query.request_ids = request.request_id
 
         if request.offset:
             query.offset = base64.b64decode(request.offset)
