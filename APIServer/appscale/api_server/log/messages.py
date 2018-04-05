@@ -265,8 +265,6 @@ class RequestLog(object):
                          'start_time', 'end_time']:
             field = self.PROTO_FIELDS.get(pb_field, pb_field)
             value = getattr(self, field)
-            import logging
-            logging.warning('field: {}, value: {}'.format(field, value))
             if value is not None:
                 setattr(request_log, pb_field, value)
 
