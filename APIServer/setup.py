@@ -1,5 +1,18 @@
+import sys
+
 from setuptools import setup
 
+install_requires = [
+    'appscale-common',
+    'cryptography',
+    'kazoo',
+    'protobuf',
+    'pycapnp',
+    'six',
+    'tornado'
+]
+if sys.version_info < (3,):
+    install_requires.extend(['future'])
 
 setup(
     name='appscale-api-server',
@@ -11,15 +24,7 @@ setup(
     license='Apache License 2.0',
     keywords='appscale google-app-engine python',
     platforms='Posix',
-    install_requires=[
-        'appscale-common',
-        'cryptography',
-        'kazoo',
-        'protobuf',
-        'pycapnp',
-        'six',
-        'tornado'
-    ],
+    install_requires=install_requires,
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Developers',
