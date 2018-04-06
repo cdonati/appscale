@@ -6,13 +6,16 @@ import os
 import pickle
 
 from kazoo.client import KazooClient
+from tornado import gen
 from tornado import web
 from tornado.ioloop import IOLoop
 
 from appscale.api_server.app_identity import AppIdentityService
 from appscale.api_server.base_service import BaseService
 from appscale.api_server.constants import ApplicationError
+from appscale.api_server.log import LogService
 from appscale.api_server.remote_api import remote_api_pb2
+from appscale.common.appscale_info import get_headnode_ip
 from appscale.common.constants import LOG_FORMAT
 from appscale.common.constants import PID_DIR
 from appscale.common.constants import ZK_PERSISTENT_RECONNECTS
@@ -30,6 +33,7 @@ class MainHandler(web.RequestHandler):
         """
         self.service_map = service_map
 
+    @gen.coroutine
     def post(self):
         """ Handles API requests. """
         api_request = remote_api_pb2.Request()
@@ -39,8 +43,15 @@ class MainHandler(web.RequestHandler):
         service = self.service_map.get(api_request.service_name,
                                        BaseService(api_request.service_name))
         try:
-            api_response.response = service.make_call(api_request.method,
-                                                      api_request.request)
+            response = service.make_call(
+                api_request.method, api_request.request, api_request.request_id)
+            if isinstance(response, gen.Future):
+                response = yield response
+
+            if response is None:
+                return
+
+            api_response.response = response
         except ApplicationError as error:
             logger.exception('ApplicationError')
             api_response.application_error.code = error.code
@@ -80,8 +91,10 @@ def main():
                             connection_retry=ZK_PERSISTENT_RECONNECTS)
     zk_client.start()
 
+    log_service = LogService(args.project_id, get_headnode_ip())
     service_map = {
-        'app_identity_service': AppIdentityService(args.project_id, zk_client)
+        'app_identity_service': AppIdentityService(args.project_id, zk_client),
+        'logservice': log_service
     }
 
     app = web.Application([
