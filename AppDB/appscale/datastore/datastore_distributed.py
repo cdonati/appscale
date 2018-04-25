@@ -21,6 +21,7 @@ from .cassandra_env.entity_id_allocator import EntityIDAllocator
 from .cassandra_env.entity_id_allocator import ScatteredAllocator
 from .cassandra_env.utils import deletions_for_entity
 from .cassandra_env.utils import mutations_for_entity
+from .range_iterator import RangeIterator
 from .utils import clean_app_id
 from .utils import encode_entity_table_key
 from .utils import encode_index_pb
@@ -63,10 +64,6 @@ class DatastoreDistributed():
   """
   # Max number of results for a query
   _MAXIMUM_RESULTS = 10000
-
-  # The number of entries looked at when doing a composite query
-  # It will keep looking at this size window when getting the result
-  _MAX_COMPOSITE_WINDOW = 10000
 
   # Maximum amount of filter and orderings allowed within a query
   _MAX_QUERY_COMPONENTS = 63
@@ -2124,6 +2121,55 @@ class DatastoreDistributed():
          
     return []
 
+  @staticmethod
+  def _common_refs_from_ranges(ranges, limit):
+    reference_hash = {}
+    min_common_entry = None
+    while True:
+      common_keys = []
+      entries_exhausted = False
+      for range_ in ranges:
+        # Adjust range to exclude values before the min common key.
+        if min_common_entry is not None:
+          range_.set_cursor(min_common_entry.path)
+
+        try:
+          entry = next(range_)
+        except StopIteration:
+          # If any ranges have been exhausted, there are no more matches.
+          entries_exhausted = True
+          break
+
+        if min_common_entry is None:
+          min_common_entry = entry
+
+        # If this entry's path is ahead of the others, consider it the new
+        # minimum acceptable path and adjust the other ranges.
+        if entry.encoded_path > min_common_entry.encoded_path:
+          min_common_entry = entry
+          break
+
+        common_keys.append({'index': entry.key, 'prop_name': range_.prop_name})
+
+      if entries_exhausted:
+        break
+
+      # If there are no common paths yet, adjust earlier ranges.
+      if len(common_keys) < len(ranges):
+        continue
+
+      reference_hash[min_common_entry.entity_reference] = common_keys
+
+      # Unset the common path so that the ranges will be iterated.
+      min_common_entry = None
+
+      # If there are enough references to satisfy the query, stop fetching
+      # entries.
+      if len(reference_hash) == limit:
+        break
+
+    return reference_hash
+
   def zigzag_merge_join(self, query, filter_info, order_info):
     """ Performs a composite query for queries which have multiple 
     equality filters. Uses a varient of the zigzag join merge algorithm.
@@ -2148,183 +2194,46 @@ class DatastoreDistributed():
     if not self.is_zigzag_merge_join(query, filter_info, order_info):
       return None
     kind = query.kind()  
-    prefix = self.get_table_prefix(query)
     limit = self.get_limit(query)
     app_id = clean_app_id(query.app())
 
     # We only use references from the ascending property table.
     direction = datastore_pb.Query_Order.ASCENDING
 
-    count = self._MAX_COMPOSITE_WINDOW
-    start_key = ""
-    result_list = []
-    force_exclusive = False
-    more_results = True
-    ancestor = None
+    start_path = None
     if query.has_ancestor():
-      ancestor = query.ancestor()
+      start_path = query.ancestor()
 
-    # We will apply the other equality filters after fetching the entities.
-    clean_filter_info = {}
-    for prop in filter_info:
-      filter_ops = filter_info[prop]
-      clean_filter_info[prop] = self.remove_extra_equality_filters(filter_ops)
-    filter_info = clean_filter_info
+    ranges = [
+      RangeIterator.from_filter(self.datastore_batch, app_id,
+                                query.name_space(), kind, filter_, start_path)
+      for filter_ in query.filter_list()]
 
-    multiple_equality_filters = self.__get_multiple_equality_filters(
-      query.filter_list())
+    if query.has_compiled_cursor() and query.compiled_cursor().position_size():
+      cursor = appscale_stub_util.ListCursor(query)
+      cursor_path = cursor._GetLastResult().key().path()
+      for range in ranges:
+        range.set_cursor(cursor_path, inclusive=False)
 
-    while more_results:
-      reference_hash = {}
-      temp_res = {}
-      # We use what we learned from the previous scans to skip over any keys 
-      # that we know will not be a match.
-      startrow = "" 
-      # TODO Do these in parallel and measure speedup.
-      # I've tried a thread wrapper before but due to the function having
-      # self attributes it's nontrivial.
-      for prop_name in filter_info.keys():
-        filter_ops = filter_info.get(prop_name, [])
-        if start_key:
-          # Grab the reference key which is after the last delimiter. 
-          value = str(filter_ops[0][1])
-          reference_key = start_key.split(self._SEPARATOR)[-1]
-          params = [prefix, kind, prop_name, value, reference_key]
-          startrow = get_index_key_from_params(params)
-        elif query.has_compiled_cursor() and \
-          query.compiled_cursor().position_size():
-          cursor = appscale_stub_util.ListCursor(query)
-          last_result = cursor._GetLastResult()
-          value = str(filter_ops[0][1])
-          reference_key = str(encode_index_pb(last_result.key().path()))
-          params = [prefix, kind, prop_name, value, reference_key]
-          startrow = get_index_key_from_params(params)
+    entities = []
+    while True:
+      reference_hash = self._common_refs_from_ranges(ranges, limit)
+      entities.extend(
+        self.__fetch_and_validate_entity_set(reference_hash, limit, app_id,
+                                             direction))
 
-        # We use equality filters only so order ops should always be ASC. 
-        order_ops = []
-        for i in order_info:
-          if i[0] == prop_name:
-            order_ops = [i]
-            break
+      # If there are enough entities to satisfy the query, stop fetching.
+      if len(entities) >= limit:
+        break
 
-        temp_res[prop_name] = self.__apply_filters(filter_ops, 
-          order_ops, 
-          prop_name, 
-          kind, 
-          prefix, 
-          count, 
-          0, 
-          startrow,
-          force_start_key_exclusive=force_exclusive,
-          ancestor=ancestor,
-          query=query)
+      # If there weren't enough common references to fulfill the limit, the
+      # references are exhausted.
+      if len(reference_hash) < limit:
+        break
 
-      # We do reference counting and consider any reference which matches the
-      # number of properties to be a match. Any others are discarded but it 
-      # possible they show up on subsequent scans. 
-      last_keys_of_scans = {}
-      first_keys_of_scans = {}
-      for prop_name in temp_res:
-        for indexes in temp_res[prop_name]:
-          for reference in indexes: 
-            reference_key = indexes[reference]['reference']
-            if reference_key not in reference_hash:
-              reference_hash[reference_key] = []
-
-            reference_hash[reference_key].append(
-              {'index': reference, 'prop_name': prop_name})
-          # Of the set of entity scans we use the earliest of the set as the
-          # starting point of scans to follow. This makes sure we do not miss 
-          # overlapping results because different properties had different 
-          # distributions of keys. The index value gives us the key to 
-          # the entity table (what the index points to).
-          index_key = indexes.keys()[0]
-          index_value = indexes[index_key]['reference']
-          first_keys_of_scans[prop_name] = index_value
-
-          index_key = indexes.keys()[-1]
-          index_value = indexes[index_key]['reference']
-          last_keys_of_scans[prop_name] = index_value
-
-      # We are looking for the earliest (alphabetically) of the set of last 
-      # keys. This tells us where to start our next scans. And from where 
-      # we can remove potential results.
-      start_key = ""
-      starting_prop_name = ""
-      for prop_name in first_keys_of_scans:
-        first_key = first_keys_of_scans[prop_name]
-        if not start_key or first_key < start_key: 
-          start_key = first_key
-          starting_prop_name = prop_name
- 
-      # Override the start key if one of the prop starting keys is outside the 
-      # end key of all the other props. This allows to jump over results which 
-      # would not have matched.
-      for prop_name in first_keys_of_scans:
-        first_key = first_keys_of_scans[prop_name]
-        jump_ahead = False
-        for last_prop in last_keys_of_scans:
-          if last_prop == prop_name:
-            continue
-
-          if first_key > last_keys_of_scans[last_prop]:
-            jump_ahead = True
-          else:
-            jump_ahead = False
-            break
-        if jump_ahead:
-          start_key = first_key
-          starting_prop_name = prop_name
-
-      # Purge keys which did not intersect from all equality filters and those
-      # which are past the earliest reference shared by all property names 
-      # (start_key variable). 
-      keys_to_delete = []
-      for key in reference_hash:
-        if len(reference_hash[key]) != len(filter_info.keys()):
-          keys_to_delete.append(key)
-      # You cannot loop on a dictionary and delete from it at the same time.
-      # Hence why the deletes happen here.
-      for key in keys_to_delete:
-        del reference_hash[key]
-
-      # If we have results, we only need to fetch enough to meet the limit.
-      to_fetch = limit - len(result_list)
-
-      entities = self.__fetch_and_validate_entity_set(reference_hash, to_fetch,
-        app_id, direction)
-
-      if len(multiple_equality_filters) > 0:
-        self.logger.debug('Detected multiple equality filters on a repeated'
-          'property. Removing results that do not match query.')
-        entities = self.__apply_multiple_equality_filters(
-          entities, multiple_equality_filters)
-
-      result_list.extend(entities)
-
-      # If the property we are setting the start key did not get the requested
-      # amount of entities then we can stop scanning, as there are no more 
-      # entities to scan from that property.
-      for prop_name in temp_res:
-        if len(temp_res[prop_name]) < count and prop_name == starting_prop_name:
-          more_results = False
-
-        # If any property no longer has any more items, this query is done.
-        if len(temp_res[prop_name]) == 0:
-          more_results = False 
-
-      # If we reached our limit of result entities, then we are done.
-      if len(result_list) >= limit:
-        more_results = False
-
-      # Do not include the first key in subsequent scans because we have 
-      # already accounted for the given entity.
-      if start_key in result_list:
-        force_exclusive = True
-
-    results = result_list[:limit]
+    results = entities[:limit]
     self.logger.debug('Returning {} results'.format(len(results)))
-    return result_list[:limit]
+    return results
 
   def does_composite_index_exist(self, query):
     """ Checks to see if the query has a composite index that can implement
