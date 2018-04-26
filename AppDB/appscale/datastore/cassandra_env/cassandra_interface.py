@@ -15,12 +15,11 @@ from appscale.common import appscale_info
 from appscale.common.constants import SCHEMA_CHANGE_TIMEOUT
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from cassandra.cluster import Cluster
-from cassandra.concurrent import execute_concurrent
 from cassandra.query import BatchStatement
 from cassandra.query import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.query import ValueSequence
-from .constants import CURRENT_VERSION
+from .constants import CURRENT_VERSION, LB_POLICY
 from .large_batch import (FailedBatch,
                           LargeBatch)
 from .retry_policies import (BASIC_RETRIES,
@@ -60,6 +59,10 @@ VERSION_INFO_KEY = 'version'
 # The metadata key used to indicate the state of the indexes.
 INDEX_STATE_KEY = 'index_state'
 
+# The metadata key used to indicate whether or not some entities are missing
+# the scatter property.
+SCATTER_PROP_KEY = 'scatter_prop'
+
 # The metadata key indicating that the database has been primed.
 PRIMED_KEY = 'primed'
 
@@ -98,6 +101,12 @@ class IndexStates(object):
   SCRUB_IN_PROGRESS = 'scrub_in_progress'
 
 
+class ScatterPropStates(object):
+  """ Possible states for indexing the scatter property. """
+  POPULATED = 'populated'
+  POPULATION_IN_PROGRESS = 'population_in_progress'
+
+
 class DatastoreProxy(AppDBInterface):
   """ 
     Cassandra implementation of the AppDBInterface
@@ -119,7 +128,8 @@ class DatastoreProxy(AppDBInterface):
     remaining_retries = INITIAL_CONNECT_RETRIES
     while True:
       try:
-        self.cluster = Cluster(self.hosts, default_retry_policy=BASIC_RETRIES)
+        self.cluster = Cluster(self.hosts, default_retry_policy=BASIC_RETRIES,
+                               load_balancing_policy=LB_POLICY)
         self.session = self.cluster.connect(KEYSPACE)
         break
       except cassandra.cluster.NoHostAvailable as connection_error:
@@ -221,16 +231,16 @@ class DatastoreProxy(AppDBInterface):
 
     statement = self.session.prepare(insert_str)
 
-    statements_and_params = []
+    futures = []
     for row_key in row_keys:
       for column in column_names:
         params = (bytearray(row_key), column,
                   bytearray(cell_values[row_key][column]))
-        statements_and_params.append((statement, params))
+        futures.append(self.session.execute_async(statement, params))
 
     try:
-      execute_concurrent(self.session, statements_and_params,
-                         raise_on_first_error=True)
+      for future in futures:
+        future.result()
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
       message = 'Exception during batch_put_entity'
       logging.exception(message)
@@ -380,8 +390,10 @@ class DatastoreProxy(AppDBInterface):
       txid: An integer specifying a transaction ID.
     """
     statements_and_params = self.statements_for_mutations(mutations, txid)
-    execute_concurrent(self.session, statements_and_params,
-                       raise_on_first_error=True)
+    futures = [self.session.execute_async(statement, params)
+               for statement, params in statements_and_params]
+    for future in futures:
+      future.result()
 
   def _large_batch(self, app, mutations, entity_changes, txn):
     """ Insert or delete multiple rows across tables in an atomic statement.
@@ -410,7 +422,7 @@ class DatastoreProxy(AppDBInterface):
     """
     insert_statement = self.session.prepare(insert_item)
 
-    statements_and_params = []
+    futures = []
     for entity_change in entity_changes:
       old_value = None
       if entity_change['old'] is not None:
@@ -422,11 +434,11 @@ class DatastoreProxy(AppDBInterface):
       parameters = (app, txn, entity_change['key'].name_space(),
                     bytearray(entity_change['key'].path().Encode()), old_value,
                     new_value)
-      statements_and_params.append((insert_statement, parameters))
+      futures.append(self.session.execute_async(insert_statement, parameters))
 
     try:
-      execute_concurrent(self.session, statements_and_params,
-                         raise_on_first_error=True)
+      for future in futures:
+        future.result()
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
       message = 'Unable to write large batch log'
       logging.exception(message)

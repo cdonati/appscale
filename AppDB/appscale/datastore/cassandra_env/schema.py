@@ -16,8 +16,9 @@ from cassandra.policies import FallthroughRetryPolicy
 from .cassandra_interface import IndexStates
 from .cassandra_interface import INITIAL_CONNECT_RETRIES
 from .cassandra_interface import KEYSPACE
+from .cassandra_interface import ScatterPropStates
 from .cassandra_interface import ThriftColumn
-from .constants import CURRENT_VERSION
+from .constants import CURRENT_VERSION, LB_POLICY
 from .. import dbconstants
 
 # A policy that does not retry statements.
@@ -227,7 +228,7 @@ def prime_cassandra(replication):
   remaining_retries = INITIAL_CONNECT_RETRIES
   while True:
     try:
-      cluster = Cluster(hosts)
+      cluster = Cluster(hosts, load_balancing_policy=LB_POLICY)
       session = cluster.connect()
       break
     except cassandra.cluster.NoHostAvailable as connection_error:
@@ -316,6 +317,12 @@ def prime_cassandra(replication):
     parameters = {'key': bytearray(cassandra_interface.INDEX_STATE_KEY),
                   'column': cassandra_interface.INDEX_STATE_KEY,
                   'value': bytearray(str(IndexStates.CLEAN))}
+    session.execute(metadata_insert, parameters)
+
+    # Indicate that scatter property values do not need to be populated.
+    parameters = {'key': bytearray(cassandra_interface.SCATTER_PROP_KEY),
+                  'column': cassandra_interface.SCATTER_PROP_KEY,
+                  'value': bytearray(ScatterPropStates.POPULATED)}
     session.execute(metadata_insert, parameters)
 
   # Indicate that the database has been successfully primed.
