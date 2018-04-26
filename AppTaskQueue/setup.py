@@ -19,7 +19,7 @@ setup(
     'PyYaml',
     'tornado==4.2.0'
   ],
-  extras_require={'celery_gui': ['flower']},
+  extras_require={'celery_gui': ['flower'], 'postgres_backend': ['psycopg2']},
   classifiers=[
     'Development Status :: 5 - Production/Stable',
     'Environment :: Console',
