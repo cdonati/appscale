@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import json
 import os
+import psycopg2
 import socket
 import sys
 import time
@@ -234,6 +235,9 @@ class DistributedTaskQueue():
       constants.DASHBOARD_APP_ID, connection_str, require_indexes=False)
     apiproxy_stub_map.apiproxy.RegisterStub('datastore_v3', ds_distrib)
     os.environ['APPLICATION_ID'] = constants.DASHBOARD_APP_ID
+
+    self.pg_conn = psycopg2.connect("dbname='appscale_push_queues'")
+    self.pg_cur = self.pg_conn.cursor()
 
     self.db_access = db_access
     self.load_balancers = appscale_info.get_load_balancer_ips()
@@ -571,12 +575,22 @@ class DistributedTaskQueue():
       request: A taskqueue_service_pb.TaskQueueAddRequest.
     """
     self.__validate_push_task(request)
-    self.__check_and_store_task_names(request)
+    #self.__check_and_store_task_names(request)
     headers = self.get_task_headers(request)
     args = self.get_task_args(source_info, headers, request)
     countdown = int(headers['X-AppEngine-TaskETA']) - \
                 int(datetime.datetime.now().strftime("%s"))
 
+
+    logger.info('queue_name: {}'.format(repr(request.queue_name())))
+    logger.info('task_name: {}'.format(repr(request.task_name())))
+    self.pg_cur.execute("""
+      INSERT INTO guestbook_queues (queue_name, task_name)
+      VALUES (%s, %s)
+    """, (request.queue_name(), request.task_name()))
+    self.pg_conn.commit()
+
+    return
     push_queue = self.get_queue(request.app_id(), request.queue_name())
     task_func = get_queue_function_name(push_queue.name)
     celery_queue = get_celery_queue_name(request.app_id(), push_queue.name)
