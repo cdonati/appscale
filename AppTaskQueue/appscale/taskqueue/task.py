@@ -104,6 +104,11 @@ class Task(object):
 
     self.validate_info()
 
+  @classmethod
+  def from_add_request(cls):
+    
+    pass
+
   def validate_info(self):
     """ Make sure the existing attributes are valid.
 
