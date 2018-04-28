@@ -3,7 +3,7 @@ from psycopg2 import sql
 DB_NAME = 'appscale_pull_queues'
 
 
-class PGPullQueue(object):
+class PostgresPullQueue(object):
   def __init__(self, project_id, queue_name, pg_conn):
     self.project_id = project_id
     self._pg_cur = pg_conn.cursor()

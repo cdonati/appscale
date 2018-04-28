@@ -105,7 +105,7 @@ class Task(object):
     self.validate_info()
 
   @classmethod
-  def from_add_request(cls):
+  def from_add_request(cls, add_request):
     
     pass
 
@@ -217,3 +217,29 @@ class Task(object):
     except AttributeError:
       pass
     return task_pb
+
+
+class PullQueueTask(object):
+  def __init__(self, queue_name, payload):
+    self.queue_name = queue_name
+    self.payload = payload
+
+    self.task_id = None
+    self.lease_timestamp = None
+    self.tag = None
+    self.max_leases = None
+
+    self.enqueue_timestamp = None
+    self.lease_count = 0
+
+  def __repr__(self):
+    return 'Task<queue={},id={}>'.format(self.queue_name, self.task_id)
+
+  @classmethod
+  def from_add_request(cls):
+
+    pass
+
+  @classmethod
+  def from_v1beta2(cls):
+    pass
