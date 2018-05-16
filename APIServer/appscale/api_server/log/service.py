@@ -136,8 +136,8 @@ class LogService(BaseService):
             try:
                 self.requests[request_id].app_logs.extend(
                     [AppLog.from_pb(line) for line in log_group.log_line])
-            except IndexError:
-                raise InvalidRequest('Request not found')
+            except KeyError:
+                raise InvalidRequest('Request not found: {}'.format(request_id))
         elif method == 'Read':
             query = LogQuery.from_pb(request)
             request_logs = yield self.fetch(query)
