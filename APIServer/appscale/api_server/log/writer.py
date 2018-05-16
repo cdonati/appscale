@@ -70,7 +70,8 @@ class LogWriter(object):
             message = request_log.to_capnp().to_bytes()
             self._send_message(message)
 
-    @retry(retry_on_exception=socket.error, backoff_threshold=60, max_retries=None)
+    @retry(retry_on_exception=socket.error, backoff_threshold=60,
+           max_retries=None, retrying_timeout=None)
     def _send_message(self, message):
         """ Sends a log message to the log server.
 
