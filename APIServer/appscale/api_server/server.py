@@ -56,7 +56,7 @@ class MainHandler(web.RequestHandler):
         except ApplicationError as error:
             logger.exception('ApplicationError')
             api_response.application_error.code = error.code
-            api_response.application_error.detail = error.detail
+            api_response.application_error.detail = error.message
         except Exception as error:
             # Unexpected exceptions from the API Proxy server itself will not
             # be parsed in a friendly way by the runtime. Python runtimes will

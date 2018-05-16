@@ -29,10 +29,11 @@ logger = logging.getLogger('appscale-api-server')
 
 
 class UnknownError(ApplicationError):
+    CODE = AppIdentityServiceError.UNKNOWN_ERROR
+
     """ Indicates that the request cannot be completed at this time. """
     def __init__(self, message):
-        self.detail = message
-        self.code = AppIdentityServiceError.UNKNOWN_ERROR
+        super(UnknownError, self).__init__(self.CODE, message)
 
 
 class AppIdentityService(BaseService):

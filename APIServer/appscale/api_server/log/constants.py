@@ -14,14 +14,16 @@ class ClientActions(object):
 
 
 class InvalidRequest(ApplicationError):
+    CODE = LogServiceError.INVALID_REQUEST
+
     """ Indicates that the request is invalid. """
     def __init__(self, message):
-        self.detail = message
-        self.code = LogServiceError.INVALID_REQUEST
+        super(InvalidRequest, self).__init__(self.CODE, message)
 
 
 class StorageError(ApplicationError):
+    CODE = LogServiceError.STORAGE_ERROR
+
     """ Indicates that there was a problem accessing the log storage layer. """
     def __init__(self, message):
-        self.detail = message
-        self.code = LogServiceError.STORAGE_ERROR
+        super(StorageError, self).__init__(self.CODE, message)
