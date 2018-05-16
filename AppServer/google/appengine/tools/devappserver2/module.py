@@ -21,7 +21,6 @@ import collections
 import cStringIO
 import functools
 import httplib
-import json
 import logging
 import math
 import os
