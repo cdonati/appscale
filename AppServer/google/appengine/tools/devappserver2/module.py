@@ -28,12 +28,13 @@ import os
 import os.path
 import random
 import re
+import requests
+import requests.exceptions
 import string
 import struct
 import threading
 import time
 import urllib
-import urllib2
 import urlparse
 import wsgiref.headers
 
@@ -91,6 +92,8 @@ _REQUEST_LOGGING_BLACKLIST_RE = re.compile(
 _EMPTY_MATCH = re.match('', '')
 _DUMMY_URLMAP = appinfo.URLMap(script='/')
 _SHUTDOWN_TIMEOUT = 30
+
+requests_session = requests.Session()
 
 
 def _static_files_regex_from_handlers(handlers):
@@ -638,8 +641,8 @@ class Module(object):
           start_request_url = 'http://localhost:{}/start_request'.format(
             self._external_api_port)
           try:
-            urllib2.urlopen(start_request_url, json.dumps(args))
-          except urllib2.URLError as error:
+            requests_session.post(start_request_url, json=args)
+          except requests.exceptions.RequestException as error:
             start_response('503 Service Unavailable',
                            [('Content-Type', 'text/plain')])
             return ['Unable to start request: {}'.format(error)]
@@ -662,18 +665,19 @@ class Module(object):
           if external_api_port is not None and module_runtime == 'python27':
             end_request_url = 'http://localhost:{}/end_request'.format(
               self._external_api_port)
-            end_request_payload = json.dumps(
-              {'request_id': request_id, 'status': status_code,
-               'response_size': content_length})
+            end_request_payload = {'request_id': request_id,
+                                   'status': status_code,
+                                   'response_size': content_length}
             retry_num = 0
             while True:
               try:
-                urllib2.urlopen(end_request_url, end_request_payload)
+                requests_session.post(end_request_url,
+                                      json=end_request_payload)
                 break
-              except urllib2.URLError as error:
+              except requests.exceptions.RequestException as request_error:
                 if retry_num > 5:
                   logging.warning(
-                    'Unable to finalize request: {}'.format(error))
+                    'Unable to finalize request: {}'.format(request_error))
                   break
 
                 time.sleep(.5)
@@ -776,8 +780,8 @@ class Module(object):
         self._module_configuration.runtime == 'python27'):
       url = 'http://localhost:{}'.format(self._external_api_port)
       try:
-        urllib2.urlopen(url, request.Encode())
-      except urllib2.URLError as error:
+        requests_session.post(url, data=request.Encode())
+      except requests.exceptions.RequestException as error:
         logging.warning('Unable to insert log message: {}'.format(error))
     else:
       logservice = apiproxy_stub_map.apiproxy.GetStub('logservice')
