@@ -1,4 +1,4 @@
-""" Implements the App Identity API. """
+""" Implements the LogService API. """
 
 import logging
 import socket
@@ -25,7 +25,7 @@ logger = logging.getLogger('appscale-api-server')
 
 
 class LogService(BaseService):
-    """ Implements the App Identity API. """
+    """ Implements the LogService API. """
     SERVICE_NAME = 'logservice'
 
     # The appropriate messages for each API call.
@@ -33,7 +33,7 @@ class LogService(BaseService):
                'Read': (LogReadRequest, LogReadResponse)}
 
     def __init__(self, project_id, log_server_ip):
-        """ Creates a new AppIdentityService.
+        """ Creates a new LogService.
 
         Args:
             project_id: A string specifying the project ID.
