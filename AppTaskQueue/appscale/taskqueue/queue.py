@@ -21,10 +21,13 @@ from .constants import InvalidQueueConfiguration
 from .constants import RATE_REGEX
 from .task import InvalidTaskInfo
 from .task import Task
+from .task_name import TaskName
+from .tq_lib import TASK_STATES
 from .utils import logger
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api.taskqueue.taskqueue import MAX_QUEUE_NAME_LENGTH
+from google.appengine.ext import db
 
 # This format is used when returning the long name of a queue as
 # part of a leased task. This is to mimic a GCP oddity/bug.
@@ -233,6 +236,16 @@ class PushQueue(Queue):
                          for attr, val in attributes.iteritems())
 
     return '<PushQueue {}: {}>'.format(self.name, attr_str)
+
+  def delete_task(self, task):
+    # TODO: Revoke task ID.
+
+    task_id = '_'.join(['task', self.app, self.name, task.id])
+    item = TaskName.get_by_key_name(task_id)
+    if item:
+      item.state = TASK_STATES.DELETED
+      item.endtime = datetime.datetime.now()
+      db.put(item)
 
 
 class PullQueue(Queue):

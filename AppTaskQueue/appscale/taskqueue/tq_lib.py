@@ -24,6 +24,7 @@ RAND_LENGTH_SIZE = 32
 
 # States of tasks which have been enqueued.
 class TASK_STATES:
+  DELETED = "deleted"
   QUEUED = "queued"
   SUCCESS = "success" 
   FAILED = "failed"
