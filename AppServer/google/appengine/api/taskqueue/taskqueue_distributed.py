@@ -145,13 +145,18 @@ class TaskQueueServiceStub(apiproxy_stub.APIProxyStub):
     """
     for add_request in request.add_request_list():
       task_result = response.add_taskresult()
+
       task_name = None
       if add_request.has_task_name():
         task_name = add_request.task_name()
-      namespaced_name = self._ChooseTaskName(add_request.app_id(),
-                                            add_request.queue_name(),
-                                            user_chosen=task_name)
-      add_request.set_task_name(namespaced_name)
+
+      if not task_name:
+        alphabet = string.ascii_uppercase + string.digits
+        task_name = ''.join(random.choice(alphabet) for _ in range(32))
+
+      namespaced_name = '_'.join(['task', self.__app_id,
+                                  add_request.queue_name(), task_name])
+      add_request.set_task_name(task_name)
       task_result.set_chosen_task_name(namespaced_name)
 
     for add_request, task_result in zip(request.add_request_list(),
