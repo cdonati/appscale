@@ -134,7 +134,7 @@ def test_concurrent_counter(locations):
   datastore = Datastore(locations)
 
   counter_id = uuid.uuid4().hex
-  expected_count = 10
+  expected_count = 20
   yield [increment_counter(datastore, counter_id)
          for _ in range(expected_count)]
   count = yield get_count(datastore, counter_id)
