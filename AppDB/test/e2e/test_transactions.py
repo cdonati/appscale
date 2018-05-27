@@ -138,6 +138,8 @@ def test_concurrent_counter(locations):
   yield [increment_counter(datastore, counter_id)
          for _ in range(expected_count)]
   count = yield get_count(datastore, counter_id)
+  import logging
+  logging.warning('count: {}'.format(count))
   if count != expected_count:
     raise Exception('{} != {}'.format(count, expected_count))
 
