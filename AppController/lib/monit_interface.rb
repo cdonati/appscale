@@ -1,6 +1,7 @@
 #!/usr/bin/ruby -w
 
 # Imports within Ruby's standard libraries.
+require 'json'
 require 'monitor'
 require 'tmpdir'
 
@@ -203,11 +204,17 @@ BOO
   # Returns:
   #   A boolean indicating whether or not the instance is running.
   def self.instance_running?(version_key, port)
-    output = run_cmd("#{MONIT} summary")
-    output.each_line { |entry|
-      next unless entry.include?(version_key)
-      next unless entry.include?(port.to_s)
-      return entry.include?('Running') || entry.include?('Initialized')
+    instance_output = `appscale-running-instances`
+    begin
+      running_instances = JSON.load(instance_output)
+    rescue JSON::ParserError
+      return false
+    end
+
+    return false unless running_instances.respond_to?('each')
+
+    running_instances.each { |revision, running_port|
+      return true if revision.include?(version_key) && running_port == port
     }
     false
   end
@@ -217,17 +224,18 @@ BOO
   # Returns:
   #   A list of application:port records.
   def self.running_appservers
-    appservers = []
-    output = run_cmd("#{MONIT} summary | grep -E 'app___.*(Running|Initializing)'")
-    appservers_raw = output.gsub! /Process 'app___(.*)-([0-9]*).*/, '\1:\2'
-    if appservers_raw
-      appservers_raw.split("\n").each { |appengine|
-        appservers << appengine unless appengine.split(':')[1].nil?
-      }
+    instance_output = `appscale-running-instances`
+    begin
+      running_instances = JSON.load(instance_output)
+    rescue JSON::ParserError
+      return false
     end
 
-    Djinn.log_debug("Found these AppServers processes running: #{appservers}.")
-    appservers
+    Djinn.log_debug("Running AppServer processes: #{running_instances}.")
+
+    return [] unless running_instances.respond_to?('each')
+
+    running_instances
   end
 
   def self.run_cmd(cmd, sleep = false)

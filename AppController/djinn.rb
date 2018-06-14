@@ -4775,9 +4775,10 @@ HOSTS
         end
         info['appservers'].each { |location|
           host, port = location.split(":")
+          port = Integer(port)
           next if @my_private_ip != host
 
-          if Integer(port) < 0
+          if port < 0
             # Start a new instance unless there is one pending.
             if pending_count > 0
               pending_count -= 1
@@ -4812,10 +4813,9 @@ HOSTS
 
     # Check that all the AppServers running are indeed known to the
     # head node.
-    MonitInterface.running_appservers.each { |instance_entry|
+    MonitInterface.running_appservers.each { |revision_key, port|
       # Instance entries are formatted as
       # project-id_service-id_version-id_revision-id:port.
-      revision_key, port = instance_entry.split(':')
       version_key = revision_key.rpartition(VERSION_PATH_SEPARATOR)[0]
       instance_key = [version_key, port].join(':')
 
