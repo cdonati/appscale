@@ -838,7 +838,10 @@ def unregister_instance(instance):
   except NoNodeError:
     pass
 
-  running_instances.remove(instance)
+  try:
+    running_instances.remove(instance)
+  except KeyError:
+    logging.info('unregister_instance: non-existent instance {}'.format(instance))
 
 
 def register_instance(instance):
@@ -1082,6 +1085,7 @@ if __name__ == "__main__":
   projects_manager = GlobalProjectsManager(zk_client)
   thread_pool = ThreadPoolExecutor(MAX_BACKGROUND_WORKERS)
   source_manager = SourceManager(zk_client, thread_pool)
+  source_manager.configure_automatic_fetch(projects_manager)
 
   options.define('private_ip', appscale_info.get_private_ip())
   options.define('syslog_server', appscale_info.get_headnode_ip())

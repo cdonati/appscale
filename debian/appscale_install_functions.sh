@@ -17,7 +17,7 @@ fi
 
 JAVA_VERSION="java-8-openjdk"
 case "${DIST}" in
-    trusty|wheezy) JAVA_VERSION="java-7-openjdk" ;;
+    wheezy) JAVA_VERSION="java-7-openjdk" ;;
 esac
 
 export UNAME_MACHINE=$(uname -m)
@@ -160,6 +160,17 @@ root            soft    nofile           200000
 *               soft    nofile           200000
 *               -       nproc            32768
 EOF
+
+    # On distros with systemd, the open file limit must be adjusted for each
+    # service.
+    if which systemctl > /dev/null && [ "${IN_DOCKER}" != "yes" ]; then
+        mkdir -p /etc/systemd/system/nginx.service.d
+        cat <<EOF > /etc/systemd/system/nginx.service.d/override.conf
+[Service]
+LimitNOFILE=200000
+EOF
+        systemctl daemon-reload
+    fi
 }
 
 installappscaleprofile()
@@ -303,7 +314,7 @@ installgems()
     sleep 1
     gem install json ${GEMOPT} -v 1.8.3
     sleep 1
-    gem install soap4r-ng ${GEMOPT}
+    gem install soap4r-ng ${GEMOPT} -v 2.0.3
     gem install httparty ${GEMOPT} -v 0.14.0
     gem install httpclient ${GEMOPT}
     gem install posixpsutil ${GEMOPT}
