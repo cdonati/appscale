@@ -214,7 +214,8 @@ BOO
     return false unless running_instances.respond_to?('each')
 
     running_instances.each { |revision, running_port|
-      return true if revision.include?(version_key) && running_port == port
+      running_version_key = revision.rpartition(VERSION_PATH_SEPARATOR)[0]
+      return true if version_key == running_version_key && running_port == port
     }
     false
   end
