@@ -762,6 +762,24 @@ class PullQueue(Queue):
       return
 
     if not self._task_mutated_by_id(parameters['id'], parameters['op_id']):
+      select_statement = SimpleStatement("""
+        SELECT lease_expires FROM pull_queue_tasks
+        WHERE app = %(app)s AND queue = %(queue)s AND id = %(id)s
+      """, consistency_level=ConsistencyLevel.SERIAL)
+      parameters = {
+        'app': self.app,
+        'queue': self.name,
+        'id': parameters['id']
+      }
+      try:
+        result = self.db_access.session.execute(select_statement, parameters)[0]
+      except IndexError:
+        raise TaskNotFound('Task does not exist: {}'.format(parameters['id']))
+
+      logger.debug(
+        'Lease already expired on task: {} '
+        '(lease_expires = {})'.format(parameters['id'], result.lease_expires))
+
       raise InvalidLeaseRequest('The task lease has expired.')
 
   def _query_index(self, num_tasks, group_by_tag=False, tag=None):
