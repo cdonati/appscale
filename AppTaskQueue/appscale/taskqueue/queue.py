@@ -756,11 +756,16 @@ class PullQueue(Queue):
       return self._update_lease(parameters, retries_left,
                                 check_lease=check_lease)
 
+    success_message = 'Task {} updated. New ETA: {}'.format(
+      parameters['id'], parameters['new_eta'])
     if result.was_applied:
+      logger.debug(success_message)
       return
 
     if not self._task_mutated_by_id(parameters['id'], parameters['op_id']):
       raise InvalidLeaseRequest('The task lease has expired.')
+
+    logger.debug(success_message)
 
   def _query_index(self, num_tasks, group_by_tag=False, tag=None):
     """ Query the index table for available tasks.
