@@ -4785,12 +4785,23 @@ HOSTS
             else
               no_appservers << version_key
             end
-          elsif not MonitInterface.instance_running?(version_key, port)
-            Djinn.log_warn(
-              "Didn't find the AppServer for #{version_key} at port #{port}.")
-            to_end << "#{version_key}:#{port}"
           else
-            running_instances << "#{version_key}:#{port}"
+            # TODO: Refactor this to reduce number of shell calls.
+            begin
+              instance_running = MonitInterface.instance_running?(
+                version_key, port)
+            rescue FailedShellExec
+              Djinn.log_warn(
+                "Unable to check if #{version_key}:#{port} is running")
+              next
+            end
+
+            if instance_running
+              running_instances << "#{version_key}:#{port}"
+            else
+              Djinn.log_warn("Didn't find #{version_key}:#{port}")
+              to_end << "#{version_key}:#{port}"
+            end
           end
         }
       }
@@ -4813,7 +4824,14 @@ HOSTS
 
     # Check that all the AppServers running are indeed known to the
     # head node.
-    MonitInterface.running_appservers.each { |revision_key, port|
+    begin
+      running_appservers = MonitInterface.running_appservers
+    rescue FailedShellExec
+      Djinn.log_warn('Unable to fetch list of running instances')
+      return
+    end
+
+    running_appservers.each { |revision_key, port|
       # Instance entries are formatted as
       # project-id_service-id_version-id_revision-id:port.
       version_key = revision_key.rpartition(VERSION_PATH_SEPARATOR)[0]

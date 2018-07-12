@@ -201,22 +201,20 @@ BOO
   # Args:
   #   version_key: A string specifying a version key.
   #   port: An integer specifying a port.
-  # Returns:
-  #   A boolean indicating whether or not the instance is running.
+  # Raises:
+  #   FailedShellExec if unable to retrieve running instances.
   def self.instance_running?(version_key, port)
     instance_output = `appscale-running-instances`
-    begin
-      running_instances = JSON.load(instance_output)
-    rescue JSON::ParserError
-      return false
+    success = $?.exitstatus == 0
+    raise FailedShellExec unless success
+
+    instance_output.each_line do |line|
+      revision_key, running_port = line.split
+      running_port = running_port.to_i
+      running_version = revision_key.rpartition(VERSION_PATH_SEPARATOR)[0]
+      return true if running_version == version_key && running_port == port
     end
 
-    return false unless running_instances.respond_to?('each')
-
-    running_instances.each { |revision, running_port|
-      running_version_key = revision.rpartition(VERSION_PATH_SEPARATOR)[0]
-      return true if version_key == running_version_key && running_port == port
-    }
     false
   end
 
@@ -224,17 +222,21 @@ BOO
   # dev_appservers needs to still be monitored by monit.
   # Returns:
   #   A list of application:port records.
+  # Raises:
+  #   FailedShellExec if unable to retrieve running instances.
   def self.running_appservers
     instance_output = `appscale-running-instances`
-    begin
-      running_instances = JSON.load(instance_output)
-    rescue JSON::ParserError
-      return false
+    success = $?.exitstatus == 0
+    raise FailedShellExec unless success
+
+    running_instances = Hash.new
+    instance_output.each_line do |line|
+      revision_key, running_port = line.split
+      running_port = running_port.to_i
+      running_instances[revision_key] = running_port
     end
 
     Djinn.log_debug("Running AppServer processes: #{running_instances}.")
-
-    return [] unless running_instances.respond_to?('each')
 
     running_instances
   end
