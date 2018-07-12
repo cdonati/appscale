@@ -1,7 +1,5 @@
 """ Fetches a list of running AppServer instances on the local machine. """
 
-import json
-
 from appscale.common.monit_interface import MonitOperator, MonitStates
 
 
