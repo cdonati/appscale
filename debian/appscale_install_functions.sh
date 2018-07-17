@@ -17,7 +17,7 @@ fi
 
 JAVA_VERSION="java-8-openjdk"
 case "${DIST}" in
-    trusty|wheezy) JAVA_VERSION="java-7-openjdk" ;;
+    wheezy) JAVA_VERSION="java-7-openjdk" ;;
 esac
 
 export UNAME_MACHINE=$(uname -m)
@@ -163,7 +163,7 @@ EOF
 
     # On distros with systemd, the open file limit must be adjusted for each
     # service.
-    if which systemctl > /dev/null; then
+    if which systemctl > /dev/null && [ "${IN_DOCKER}" != "yes" ]; then
         mkdir -p /etc/systemd/system/nginx.service.d
         cat <<EOF > /etc/systemd/system/nginx.service.d/override.conf
 [Service]
@@ -314,7 +314,7 @@ installgems()
     sleep 1
     gem install json ${GEMOPT} -v 1.8.3
     sleep 1
-    gem install soap4r-ng ${GEMOPT}
+    gem install soap4r-ng ${GEMOPT} -v 2.0.3
     gem install httparty ${GEMOPT} -v 0.14.0
     gem install httpclient ${GEMOPT}
     gem install posixpsutil ${GEMOPT}
@@ -653,16 +653,17 @@ prepdashboard()
 upgradepip()
 {
     # Versions older than Pip 7 did not correctly parse install commands for
-    # local packages with optional dependencies.
+    # local packages with optional dependencies. Versions greater than Pip 9
+    # do not allow replacing packages installed by the distro.
     case "$DIST" in
         wheezy|trusty)
-            pipwrapper pip
+            pipwrapper 'pip<10'
             # Account for the change in the path to the pip binary.
             hash -r
             ;;
         jessie)
             # The system's pip does not allow updating itself.
-            easy_install --upgrade pip
+            easy_install --upgrade 'pip<10.0.0b1'
             hash -r
             ;;
     esac
