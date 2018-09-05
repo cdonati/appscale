@@ -211,7 +211,6 @@ class MonitOperator(object):
     self.last_reload = time.time()
     self._async_client = AsyncHTTPClient()
     self._client = HTTPClient()
-    self._csrf_token = None
 
   @gen.coroutine
   def reload(self, thread_pool=None):
