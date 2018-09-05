@@ -2,10 +2,11 @@ import errno
 import httplib
 import logging
 import os
-import re
+import socket
 import subprocess
 import time
 import urllib
+import uuid
 from datetime import timedelta
 from xml.etree import ElementTree
 
@@ -31,6 +32,7 @@ charge of creating configuration files for the process they want started.
 MONIT = "/usr/bin/monit"
 
 NUM_RETRIES = 10
+DEFAULT_RETRIES = lambda err: not isinstance(err, ProcessNotFound)
 
 SMALL_WAIT = 3
 RETRYING_TIMEOUT = 60
@@ -38,6 +40,11 @@ RETRYING_TIMEOUT = 60
 
 class ProcessNotFound(Exception):
   """ Indicates that Monit has no entry for a process. """
+  pass
+
+
+class MonitUnavailable(Exception):
+  """ Indicates that Monit is not currently accepting commands. """
   pass
 
 
@@ -207,17 +214,19 @@ class MonitOperator(object):
     self._csrf_token = None
 
   @gen.coroutine
-  def reload(self):
+  def reload(self, thread_pool=None):
     """ Groups closely-timed reload operations. """
     if self.reload_future is None or self.reload_future.done():
-      self.reload_future = self._reload()
+      self.reload_future = self._reload(thread_pool)
+    else:
+      logging.info('Using future of active monit reload')
 
     yield self.reload_future
 
   @staticmethod
   def reload_sync():
     """ Reloads Monit. """
-    subprocess.check_call(['monit', 'reload'])
+    subprocess.check_call([MONIT, 'reload'])
 
   @retry_coroutine(retrying_timeout=RETRYING_TIMEOUT)
   def get_entries(self):
@@ -241,8 +250,20 @@ class MonitOperator(object):
     return monit_entries
 
   @retry_coroutine(
+      retrying_timeout=RETRYING_TIMEOUT)
+  def send_command_retry_process(self, process_name, command):
+    """ Sends a command to the Monit API.
+
+    Args:
+      process_name: A string specifying a monit watch.
+      command: A string specifying the command to send.
+    """
+    yield self._send_command(process_name, command)
+
+
+  @retry_coroutine(
     retrying_timeout=RETRYING_TIMEOUT,
-    retry_on_exception=lambda err: not isinstance(err, ProcessNotFound))
+    retry_on_exception=DEFAULT_RETRIES)
   def send_command(self, process_name, command):
     """ Sends a command to the Monit API.
 
@@ -250,28 +271,52 @@ class MonitOperator(object):
       process_name: A string specifying a monit watch.
       command: A string specifying the command to send.
     """
+    yield self._send_command(process_name, command)
+
+  @gen.coroutine
+  def _send_command(self, process_name, command):
     process_url = '{}/{}'.format(self.LOCATION, process_name)
-    params = {'action': command}
-
-    headers = {}
-    if self._csrf_token is not None:
-      headers['Cookie'] = 'securitytoken={}'.format(self._csrf_token)
-      params['securitytoken'] = self._csrf_token
-
+    csrf_token = str(uuid.uuid4())
+    headers = {'Cookie': 'securitytoken={}'.format(csrf_token)}
+    payload = urllib.urlencode({'action': command,
+                                'securitytoken': csrf_token})
     try:
-      yield self._async_client.fetch(
-        process_url, method='POST', body=urllib.urlencode(params),
-        headers=headers)
+      yield self._async_client.fetch(process_url, method='POST',
+                                     headers=headers, body=payload)
     except HTTPError as error:
-      if error.code == httplib.FORBIDDEN:
-        # Retrieve CSRF token (introduced in Monit 5.20).
-        response = yield self._async_client.fetch(process_url)
-        self._csrf_token = re.search('securitytoken=([a-zA-Z0-9]+);',
-                                     response.headers['Set-Cookie']).group(1)
-
       if error.code == httplib.NOT_FOUND:
         raise ProcessNotFound('{} is not monitored'.format(process_name))
       raise
+
+  def send_command_sync(self, process_name, command):
+    """ Sends a command to the Monit API.
+
+    Args:
+      process_name: A string specifying a monit watch.
+      command: A string specifying the command to send.
+    Raises:
+      ProcessNotFound if Monit cannot find the specified process_name.
+      MonitUnavailable if Monit is not accepting commands.
+    """
+    process_url = '/'.join([self.LOCATION, process_name])
+    csrf_token = str(uuid.uuid4())
+    headers = {'Cookie': 'securitytoken={}'.format(csrf_token)}
+    payload = urllib.urlencode({'action': command,
+                                'securitytoken': csrf_token})
+
+    try:
+      self._client.fetch(process_url, method='POST',
+                         headers=headers, body=payload)
+    except HTTPError as error:
+      if error.code == httplib.NOT_FOUND:
+        raise ProcessNotFound('{} is not monitored'.format(process_name))
+
+      if error.code == httplib.SERVICE_UNAVAILABLE:
+        raise MonitUnavailable('Monit is not currently available')
+
+      raise
+    except socket.error:
+      raise MonitUnavailable('Monit is not currently available')
 
   @gen.coroutine
   def wait_for_status(self, process_name, acceptable_states):
@@ -349,10 +394,13 @@ class MonitOperator(object):
   @retry_coroutine(
     retrying_timeout=RETRYING_TIMEOUT,
     retry_on_exception=[subprocess.CalledProcessError])
-  def _reload(self):
+  def _reload(self, thread_pool):
     """ Reloads Monit. """
     time_since_reload = time.time() - self.last_reload
     wait_time = max(self.RELOAD_COOLDOWN - time_since_reload, 0)
     yield gen.sleep(wait_time)
     self.last_reload = time.time()
-    subprocess.check_call(['monit', 'reload'])
+    if thread_pool:
+      yield thread_pool.submit(subprocess.check_call, [MONIT, 'reload'])
+    else:
+      subprocess.check_call([MONIT, 'reload'])

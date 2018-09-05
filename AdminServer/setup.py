@@ -7,6 +7,8 @@ install_requires = [
   'kazoo',
   'psutil',
   'PyYaml',
+  'requests-unixsocket',
+  'six',
   'SOAPpy',
   'tabulate',
   'tornado',
@@ -40,6 +42,8 @@ setup(
     'appscale-admin=appscale.admin:main',
     'appscale-running-instances=appscale.admin.running_instances:main',
     'appscale-stop-instance=appscale.admin.instance_manager.stop_instance:main',
-    'appscale-stop-services=appscale.admin.stop_services:main'
+    'appscale-stop-services=appscale.admin.stop_services:main',
+    'appscale-stop-service=appscale.admin.stop_services:stop_service',
+    'appscale-start-service=appscale.admin.stop_services:start_service'
   ]}
 )
