@@ -214,7 +214,7 @@ BOO
     instance_output.each_line do |line|
       revision_key, running_port = line.split
       running_port = running_port.to_i
-      running_version = revision_key.rpartition(VERSION_PATH_SEPARATOR)[0]
+      running_version = revision_key.rpartition(Djinn::VERSION_PATH_SEPARATOR)[0]
       return true if running_version == version_key && running_port == port
     end
 
