@@ -124,6 +124,9 @@ MIN_LOAD_THRESHOLD = 0.7
 # The number of seconds to wait for an AppServer instance to start.
 START_APP_TIMEOUT = 180
 
+# The exit code that indicates the data layout version is unexpected.
+INVALID_VERSION_EXIT_CODE = 64
+
 # Djinn (interchangeably known as 'the AppController') automatically
 # configures and deploys all services for a single node. It relies on other
 # Djinns or the AppScale Tools to tell it what services (roles) it should
@@ -3261,10 +3264,23 @@ class Djinn
 
     Djinn.log_info('Ensuring data layout version is correct')
     layout_script = `which appscale-data-layout`.chomp
-    unless system("#{layout_script} --db-type cassandra > /dev/null 2>&1")
-      HelperFunctions.log_and_crash(
-        'Unexpected data layout version. Please run "appscale upgrade".')
-    end
+    retries = 10
+    loop {
+      output = `#{layout_script} --db-type cassandra 2>&1`
+      if $?.exitstatus == 0
+        break
+      elsif $?.exitstatus == INVALID_VERSION_EXIT_CODE
+        HelperFunctions.log_and_crash(
+          'Unexpected data layout version. Please run "appscale upgrade".')
+      elsif retries.zero?
+        HelperFunctions.log_and_crash(
+          'Exceeded retries while trying to check data layout.')
+      else
+        Djinn.log_warn("Error while checking data layout:\n#{output}")
+        sleep(SMALL_WAIT)
+      end
+      retries -= 1
+    }
 
     if my_node.is_db_master? or my_node.is_db_slave?
       @state = "Starting UAServer"
@@ -3835,23 +3851,15 @@ class Djinn
       Djinn.log_run("ssh-keygen -R #{dest_node.public_ip}")
     end
 
-    # Get the username to use for ssh (depends on environments).
-    if ["ec2", "euca"].include?(@options['infrastructure'])
-      # Add deployment key to remote instance's authorized_keys.
-      user_name = "ubuntu"
-      enable_root_login(ip, ssh_key, user_name)
-    elsif @options['infrastructure'] == "gce"
-      # Since GCE v1beta15, SSH keys don't immediately get injected to newly
-      # spawned VMs. It takes around 30 seconds, so sleep a bit longer to be
-      # sure.
-      Djinn.log_debug("Waiting for SSH keys to get injected to #{ip}.")
-      Kernel.sleep(60)
-
-      enable_root_login(ip, ssh_key, 'ubuntu')
-
-    elsif @options['infrastructure'] == 'azure'
-      user_name = 'azureuser'
-      enable_root_login(ip, ssh_key, user_name)
+    if is_cloud?
+      if @options['infrastructure'] == 'gce'
+        # Since GCE v1beta15, SSH keys don't immediately get injected to newly
+        # spawned VMs. It takes around 30 seconds, so sleep a bit longer to be
+        # sure.
+        Djinn.log_debug("Waiting for SSH keys to get injected to #{ip}.")
+        Kernel.sleep(60)
+      end
+      enable_root_login(ip, ssh_key)
     end
 
     Kernel.sleep(SMALL_WAIT)
@@ -3890,8 +3898,24 @@ class Djinn
 
   # Logs into the named host and alters its ssh configuration to enable the
   # root user to directly log in.
-  def enable_root_login(ip, ssh_key, user_name)
+  def enable_root_login(ip, ssh_key)
     options = '-o StrictHostkeyChecking=no -o NumberOfPasswordPrompts=0'
+
+    # Determine which user to login as.
+    output = `ssh -i #{ssh_key} #{options} 2>&1 root@#{ip} true`
+    match = /Please login as the user "(.+)" rather than the user "root"/.match(output)
+    if match.nil?
+      if @options['infrastructure'] == 'azure'
+        user_name = 'azureuser'
+      else
+        user_name = 'ubuntu'
+      end
+      Djinn.log_warn(
+        "Unable to find out what user to login as. Using #{user_name}")
+    else
+      user_name = match[1]
+    end
+
     backup_keys = 'sudo cp -p /root/.ssh/authorized_keys ' \
         '/root/.ssh/authorized_keys.old'
     Djinn.log_run("ssh -i #{ssh_key} #{options} 2>&1 #{user_name}@#{ip} " \
@@ -4459,7 +4483,7 @@ HOSTS
   end
 
   def stop_memcache
-    MonitInterface.stop(:memcached)
+    MonitInterface.stop(:memcached) if MonitInterface.is_running?(:memcached)
   end
 
   def start_ejabberd
@@ -5244,6 +5268,17 @@ HOSTS
       return 0
     end
 
+    imc = InfrastructureManagerClient.new(@@secret)
+    begin
+      imc.terminate_instances(@options, node_to_remove.instance_id)
+    rescue FailedNodeException
+      Djinn.log_warn("Failed to call terminate_instances")
+      return 0
+    rescue AppScaleException
+      Djinn.log_warn("Failed to terminate #{node_to_remove}. Not removing it.")
+      return 0
+    end
+
     remove_node_from_local_and_zookeeper(node_to_remove.private_ip)
 
     to_remove = {}
@@ -5263,14 +5298,6 @@ HOSTS
         @app_info_map[version_key]['appservers'].delete(location)
       }
     }
-
-    imc = InfrastructureManagerClient.new(@@secret)
-    begin
-      imc.terminate_instances(@options, node_to_remove.instance_id)
-    rescue FailedNodeException
-      Djinn.log_warn("Failed to call terminate_instances")
-      return 0
-    end
 
     @last_scaling_time = Time.now.to_i
     return 1
@@ -6008,7 +6035,7 @@ HOSTS
   #   app: The application ID whose XMPPReceiver we should shut down.
   def stop_xmpp_for_app(app)
     Djinn.log_info("Shutting down xmpp receiver for app: #{app}")
-    MonitInterface.stop("xmpp-#{app}")
+    MonitInterface.stop("xmpp-#{app}") if MonitInterface.is_running?("xmpp-#{app}")
     Djinn.log_info("Done shutting down xmpp receiver for app: #{app}")
   end
 
