@@ -7,13 +7,15 @@ from tornado import gen
 from tornado.web import MissingArgumentError, RequestHandler
 
 from appscale.common.constants import HTTPCodes
+
+from appscale.taskqueue.constants import QueueNotFound
 from appscale.taskqueue.statistics import service_stats, stats_lock, REST_API
 
 from .constants import TaskNotFound
 from .task import InvalidTaskInfo, Task, TASK_FIELDS
 from .queue import (InvalidLeaseRequest,
                     LONG_QUEUE_FORM,
-                    PullQueue,
+                    PullQueue, PostgresPullQueue,
                     QUEUE_FIELDS,
                     TransientError)
 
@@ -92,12 +94,13 @@ class RESTQueue(TrackedRequestHandler):
       project: A string containing an application ID.
       queue: A string containing a queue name.
     """
-    queue = self.queue_handler.get_queue(project, queue)
-    if queue is None:
+    try:
+      queue = self.queue_handler.get_queue(project, queue)
+    except QueueNotFound:
       write_error(self, HTTPCodes.NOT_FOUND, 'Queue not found.')
       return
 
-    if not isinstance(queue, PullQueue):
+    if not isinstance(queue, (PullQueue, PostgresPullQueue)):
       write_error(self, HTTPCodes.BAD_REQUEST,
                   'The REST API is only applicable to pull queues.')
       return
