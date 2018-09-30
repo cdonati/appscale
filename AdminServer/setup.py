@@ -37,7 +37,8 @@ setup(
   namespace_packages=['appscale'],
   packages=['appscale',
             'appscale.admin',
-            'appscale.admin.instance_manager'],
+            'appscale.admin.instance_manager',
+            'appscale.admin.routing'],
   entry_points={'console_scripts': [
     'appscale-admin=appscale.admin:main',
     'appscale-running-instances=appscale.admin.running_instances:main',
@@ -45,5 +46,6 @@ setup(
     'appscale-stop-services=appscale.admin.stop_services:main',
     'appscale-stop-service=appscale.admin.stop_services:stop_service',
     'appscale-start-service=appscale.admin.stop_services:start_service'
-  ]}
+  ]},
+  package_data={'appscale.admin.routing': ['templates/*']}
 )
