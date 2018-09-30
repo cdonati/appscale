@@ -20,6 +20,7 @@ from appscale.common import (
 from appscale.common.constants import SCHEMA_CHANGE_TIMEOUT
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.cassandra_env.cassandra_interface import KEYSPACE
+from appscale.datastore.cassandra_env.retry_policies import BASIC_RETRIES
 from cassandra import (
   InvalidRequest,
   OperationTimedOut
@@ -34,6 +35,7 @@ from .constants import (
 )
 from .queue import (
   InvalidLeaseRequest,
+  PostgresPullQueue,
   PullQueue,
   PushQueue,
   TransientError
@@ -61,6 +63,53 @@ from google.appengine.runtime import apiproxy_errors
 
 # A policy that does not retry statements.
 NO_RETRIES = FallthroughRetryPolicy()
+
+
+def rebuild_task_indexes(session):
+  """ Creates index entries for all pull queue tasks.
+
+  Args:
+    session: A cassandra-driver session.
+  """
+  logger.info('Rebuilding task indexes')
+  batch_size = 100
+  total_tasks = 0
+  app = ''
+  queue = ''
+  id_ = ''
+  while True:
+    results = session.execute("""
+      SELECT app, queue, id, lease_expires, tag FROM pull_queue_tasks
+      WHERE token(app, queue, id) > token(%(app)s, %(queue)s, %(id)s)
+      LIMIT {}
+    """.format(batch_size), {'app': app, 'queue': queue, 'id': id_})
+    results_list = list(results)
+    for result in results_list:
+      parameters = {'app': result.app, 'queue': result.queue,
+                    'eta': result.lease_expires, 'id': result.id,
+                    'tag': result.tag or ''}
+
+      insert_eta_index = SimpleStatement("""
+        INSERT INTO pull_queue_eta_index (app, queue, eta, id, tag)
+        VALUES (%(app)s, %(queue)s, %(eta)s, %(id)s, %(tag)s)
+      """, retry_policy=BASIC_RETRIES)
+      session.execute(insert_eta_index, parameters)
+
+      insert_tag_index = SimpleStatement("""
+        INSERT INTO pull_queue_tags_index (app, queue, tag, eta, id)
+        VALUES (%(app)s, %(queue)s, %(tag)s, %(eta)s, %(id)s)
+      """, retry_policy=BASIC_RETRIES)
+      session.execute(insert_tag_index, parameters)
+
+    total_tasks += len(results_list)
+    if len(results_list) < batch_size:
+      break
+
+    app = results_list[-1].app
+    queue = results_list[-1].queue
+    id_ = results_list[-1].id
+
+  logger.info('Created entries for {} tasks'.format(total_tasks))
 
 
 def create_pull_queue_tables(cluster, session):
@@ -107,16 +156,31 @@ def create_pull_queue_tables(cluster, session):
       time.sleep(SCHEMA_CHANGE_TIMEOUT)
       raise
 
-  logger.info('Trying to create pull_queue_tasks_index')
+  rebuild_indexes = False
+  if ('pull_queue_tasks_index' in keyspace_metadata.tables and
+      'tag_exists' in keyspace_metadata.tables['pull_queue_tasks_index'].columns):
+    rebuild_indexes = True
+    logger.info('Dropping outdated pull_queue_tags index')
+    session.execute('DROP INDEX IF EXISTS pull_queue_tags',
+                    timeout=SCHEMA_CHANGE_TIMEOUT)
+
+    logger.info('Dropping outdated pull_queue_tag_exists index')
+    session.execute('DROP INDEX IF EXISTS pull_queue_tag_exists',
+                    timeout=SCHEMA_CHANGE_TIMEOUT)
+
+    logger.info('Dropping outdated pull_queue_tasks_index table')
+    session.execute('DROP TABLE pull_queue_tasks_index',
+                    timeout=SCHEMA_CHANGE_TIMEOUT)
+
+  logger.info('Trying to create pull_queue_eta_index')
   create_index_table = """
-    CREATE TABLE IF NOT EXISTS pull_queue_tasks_index (
+    CREATE TABLE IF NOT EXISTS pull_queue_eta_index (
       app text,
       queue text,
       eta timestamp,
       id text,
       tag text,
-      tag_exists boolean,
-      PRIMARY KEY ((app, queue, eta), id)
+      PRIMARY KEY ((app, queue, eta, id))
     ) WITH gc_grace_seconds = 120
   """
   statement = SimpleStatement(create_index_table, retry_policy=NO_RETRIES)
@@ -124,40 +188,36 @@ def create_pull_queue_tables(cluster, session):
     session.execute(statement, timeout=SCHEMA_CHANGE_TIMEOUT)
   except OperationTimedOut:
     logger.warning(
-      'Encountered an operation timeout while creating pull_queue_tasks_index.'
+      'Encountered an operation timeout while creating pull_queue_eta_index.'
       ' Waiting {} seconds for schema to settle.'
         .format(SCHEMA_CHANGE_TIMEOUT))
     time.sleep(SCHEMA_CHANGE_TIMEOUT)
     raise
 
-  logger.info('Trying to create pull_queue_tags index')
-  create_index = """
-    CREATE INDEX IF NOT EXISTS pull_queue_tags ON pull_queue_tasks_index (tag);
+  logger.info('Trying to create pull_queue_tags_index')
+  create_tags_index_table = """
+    CREATE TABLE IF NOT EXISTS pull_queue_tags_index (
+      app text,
+      queue text,
+      tag text,
+      eta timestamp,
+      id text,
+      PRIMARY KEY ((app, queue, tag, eta, id))
+    ) WITH gc_grace_seconds = 120
   """
+  statement = SimpleStatement(create_tags_index_table, retry_policy=NO_RETRIES)
   try:
-    session.execute(create_index, timeout=SCHEMA_CHANGE_TIMEOUT)
-  except (OperationTimedOut, InvalidRequest):
+    session.execute(statement, timeout=SCHEMA_CHANGE_TIMEOUT)
+  except OperationTimedOut:
     logger.warning(
-      'Encountered error while creating pull_queue_tags index. Waiting {} '
-      'seconds for schema to settle.'.format(SCHEMA_CHANGE_TIMEOUT))
+      'Encountered an operation timeout while creating pull_queue_tags_index.'
+      ' Waiting {} seconds for schema to settle.'
+        .format(SCHEMA_CHANGE_TIMEOUT))
     time.sleep(SCHEMA_CHANGE_TIMEOUT)
     raise
 
-  # This additional index is needed for groupByTag=true,tag=None queries
-  # because Cassandra can only do '=' queries on secondary indices.
-  logger.info('Trying to create pull_queue_tag_exists index')
-  create_index = """
-    CREATE INDEX IF NOT EXISTS pull_queue_tag_exists
-    ON pull_queue_tasks_index (tag_exists);
-  """
-  try:
-    session.execute(create_index, timeout=SCHEMA_CHANGE_TIMEOUT)
-  except (OperationTimedOut, InvalidRequest):
-    logger.warning(
-      'Encountered error while creating pull_queue_tag_exists index. '
-      'Waiting {} seconds for schema to settle.'.format(SCHEMA_CHANGE_TIMEOUT))
-    time.sleep(SCHEMA_CHANGE_TIMEOUT)
-    raise
+  if rebuild_indexes:
+    rebuild_task_indexes(session)
 
   logger.info('Trying to create pull_queue_leases')
   create_leases_table = """
@@ -286,7 +346,7 @@ class DistributedTaskQueue():
 
       stats_response = response.add_queuestats()
 
-      if isinstance(queue, PullQueue):
+      if isinstance(queue, (PullQueue, PostgresPullQueue)):
         num_tasks = queue.total_tasks()
         oldest_eta = queue.oldest_eta()
       else:
@@ -469,9 +529,10 @@ class DistributedTaskQueue():
       if (add_request.has_mode() and
           add_request.mode() == taskqueue_service_pb.TaskQueueMode.PULL):
         queue = self.get_queue(add_request.app_id(), add_request.queue_name())
-        if not isinstance(queue, PullQueue):
+        if not isinstance(queue, (PullQueue, PostgresPullQueue)):
           task_result.set_result(TaskQueueServiceError.INVALID_QUEUE_MODE)
           error_found = True
+          continue
 
         encoded_payload = base64.urlsafe_b64encode(add_request.body())
         task_info = {'payloadBase64': encoded_payload,
