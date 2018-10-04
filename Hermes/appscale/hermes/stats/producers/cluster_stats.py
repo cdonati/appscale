@@ -5,6 +5,7 @@ import sys
 import time
 
 import random
+import socket
 
 from appscale.common import appscale_info
 from tornado import gen, httpclient
@@ -17,7 +18,8 @@ from appscale.hermes.stats import converter
 from appscale.hermes.stats.constants import STATS_REQUEST_TIMEOUT
 from appscale.hermes.stats.producers import (
   proxy_stats, node_stats, process_stats, rabbitmq_stats,
-  taskqueue_stats)
+  taskqueue_stats, cassandra_stats
+)
 
 # Allow tornado to fetch up to 100 concurrent requests
 httpclient.AsyncHTTPClient.configure(SimpleAsyncHTTPClient, max_clients=100)
@@ -112,21 +114,15 @@ class ClusterStatsSource(object):
     )
     async_client = httpclient.AsyncHTTPClient()
 
-    # Send Future object to coroutine and suspend till result is ready
-    response = yield async_client.fetch(request, raise_error=False)
-    if response.code >= 400:
-      if response.body:
-        logging.error(
-          u"Failed to get stats from {url} ({code} {reason}, BODY: {body})"
-          .format(url=url, code=response.code, reason=response.reason,
-                  body=response.body)
-        )
-      else:
-        logging.error(
-          u"Failed to get stats from {url} ({code} {reason})"
-          .format(url=url, code=response.code, reason=response.reason)
-        )
-      raise gen.Return(u"{} {}".format(response.code, response.reason))
+    try:
+      # Send Future object to coroutine and suspend till result is ready
+      response = yield async_client.fetch(request)
+    except (socket.error, httpclient.HTTPError) as err:
+      msg = u"Failed to get stats from {url} ({err})".format(url=url, err=err)
+      if hasattr(err, 'response') and err.response and err.response.body:
+        msg += u"\nBODY: {body}".format(body=err.response.body)
+      logging.error(msg)
+      raise gen.Return(unicode(err))
 
     try:
       snapshot = json.loads(response.body)
@@ -138,6 +134,10 @@ class ClusterStatsSource(object):
 
 def get_random_lb_node():
   return [random.choice(appscale_info.get_load_balancer_ips())]
+
+
+def get_random_db_node():
+  return [random.choice(appscale_info.get_db_ips())]
 
 
 cluster_nodes_stats = ClusterStatsSource(
@@ -180,4 +180,11 @@ cluster_push_queues_stats = ClusterStatsSource(
   method_path='stats/local/push_queues',
   stats_model=rabbitmq_stats.PushQueueStatsSnapshot,
   local_stats_source=rabbitmq_stats.PushQueueStatsSource
+)
+
+cluster_cassandra_stats = ClusterStatsSource(
+  ips_getter=get_random_db_node,
+  method_path='stats/local/cassandra',
+  stats_model=cassandra_stats.CassandraStatsSnapshot,
+  local_stats_source=cassandra_stats.CassandraStatsSource
 )
