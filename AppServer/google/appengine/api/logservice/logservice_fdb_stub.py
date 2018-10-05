@@ -64,11 +64,13 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
 
   _MIN_COMMIT_INTERVAL = 5
 
-  def __init__(self, fdb, request_data):
+  def __init__(self, fdb, request_data=None):
     """Initializer.
 
     Args:
       fdb: An open FoundationDB database.
+      request_data: A apiproxy_stub.RequestData instance used to look up state
+        associated with the request that generated an API call.
     """
 
     super(LogServiceStub, self).__init__('logservice',
