@@ -1,11 +1,12 @@
 """Stub implementation for Log Service that uses sqlite."""
 
-import fdb
 import time
 
-import sqlite3
+import fdb
+from fdb.tuple import Versionstamp
 
 from google.appengine.api import apiproxy_stub
+from google.appengine.api import appinfo
 from google.appengine.api.logservice import log_service_pb
 from google.appengine.runtime import apiproxy_errors
 
@@ -51,7 +52,7 @@ CREATE TABLE IF NOT EXISTS AppLogs (
 """
 
 
-class LogServiceStub(apiproxy_stub.APIProxyStub):
+class LogServiceFDB(apiproxy_stub.APIProxyStub):
   """Python stub for Log Service service."""
 
   THREADSAFE = True
@@ -68,18 +69,14 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
     """Initializer.
 
     Args:
-      fdb: An open FoundationDB database.
+      log_service: An open FoundationDB database.
       request_data: A apiproxy_stub.RequestData instance used to look up state
         associated with the request that generated an API call.
     """
 
-    super(LogServiceStub, self).__init__('logservice',
-                                         request_data=request_data)
+    super(LogServiceFDB, self).__init__('logservice',
+                                        request_data=request_data)
     self._request_id_to_request_row_id = {}
-    self._conn = sqlite3.connect(logs_path, check_same_thread=False)
-    self._conn.row_factory = sqlite3.Row
-    self._conn.execute(_REQUEST_LOG_CREATE)
-    self._conn.execute(_APP_LOG_CREATE)
     self._last_commit = time.time()
 
     self._db = fdb
@@ -96,10 +93,25 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
       self._conn.commit()
       self._last_commit = now
 
-  @apiproxy_stub.Synchronized
+  @fdb.transactional
+  def _start_request(self, tr, project_id, request_id, start_time, **kwargs):
+    metadata = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    tr[metadata.pack((request_id, 'start_time'))] = fdb.tuple.pack(
+      (start_time,))
+    for key in ['service_id', 'version_id', 'ip', 'nickname', 'user_agent',
+                'host', 'method', 'resource', 'http_version']:
+      if key in kwargs:
+        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
+
+    start_index = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'start_time_index'))
+    tr[start_index.pack(start_time, request_id)] = fdb.tuple.pack(
+      (start_time,))
+
   def start_request(self, request_id, user_request_id, ip, app_id, version_id,
                     nickname, user_agent, host, method, resource, http_version,
-                    start_time=None):
+                    start_time=None, module=None):
     """Starts logging for a request.
 
     Each start_request call must be followed by a corresponding end_request call
@@ -125,19 +137,30 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
       http_version: A string containing the HTTP version of this request.
       start_time: An int containing the start time in micro-seconds. If unset,
         the current time is used.
+      module: The string name of the module handling this request.
     """
+
+    # In the SDK, the request ID value used during logservice API requests
+    # (user_request_id, accessible via env['REQUEST_LOG_ID']) is different than
+    # the request ID value used during API server calls. The same value is used
+    # for both cases in this implementation.
+    del user_request_id
+
+    if module is None:
+      module = appinfo.DEFAULT_MODULE
+
+    if version_id is None:
+      version_id = 'NO-VERSION'
+
     major_version_id = version_id.split('.', 1)[0]
     if start_time is None:
       start_time = self._get_time_usec()
-    cursor = self._conn.execute(
-        'INSERT INTO RequestLogs (user_request_id, ip, app_id, version_id, '
-        'nickname, user_agent, host, start_time, method, resource, '
-        'http_version)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (
-            user_request_id, ip, app_id, major_version_id, nickname, user_agent,
-            host, start_time, method, resource, http_version))
-    self._request_id_to_request_row_id[request_id] = cursor.lastrowid
-    self._maybe_commit()
+
+    kwargs = {'service_id': module, 'version_id': major_version_id, 'ip': ip,
+              'nickname': nickname, 'user_agent': user_agent, 'host': host,
+              'method': method, 'resource': resource,
+              'http_version': http_version}
+    self._start_request(self._db, app_id, request_id, start_time, **kwargs)
 
   @apiproxy_stub.Synchronized
   def end_request(self, request_id, status, response_size, end_time=None):
