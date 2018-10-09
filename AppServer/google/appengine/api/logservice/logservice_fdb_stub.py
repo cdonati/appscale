@@ -65,6 +65,9 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
 
   _MIN_COMMIT_INTERVAL = 5
 
+  # The max number of bytes for each chunk in a log line.
+  _CHUNK_SIZE = 10000
+
   def __init__(self, fdb, request_data=None):
     """Initializer.
 
@@ -162,11 +165,26 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
               'http_version': http_version}
     self._start_request(self._db, app_id, request_id, start_time, **kwargs)
 
-  @apiproxy_stub.Synchronized
-  def end_request(self, request_id, status, response_size, end_time=None):
+  @fdb.transactional
+  def _end_request(self, tr, project_id, request_id, end_time, **kwargs):
+    metadata = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    tr[metadata.pack((request_id, 'end_time'))] = fdb.tuple.pack(
+      (end_time,))
+    for key in ['status', 'response_size']:
+      if key in kwargs:
+        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
+
+    end_index = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'end_time_index'))
+    tr[end_index.pack(end_time, request_id)] = fdb.tuple.pack((end_time,))
+
+  def end_request(self, project_id, request_id, status, response_size,
+                  end_time=None):
     """Ends logging for a request.
 
     Args:
+      project_id: A string specifying the request's project ID.
       request_id: A unique string identifying the request associated with the
         API call.
       status: An int containing the HTTP status code for this request.
@@ -174,44 +192,107 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
       end_time: An int containing the end time in micro-seconds. If unset, the
         current time is used.
     """
-    row_id = self._request_id_to_request_row_id.pop(request_id, None)
-    if not row_id:
-      return
     if end_time is None:
       end_time = self._get_time_usec()
-    self._conn.execute(
-        'UPDATE RequestLogs SET '
-        'status = ?, response_size = ?, end_time = ?, finished = 1 '
-        'WHERE id = ?', (
-            status, response_size, end_time, row_id))
-    self._maybe_commit()
+
+    kwargs = {'status': status, 'response_size': response_size}
+    self._end_request(self._db, project_id, request_id, end_time, **kwargs)
 
   def _Dynamic_Flush(self, request, unused_response, request_id):
     """Writes application-level log messages for a request."""
     group = log_service_pb.UserAppLogGroup(request.logs())
     self._insert_app_logs(request_id, group.log_line_list())
 
-  @apiproxy_stub.Synchronized
-  def _insert_app_logs(self, request_id, log_lines):
-    row_id = self._request_id_to_request_row_id.get(request_id)
-    if row_id is None:
-      return
-    new_app_logs = (self._tuple_from_log_line(row_id, log_line)
-                    for log_line in log_lines)
-    self._conn.executemany(
-        'INSERT INTO AppLogs (request_id, timestamp, level, message) VALUES '
-        '(?, ?, ?, ?)', new_app_logs)
-    self._maybe_commit()
+  @fdb.transactional
+  def _insert_app_logs(self, tr, project_id, request_id, log_lines):
+    app_logs_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'app_logs'))
+    for line in log_lines:
+      tr[app_logs_dir.pack((request_id, line.timestamp_usec(), 'level'))] = \
+        line.level()
+      # TODO: break message into chunks.
+      tr[app_logs_dir.pack((request_id, line.timestamp_usec(), 'message'))] = \
+        line.message()
 
-  @staticmethod
-  def _tuple_from_log_line(row_id, log_line):
-    message = log_line.message()
-    if isinstance(message, str):
-      message = message.decode('utf-8')
-    return (row_id, log_line.timestamp_usec(), log_line.level(), message)
+  @fdb.transactional
+  def _get_logs_by_id(self, tr, project_id, request_ids, include_app_logs):
+    metadata_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    app_logs_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'app_logs'))
+
+    request_logs = []
+    for request_id in request_ids:
+      metadata = tr[metadata_dir.range((request_id,))]
+      if not metadata:
+        continue
+
+      request_log = log_service_pb.RequestLog()
+      request_log.set_app_id(project_id)
+      request_log.set_request_id(request_id)
+      setters = {
+        'start_time': request_log.set_start_time,
+        'end_time': request_log.set_end_time,
+        'service_id': request_log.set_module_id,
+        'version_id': request_log.set_version_id,
+        'ip': request_log.set_ip,
+        'nickname': request_log.set_nickname,
+        'user_agent': request_log.set_user_agent,
+        'host': request_log.set_host,
+        'method': request_log.set_method,
+        'resource': request_log.set_resource,
+        'http_version': request_log.set_http_version,
+        'status': request_log.set_status,
+        'response_size': request_log.set_response_size
+      }
+      for field, value in metadata:
+        setters[field](value)
+
+      # TODO: account for app log chunks
+      app_logs = tr[app_logs_dir.range((request_id))]
+
+      request_logs.append(request_log)
+
+    return request_logs
+
+  @fdb.transactional
+  def _query(self, tr, request):
+    if request.has_count():
+      count = request.count()
+    else:
+      count = self._DEFAULT_READ_COUNT
+
+    if request.has_start_time():
+      filters.append(('start_time >= ?', request.start_time()))
+    if request.has_end_time():
+      filters.append(('end_time < ?', request.end_time()))
+    if request.has_offset():
+      filters.append(('RequestLogs.id < ?', int(request.offset().request_id())))
+    if not request.include_incomplete():
+      filters.append(('finished = ?', 1))
+    if request.has_minimum_log_level():
+      filters.append(('AppLogs.level >= ?', request.minimum_log_level()))
+
+    if request.server_version(0).has_server_id():
+      server_version = ':'.join([request.server_version(0).server_id(),
+                                 request.server_version(0).version_id()])
+    else:
+      server_version = request.server_version(0).version_id()
+    filters = [('version_id = ?', server_version)]
+
+    if request.has_minimum_log_level():
+      query = ('SELECT * FROM RequestLogs INNER JOIN AppLogs ON '
+               'RequestLogs.id = AppLogs.request_id%s GROUP BY '
+               'RequestLogs.id ORDER BY id DESC')
+    else:
+      query = 'SELECT * FROM RequestLogs%s ORDER BY id DESC'
 
   @apiproxy_stub.Synchronized
-  def _Dynamic_Read(self, request, response, request_id):
+  def _Dynamic_Read(self, request, response, project_id, request_id):
+
+    # The current request ID is not required to satisfy the query.
+    del request_id
+
     if (request.server_version_size() < 1 and
         request.version_id_size() < 1 and
         request.request_id_size() < 1):
@@ -229,30 +310,16 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
           log_service_pb.LogServiceError.INVALID_REQUEST)
 
     if request.request_id_size():
-      for request_id in request.request_id_list():
-        log_row = self._conn.execute(
-            'SELECT * FROM RequestLogs WHERE user_request_id = ?',
-            (request_id,)).fetchone()
-        if log_row:
-          log = response.add_log()
-          self._fill_request_log(log_row, log, request.include_app_logs())
+      logs = self._get_logs_by_id(
+        self._db, project_id, request.request_id_list(),
+        request.include_app_logs())
+      for request_log in logs:
+        log = response.add_log()
+        log.MergeFrom(request_log)
+
       return
 
-    if request.has_count():
-      count = request.count()
-    else:
-      count = self._DEFAULT_READ_COUNT
-    filters = self._extract_read_filters(request)
-    filter_string = ' WHERE %s' % ' and '.join(f[0] for f in filters)
-
-    if request.has_minimum_log_level():
-      query = ('SELECT * FROM RequestLogs INNER JOIN AppLogs ON '
-               'RequestLogs.id = AppLogs.request_id%s GROUP BY '
-               'RequestLogs.id ORDER BY id DESC')
-    else:
-      query = 'SELECT * FROM RequestLogs%s ORDER BY id DESC'
-    logs = self._conn.execute(query % filter_string,
-                              tuple(f[1] for f in filters)).fetchmany(count + 1)
+    logs = self._query_logs(self._db, request)
     for log_row in logs[:count]:
       log = response.add_log()
       self._fill_request_log(log_row, log, request.include_app_logs())
@@ -297,28 +364,6 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
         line.set_time(message['timestamp'])
         line.set_level(message['level'])
         line.set_log_message(message['message'])
-
-  @staticmethod
-  def _extract_read_filters(request):
-
-
-    if request.server_version(0).has_server_id():
-      server_version = ':'.join([request.server_version(0).server_id(),
-                                 request.server_version(0).version_id()])
-    else:
-      server_version = request.server_version(0).version_id()
-    filters = [('version_id = ?', server_version)]
-    if request.has_start_time():
-      filters.append(('start_time >= ?', request.start_time()))
-    if request.has_end_time():
-      filters.append(('end_time < ?', request.end_time()))
-    if request.has_offset():
-      filters.append(('RequestLogs.id < ?', int(request.offset().request_id())))
-    if not request.include_incomplete():
-      filters.append(('finished = ?', 1))
-    if request.has_minimum_log_level():
-      filters.append(('AppLogs.level >= ?', request.minimum_log_level()))
-    return filters
 
   def _Dynamic_SetStatus(self, unused_request, unused_response,
                          unused_request_id):
