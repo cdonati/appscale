@@ -79,8 +79,6 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
 
     super(LogServiceFDB, self).__init__('logservice',
                                         request_data=request_data)
-    self._request_id_to_request_row_id = {}
-    self._last_commit = time.time()
 
     self._db = fdb
     self._fdb_logs_dir = self._db.directory.create_or_open(
@@ -89,12 +87,6 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
   @staticmethod
   def _get_time_usec():
     return int(time.time() * 1e6)
-
-  def _maybe_commit(self):
-    now = time.time()
-    if (now - self._last_commit) > self._MIN_COMMIT_INTERVAL:
-      self._conn.commit()
-      self._last_commit = now
 
   @fdb.transactional
   def _start_request(self, tr, project_id, request_id, start_time, **kwargs):
@@ -107,9 +99,9 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
       if key in kwargs:
         tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
 
-    start_index = self._fdb_logs_dir.create_or_open(
+    start_time_index = self._fdb_logs_dir.create_or_open(
       self._db, (project_id, 'start_time_index'))
-    tr[start_index.pack(start_time, request_id)] = fdb.tuple.pack(
+    tr[start_time_index.pack(start_time, request_id)] = fdb.tuple.pack(
       (start_time,))
 
   def start_request(self, request_id, user_request_id, ip, app_id, version_id,
