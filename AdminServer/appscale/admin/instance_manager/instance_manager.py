@@ -165,7 +165,7 @@ class InstanceManager(object):
     yield self._source_manager.ensure_source(
       version.revision_key, source_archive, runtime)
 
-    logger.info('Starting {}'.format(version))
+    logger.info('Starting {}:{}'.format(version, port))
 
     pidfile = PIDFILE_TEMPLATE.format(revision=version.revision_key, port=port)
 
@@ -537,6 +537,8 @@ class InstanceManager(object):
       return
 
     with (yield self._work_lock.acquire()):
+      logger.info('in work lock for fulfill assignments')
+
       # Stop versions that aren't assigned.
       to_stop = [instance for instance in self._running_instances
                  if instance.version_key not in self._assignments]
@@ -547,8 +549,8 @@ class InstanceManager(object):
         yield self._stop_app_instance(instance)
 
       for version_key, assigned_ports in self._assignments.items():
-        running_instances = [instance for instance in self._running_instances
-                             if instance.version_key == version_key]
+        logger.info(
+          'version_key: {}, assigned_ports: {}'.format(version_key, assigned_ports))
         try:
           version = self._projects_manager.version_from_key(version_key)
         except KeyError:
@@ -556,20 +558,38 @@ class InstanceManager(object):
           # scheduler should remove any assignments for it.
           continue
 
-        # Stop instances that aren't assigned.
-        for running_instance in running_instances:
-          if running_instance.port not in assigned_ports:
-            logger.info('{} is no longer assigned'.format(running_instance))
-            yield self._stop_app_instance(running_instance)
+        # The number of required instances that don't have an assigned port.
+        new_assignment_count = sum(port == -1 for port in assigned_ports)
 
-        # Start assigned instances that aren't running.
+        # Stop instances that aren't assigned. If the assignment list includes
+        # any -1s, match them to running instances that aren't in the assigned
+        # ports list.
+        logger.info('running instances during stop: {}'.format(self._running_instances))
+        candidates = [instance for instance in self._running_instances
+                      if instance.version_key == version_key
+                      and instance.port not in assigned_ports]
+        unmatched_instances = candidates[new_assignment_count:]
+        for running_instance in unmatched_instances:
+          logger.info('{} is no longer assigned'.format(running_instance))
+          yield self._stop_app_instance(running_instance)
+
+        # Start defined ports that aren't running.
+        logger.info('running instances during start: {}'.format(self._running_instances))
+        running_ports = [instance.port for instance in self._running_instances
+                         if instance.version_key == version_key]
         for port in assigned_ports:
-          if port == -1:
-            port = self._get_lowest_port()
+          if port != -1 and port not in running_ports:
+            self._start_instance(version, port)
 
-          instance = Instance(version.revision_key, port)
-          if instance not in running_instances:
-            self._start_instance(version, instance.port)
+        # Start new assignments that don't have a match.
+        candidates = [instance for instance in self._running_instances
+                      if instance.version_key == version_key
+                      and instance.port not in assigned_ports]
+        to_start = max(new_assignment_count - len(candidates), 0)
+        for _ in range(to_start):
+          self._start_instance(version, self._get_lowest_port())
+
+      logger.info('done with work lock for fulfill assignments')
 
   @gen.coroutine
   def _enforce_instance_details(self):
