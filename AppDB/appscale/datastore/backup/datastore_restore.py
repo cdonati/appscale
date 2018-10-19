@@ -9,6 +9,8 @@ from appscale.datastore import appscale_datastore_batch
 from appscale.datastore.backup.datastore_backup import DatastoreBackup
 from appscale.datastore.datastore_distributed import DatastoreDistributed
 from appscale.datastore.dbconstants import InternalError
+from appscale.datastore.cassandra_env.cassandra_interface import (
+  LARGE_BATCH_THRESHOLD)
 from appscale.datastore.utils import tornado_synchronous
 from appscale.datastore.zkappscale import zktransaction as zk
 from appscale.datastore.zkappscale.transaction_manager import (
@@ -147,18 +149,25 @@ class DatastoreRestore(multiprocessing.Process):
       backup_file: A str, the backup file location to restore from.
     """
     entities_to_store = []
+    batch_bytes = 0
+    # Keep the batch size relatively small to account for index entries.
+    batch_size_threshold = LARGE_BATCH_THRESHOLD / 4
     with open(backup_file, 'rb') as file_object:
       while True:
         try:
           entity = cPickle.load(file_object)
           entities_to_store.append(entity)
 
-          # If batch size is met, store entities.
-          if len(entities_to_store) == self.BATCH_SIZE:
+          batch_bytes += len(entity)
+
+          # If batch is reasonably large or count is satisfied, store entities.
+          if (batch_bytes > batch_size_threshold or
+              len(entities_to_store) == self.BATCH_SIZE):
             logging.info("Storing a batch of {0} entities...".
               format(len(entities_to_store)))
             self.store_entity_batch(entities_to_store)
             entities_to_store = []
+            batch_bytes = 0
         except EOFError:
           break
 
