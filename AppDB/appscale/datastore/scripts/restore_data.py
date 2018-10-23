@@ -36,6 +36,9 @@ def init_parser():
     help='The application ID to restore data under.')
   main_args.add_argument('-b', '--backup-dir', required=True,
     help='The backup directory to restore data from.')
+  main_args.add_argument(
+    '--workers', type=int, default=4,
+    help='The size of the process pool that inserts data')
   main_args.add_argument('-c', '--clear-datastore', required=False,
     action="store_true", default=False, help='Start with a clean datastore.')
   main_args.add_argument('-d', '--debug',  required=False, action="store_true",
@@ -132,8 +135,8 @@ def main():
   table = db_info[':table']
 
   # Start restore process.
-  ds_restore = DatastoreRestore(args.app_id.strip('/'), args.backup_dir,
-    zookeeper, table)
+  ds_restore = DatastoreRestore(
+    args.app_id.strip('/'), args.backup_dir, zookeeper, args.workers)
   try:
     ds_restore.run()
   finally:

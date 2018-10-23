@@ -5,13 +5,13 @@ import multiprocessing
 import random
 import time
 
+from appscale.common import appscale_info
 from appscale.common.retrying import retry
 from appscale.datastore import appscale_datastore_batch
 from appscale.datastore.backup.datastore_backup import DatastoreBackup
 from appscale.datastore.datastore_distributed import DatastoreDistributed
-from appscale.datastore.dbconstants import InternalError
 from appscale.datastore.cassandra_env.cassandra_interface import (
-  LARGE_BATCH_THRESHOLD)
+  DatastoreProxy, LARGE_BATCH_THRESHOLD)
 from appscale.datastore.utils import tornado_synchronous
 from appscale.datastore.zkappscale import zktransaction as zk
 from appscale.datastore.zkappscale.transaction_manager import (
@@ -20,8 +20,92 @@ from appscale.datastore.zkappscale.transaction_manager import (
 from google.appengine.datastore import datastore_pb
 from google.appengine.datastore import entity_pb
 
+worker_ds_access = None
 
-class DatastoreRestore(multiprocessing.Process):
+
+class EntityLoader(object):
+  """ Iterates through a backup file to return batches of entities. """
+  def __init__(self, project_id, backup_file, batch_size):
+    """ Creates a new EntityLoader.
+
+    Args:
+      project_id: A string specifying a project ID.
+      backup_file: A file object pointing to the backup file.
+      batch_size: An integer specifying the batch size threshold in bytes.
+    """
+    self.project_id = project_id
+    self.backup_file = backup_file
+    self.batch_size = batch_size
+
+  def __iter__(self):
+    return self
+
+  def next(self):
+    """ Fetches the next batch of entities. """
+    entities = []
+    batch_bytes = 0
+    while True:
+      try:
+        entity = cPickle.load(self.backup_file)
+      except EOFError:
+        if entities:
+          return self.project_id, entities
+
+        raise StopIteration()
+
+      entities.append(entity)
+      batch_bytes += len(entity)
+      if batch_bytes > self.batch_size:
+        return self.project_id, entities
+
+
+def worker_init():
+  """ Initialize datastore connections for all the worker processes. """
+  global worker_ds_access
+  zk_connection_locations = appscale_info.get_zk_locations_string()
+  zookeeper = zk.ZKTransaction(host=zk_connection_locations)
+  transaction_manager = TransactionManager(zookeeper.handle)
+  worker_ds_access = DatastoreDistributed(
+    DatastoreProxy(), transaction_manager, zookeeper=zookeeper)
+
+
+@retry(max_retries=None, retrying_timeout=None)
+def store_entity_batch(args):
+  """ Stores the given entity batch.
+
+  Args:
+    args: A tuple containing the project ID and a list of entities to store.
+  """
+  project_id, entity_batch = args
+  logging.info('Storing {} entities'.format(len(entity_batch)))
+
+  # Convert encoded entities to EntityProto objects, change the app ID if
+  # it's different than the original and encode again.
+  new_entities_encoded = []
+  ent_protos = []
+  for entity in entity_batch:
+    ent_proto = entity_pb.EntityProto()
+    ent_proto.ParseFromString(entity)
+    ent_proto.key().set_app(project_id)
+
+    ent_protos.append(ent_proto)
+    new_entities_encoded.append(ent_proto.Encode())
+  logging.debug("Entities encoded: {0}".format(new_entities_encoded))
+
+  # Create a PutRequest with the entities to be stored.
+  put_request = datastore_pb.PutRequest()
+  put_response = datastore_pb.PutResponse()
+  for entity in new_entities_encoded:
+    new_entity = put_request.add_entity()
+    new_entity.MergeFromString(entity)
+  logging.debug("Put request: {0}".format(put_request))
+
+  put_sync = tornado_synchronous(worker_ds_access.dynamic_put)
+  put_sync(project_id, put_request, put_response)
+  return len(ent_protos)
+
+
+class DatastoreRestore(object):
   """ Backs up all the entities for a set application ID. """
 
   # The amount of time to wait for SIGINT in seconds.
@@ -36,26 +120,23 @@ class DatastoreRestore(multiprocessing.Process):
   # The amount of seconds between polling to get the restore lock.
   LOCK_POLL_PERIOD = 60
 
-  def __init__(self, app_id, backup_dir, zoo_keeper, table_name):
+  def __init__(self, app_id, backup_dir, zoo_keeper, worker_count):
     """ Constructor.
 
     Args:
       app_id: A str, the application ID.
       backup_dir: A str, the location of the backup file.
       zoo_keeper: A ZooKeeper client.
-      table_name: The database used (e.g. cassandra).
+      worker_count: An integer specifying how many worker processes to use.
     """
-    multiprocessing.Process.__init__(self)
-
     self.app_id = app_id
     self.backup_dir = backup_dir
     self.zoo_keeper = zoo_keeper
-    self.table = table_name
 
     self.entities_restored = 0
     self.indexes = []
-    self.ds_distributed = None
-    self.dynamic_put_sync = None
+
+    self._pool = multiprocessing.Pool(worker_count, initializer=worker_init)
 
   def stop(self):
     """ Stops the restore process. """
@@ -63,14 +144,6 @@ class DatastoreRestore(multiprocessing.Process):
 
   def run(self):
     """ Starts the main loop of the restore thread. """
-    datastore_batch = appscale_datastore_batch.\
-      DatastoreFactory.getDatastore(self.table)
-    transaction_manager = TransactionManager(self.zoo_keeper.handle)
-    self.ds_distributed = DatastoreDistributed(
-      datastore_batch, transaction_manager, zookeeper=self.zoo_keeper)
-    self.dynamic_put_sync = tornado_synchronous(
-      self.ds_distributed.dynamic_put)
-
     while True:
       logging.debug("Trying to get restore lock.")
       if self.get_restore_lock():
@@ -95,71 +168,19 @@ class DatastoreRestore(multiprocessing.Process):
     """
     return self.zoo_keeper.get_lock_with_path(zk.DS_RESTORE_LOCK_PATH)
 
-  @retry(max_retries=None, retrying_timeout=None)
-  def store_entity_batch(self, entity_batch):
-    """ Stores the given entity batch.
-
-    Args:
-      entity_batch: A list of entities to store.
-    """
-    logging.debug("Entity batch to process: {0}".format(entity_batch))
-
-    # Convert encoded entities to EntityProto objects, change the app ID if
-    # it's different than the original and encode again.
-    new_entities_encoded = []
-    ent_protos = []
-    for entity in entity_batch:
-      ent_proto = entity_pb.EntityProto()
-      ent_proto.ParseFromString(entity)
-      ent_proto.key().set_app(self.app_id)
-
-      ent_protos.append(ent_proto)
-      new_entities_encoded.append(ent_proto.Encode())
-    logging.debug("Entities encoded: {0}".format(new_entities_encoded))
-
-    # Create a PutRequest with the entities to be stored.
-    put_request = datastore_pb.PutRequest()
-    put_response = datastore_pb.PutResponse()
-    for entity in new_entities_encoded:
-      new_entity = put_request.add_entity()
-      new_entity.MergeFromString(entity)
-    logging.debug("Put request: {0}".format(put_request))
-
-    self.dynamic_put_sync(self.app_id, put_request, put_response)
-    self.entities_restored += len(ent_protos)
-
   def read_from_file_and_restore(self, backup_file):
     """ Reads entities from backup file and stores them in the datastore.
 
     Args:
       backup_file: A str, the backup file location to restore from.
     """
-    entities_to_store = []
-    batch_bytes = 0
     # Keep the batch size relatively small to account for index entries.
     batch_size_threshold = LARGE_BATCH_THRESHOLD / 4
     with open(backup_file, 'rb') as file_object:
-      while True:
-        try:
-          entity = cPickle.load(file_object)
-          entities_to_store.append(entity)
-
-          batch_bytes += len(entity)
-
-          # If batch is reasonably large or count is satisfied, store entities.
-          if (batch_bytes > batch_size_threshold or
-              len(entities_to_store) == self.BATCH_SIZE):
-            logging.info("Storing a batch of {0} entities...".
-              format(len(entities_to_store)))
-            self.store_entity_batch(entities_to_store)
-            entities_to_store = []
-            batch_bytes = 0
-        except EOFError:
-          break
-
-    if entities_to_store:
-      logging.info("Storing {0} entities...".format(len(entities_to_store)))
-      self.store_entity_batch(entities_to_store)
+      entity_loader = EntityLoader(self.app_id, file_object,
+                                   batch_size_threshold)
+      self.entities_restored += sum(
+        self._pool.map(store_entity_batch, entity_loader))
 
   def run_restore(self):
     """ Runs the restore process. Reads the backup file and stores entities
