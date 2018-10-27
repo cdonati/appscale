@@ -3,7 +3,6 @@
 import time
 
 import fdb
-from fdb.tuple import Versionstamp
 
 from google.appengine.api import apiproxy_stub
 from google.appengine.api import appinfo
@@ -65,14 +64,14 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
 
   _MIN_COMMIT_INTERVAL = 5
 
-  # The max number of bytes for each chunk in a log line.
+  # The max number of bytes for each chunk in a log group.
   _CHUNK_SIZE = 10000
 
-  def __init__(self, fdb, request_data=None):
+  def __init__(self, db, request_data=None):
     """Initializer.
 
     Args:
-      log_service: An open FoundationDB database.
+      db: An open FoundationDB database.
       request_data: A apiproxy_stub.RequestData instance used to look up state
         associated with the request that generated an API call.
     """
@@ -80,29 +79,9 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     super(LogServiceFDB, self).__init__('logservice',
                                         request_data=request_data)
 
-    self._db = fdb
-    self._fdb_logs_dir = self._db.directory.create_or_open(
+    self._db = db
+    self._fdb_logs_dir = fdb.directory.create_or_open(
       self._db, ('appscale', 'logservice'))
-
-  @staticmethod
-  def _get_time_usec():
-    return int(time.time() * 1e6)
-
-  @fdb.transactional
-  def _start_request(self, tr, project_id, request_id, start_time, **kwargs):
-    metadata = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'metadata'))
-    tr[metadata.pack((request_id, 'start_time'))] = fdb.tuple.pack(
-      (start_time,))
-    for key in ['service_id', 'version_id', 'ip', 'nickname', 'user_agent',
-                'host', 'method', 'resource', 'http_version']:
-      if key in kwargs:
-        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
-
-    start_time_index = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'start_time_index'))
-    tr[start_time_index.pack(start_time, request_id)] = fdb.tuple.pack(
-      (start_time,))
 
   def start_request(self, request_id, user_request_id, ip, app_id, version_id,
                     nickname, user_agent, host, method, resource, http_version,
@@ -157,20 +136,6 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
               'http_version': http_version}
     self._start_request(self._db, app_id, request_id, start_time, **kwargs)
 
-  @fdb.transactional
-  def _end_request(self, tr, project_id, request_id, end_time, **kwargs):
-    metadata = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'metadata'))
-    tr[metadata.pack((request_id, 'end_time'))] = fdb.tuple.pack(
-      (end_time,))
-    for key in ['status', 'response_size']:
-      if key in kwargs:
-        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
-
-    end_index = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'end_time_index'))
-    tr[end_index.pack(end_time, request_id)] = fdb.tuple.pack((end_time,))
-
   def end_request(self, project_id, request_id, status, response_size,
                   end_time=None):
     """Ends logging for a request.
@@ -190,96 +155,10 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     kwargs = {'status': status, 'response_size': response_size}
     self._end_request(self._db, project_id, request_id, end_time, **kwargs)
 
-  def _Dynamic_Flush(self, request, unused_response, request_id):
+  def _Dynamic_Flush(self, project_id, request_id, request):
     """Writes application-level log messages for a request."""
-    group = log_service_pb.UserAppLogGroup(request.logs())
-    self._insert_app_logs(request_id, group.log_line_list())
+    self._insert_app_logs(self._db, project_id, request_id, request.logs())
 
-  @fdb.transactional
-  def _insert_app_logs(self, tr, project_id, request_id, log_lines):
-    app_logs_dir = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'app_logs'))
-    for line in log_lines:
-      tr[app_logs_dir.pack((request_id, line.timestamp_usec(), 'level'))] = \
-        line.level()
-      # TODO: break message into chunks.
-      tr[app_logs_dir.pack((request_id, line.timestamp_usec(), 'message'))] = \
-        line.message()
-
-  @fdb.transactional
-  def _get_logs_by_id(self, tr, project_id, request_ids, include_app_logs):
-    metadata_dir = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'metadata'))
-    app_logs_dir = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'app_logs'))
-
-    request_logs = []
-    for request_id in request_ids:
-      metadata = tr[metadata_dir.range((request_id,))]
-      if not metadata:
-        continue
-
-      request_log = log_service_pb.RequestLog()
-      request_log.set_app_id(project_id)
-      request_log.set_request_id(request_id)
-      setters = {
-        'start_time': request_log.set_start_time,
-        'end_time': request_log.set_end_time,
-        'service_id': request_log.set_module_id,
-        'version_id': request_log.set_version_id,
-        'ip': request_log.set_ip,
-        'nickname': request_log.set_nickname,
-        'user_agent': request_log.set_user_agent,
-        'host': request_log.set_host,
-        'method': request_log.set_method,
-        'resource': request_log.set_resource,
-        'http_version': request_log.set_http_version,
-        'status': request_log.set_status,
-        'response_size': request_log.set_response_size
-      }
-      for field, value in metadata:
-        setters[field](value)
-
-      # TODO: account for app log chunks
-      app_logs = tr[app_logs_dir.range((request_id))]
-
-      request_logs.append(request_log)
-
-    return request_logs
-
-  @fdb.transactional
-  def _query(self, tr, request):
-    if request.has_count():
-      count = request.count()
-    else:
-      count = self._DEFAULT_READ_COUNT
-
-    if request.has_start_time():
-      filters.append(('start_time >= ?', request.start_time()))
-    if request.has_end_time():
-      filters.append(('end_time < ?', request.end_time()))
-    if request.has_offset():
-      filters.append(('RequestLogs.id < ?', int(request.offset().request_id())))
-    if not request.include_incomplete():
-      filters.append(('finished = ?', 1))
-    if request.has_minimum_log_level():
-      filters.append(('AppLogs.level >= ?', request.minimum_log_level()))
-
-    if request.server_version(0).has_server_id():
-      server_version = ':'.join([request.server_version(0).server_id(),
-                                 request.server_version(0).version_id()])
-    else:
-      server_version = request.server_version(0).version_id()
-    filters = [('version_id = ?', server_version)]
-
-    if request.has_minimum_log_level():
-      query = ('SELECT * FROM RequestLogs INNER JOIN AppLogs ON '
-               'RequestLogs.id = AppLogs.request_id%s GROUP BY '
-               'RequestLogs.id ORDER BY id DESC')
-    else:
-      query = 'SELECT * FROM RequestLogs%s ORDER BY id DESC'
-
-  @apiproxy_stub.Synchronized
   def _Dynamic_Read(self, request, response, project_id, request_id):
 
     # The current request ID is not required to satisfy the query.
@@ -317,6 +196,144 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
       self._fill_request_log(log_row, log, request.include_app_logs())
     if len(logs) > count:
       response.mutable_offset().set_request_id(str(logs[-2]['id']))
+
+
+  @staticmethod
+  def _get_time_usec():
+    return int(time.time() * 1e6)
+
+  @fdb.transactional
+  def _start_request(self, tr, project_id, request_id, start_time, **kwargs):
+    metadata = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    tr[metadata.pack((request_id, 'start_time'))] = fdb.tuple.pack(
+      (start_time,))
+    for key in ['service_id', 'version_id', 'ip', 'nickname', 'user_agent',
+                'host', 'method', 'resource', 'http_version']:
+      if key in kwargs:
+        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
+
+    start_time_index = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'start_time_index'))
+    tr[start_time_index.pack(start_time, request_id)] = fdb.tuple.pack(
+      (start_time,))
+
+  @fdb.transactional
+  def _end_request(self, tr, project_id, request_id, end_time, **kwargs):
+    metadata = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    tr[metadata.pack((request_id, 'end_time'))] = fdb.tuple.pack(
+      (end_time,))
+    for key in ['status', 'response_size']:
+      if key in kwargs:
+        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
+
+    end_index = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'end_time_index'))
+    tr[end_index.pack(end_time, request_id)] = fdb.tuple.pack((end_time,))
+
+  @fdb.transactional
+  def _insert_app_logs(self, tr, project_id, request_id, log_group):
+    app_logs_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'app_logs'))
+    blob_length = len(log_group)
+    if not blob_length:
+      return
+
+    chunks = [(n, n + self._CHUNK_SIZE)
+              for n in xrange(0, blob_length, self._CHUNK_SIZE)]
+    for start, end in chunks:
+      key = app_logs_dir.pack_with_versionstamp(
+        (request_id, fdb.tuple.Versionstamp(), start))
+      tr.set_versionstamped_key(key, log_group[start:end])
+
+  @fdb.transactional
+  def _get_logs_by_id(self, tr, project_id, request_ids, include_app_logs):
+    metadata_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    app_logs_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'app_logs'))
+
+    request_logs = []
+    for request_id in request_ids:
+      metadata = tr[metadata_dir.range((request_id,))]
+      if not metadata:
+        continue
+
+      request_log = log_service_pb.RequestLog()
+      request_log.set_app_id(project_id)
+      request_log.set_request_id(request_id)
+      setters = {
+        'start_time': request_log.set_start_time,
+        'end_time': request_log.set_end_time,
+        'service_id': request_log.set_module_id,
+        'version_id': request_log.set_version_id,
+        'ip': request_log.set_ip,
+        'nickname': request_log.set_nickname,
+        'user_agent': request_log.set_user_agent,
+        'host': request_log.set_host,
+        'method': request_log.set_method,
+        'resource': request_log.set_resource,
+        'http_version': request_log.set_http_version,
+        'status': request_log.set_status,
+        'response_size': request_log.set_response_size
+      }
+      for field, value in metadata:
+        setters[field](value)
+
+      if include_app_logs:
+        group_chunks = []
+        group_id = None
+        for chunk_key, value in tr[app_logs_dir.range((request_id,))]:
+          new_group_id = app_logs_dir.unpack(chunk_key)[1]
+          if new_group_id != group_id:
+            group = log_service_pb.UserAppLogGroup(''.join(group_chunks))
+            for line in group.log_line_list():
+              request_log.add_line().MergeFrom(line)
+
+            group_chunks = []
+            group_id = new_group_id
+
+          group_chunks.append(value)
+
+      request_logs.append(request_log)
+
+    return request_logs
+
+  @fdb.transactional
+  def _query(self, tr, request):
+    if request.has_count():
+      limit = request.count()
+    else:
+      limit = self._DEFAULT_READ_COUNT
+
+    start_time = 0
+    if request.has_start_time():
+      filters.append(('start_time >= ?', request.start_time()))
+    if request.has_end_time():
+      filters.append(('end_time < ?', request.end_time()))
+
+
+    if request.has_offset():
+      filters.append(('RequestLogs.id < ?', int(request.offset().request_id())))
+    if not request.include_incomplete():
+      filters.append(('finished = ?', 1))
+    if request.has_minimum_log_level():
+      filters.append(('AppLogs.level >= ?', request.minimum_log_level()))
+
+    if request.server_version(0).has_server_id():
+      server_version = ':'.join([request.server_version(0).server_id(),
+                                 request.server_version(0).version_id()])
+    else:
+      server_version = request.server_version(0).version_id()
+    filters = [('version_id = ?', server_version)]
+
+    if request.has_minimum_log_level():
+      query = ('SELECT * FROM RequestLogs INNER JOIN AppLogs ON '
+               'RequestLogs.id = AppLogs.request_id%s GROUP BY '
+               'RequestLogs.id ORDER BY id DESC')
+    else:
+      query = 'SELECT * FROM RequestLogs%s ORDER BY id DESC'
 
   def _fill_request_log(self, log_row, log, include_app_logs):
     log.set_request_id(str(log_row['user_request_id']))
