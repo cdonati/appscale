@@ -203,6 +203,30 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     return int(time.time() * 1e6)
 
   @fdb.transactional
+  def _touch_last_update(self, tr, project_id, request_id, update_time=None,
+                         remove_old=True):
+    if update_time is None:
+      update_time = self._get_time_usec()
+
+    metadata = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+    last_update_index = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'last_update_index'))
+
+    if remove_old:
+      previous_update = tr[metadata.pack((request_id, 'last_update'))]
+      if previous_update is None:
+        raise apiproxy_errors.ApplicationError(
+          log_service_pb.LogServiceError.INVALID_REQUEST,
+          'Request ID does not exist')
+
+      del tr[last_update_index.pack(previous_update, request_id)]
+
+    tr[metadata.pack((request_id, 'last_update'))] = fdb.tuple.pack(
+      (update_time,))
+    tr[last_update_index.pack(update_time, request_id)] = b''
+
+  @fdb.transactional
   def _start_request(self, tr, project_id, request_id, start_time, **kwargs):
     metadata = self._fdb_logs_dir.create_or_open(
       self._db, (project_id, 'metadata'))
@@ -213,27 +237,13 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
       if key in kwargs:
         tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
 
-    start_time_index = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'start_time_index'))
-    tr[start_time_index.pack(start_time, request_id)] = fdb.tuple.pack(
-      (start_time,))
-
-  @fdb.transactional
-  def _end_request(self, tr, project_id, request_id, end_time, **kwargs):
-    metadata = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'metadata'))
-    tr[metadata.pack((request_id, 'end_time'))] = fdb.tuple.pack(
-      (end_time,))
-    for key in ['status', 'response_size']:
-      if key in kwargs:
-        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
-
-    end_index = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'end_time_index'))
-    tr[end_index.pack(end_time, request_id)] = fdb.tuple.pack((end_time,))
+    self._touch_last_update(tr, project_id, request_id, start_time,
+                            remove_old=False)
 
   @fdb.transactional
   def _insert_app_logs(self, tr, project_id, request_id, log_group):
+    self._touch_last_update(tr, project_id, request_id)
+
     app_logs_dir = self._fdb_logs_dir.create_or_open(
       self._db, (project_id, 'app_logs'))
     blob_length = len(log_group)
@@ -246,6 +256,19 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
       key = app_logs_dir.pack_with_versionstamp(
         (request_id, fdb.tuple.Versionstamp(), start))
       tr.set_versionstamped_key(key, log_group[start:end])
+
+  @fdb.transactional
+  def _end_request(self, tr, project_id, request_id, end_time, **kwargs):
+    self._touch_last_update(tr, project_id, request_id, end_time)
+
+    metadata = self._fdb_logs_dir.create_or_open(
+      self._db, (project_id, 'metadata'))
+
+    tr[metadata.pack((request_id, 'end_time'))] = fdb.tuple.pack(
+      (end_time,))
+    for key in ['status', 'response_size']:
+      if key in kwargs:
+        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
 
   @fdb.transactional
   def _get_logs_by_id(self, tr, project_id, request_ids, include_app_logs):
@@ -307,6 +330,11 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     else:
       limit = self._DEFAULT_READ_COUNT
 
+    # Request logs should be returned in reverse chronological order by last
+    # update time.
+    last_update_index = self._fdb_logs_dir.create_or_open(
+      self._db, (request.app_id(), 'last_update_index'))
+    for index_key, _ in tr.get_range
     start_time = 0
     if request.has_start_time():
       filters.append(('start_time >= ?', request.start_time()))
