@@ -203,22 +203,37 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     return int(time.time() * 1e6)
 
   @fdb.transactional
-  def _touch_last_update(self, tr, project_id, request_id, update_time=None,
-                         remove_old=True):
+  def _touch_last_update(self, tr, project_id, request_id, service_id=None,
+                         version_id=None, update_time=None, remove_old=True):
     if update_time is None:
       update_time = self._get_time_usec()
 
     metadata = self._fdb_logs_dir.create_or_open(
       self._db, (project_id, 'metadata'))
+
+    if service_id is None:
+      service_id = tr[metadata.pack((request_id, 'service_id'))]
+      if not service_id.present():
+        raise apiproxy_errors.ApplicationError(
+          log_service_pb.LogServiceError.INVALID_REQUEST, 'Request not found')
+
+    if version_id is None:
+      version_id = tr[metadata.pack((request_id, 'version_id'))]
+      if not version_id.present():
+        raise apiproxy_errors.ApplicationError(
+          log_service_pb.LogServiceError.INVALID_REQUEST, 'Request not found')
+
     last_update_index = self._fdb_logs_dir.create_or_open(
-      self._db, (project_id, 'last_update_index'))
+      self._db, (project_id, 'last_update_index', service_id, version_id))
 
     if remove_old:
       previous_update = tr[metadata.pack((request_id, 'last_update'))]
-      if previous_update is None:
+      if not previous_update.present():
         raise apiproxy_errors.ApplicationError(
           log_service_pb.LogServiceError.INVALID_REQUEST,
           'Request ID does not exist')
+
+      previous_update = fdb.tuple.unpack(previous_update)[0]
 
       del tr[last_update_index.pack(previous_update, request_id)]
 
@@ -227,18 +242,21 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     tr[last_update_index.pack(update_time, request_id)] = b''
 
   @fdb.transactional
-  def _start_request(self, tr, project_id, request_id, start_time, **kwargs):
+  def _start_request(self, tr, project_id, request_id, start_time, service_id,
+                     version_id, **kwargs):
     metadata = self._fdb_logs_dir.create_or_open(
       self._db, (project_id, 'metadata'))
     tr[metadata.pack((request_id, 'start_time'))] = fdb.tuple.pack(
       (start_time,))
-    for key in ['service_id', 'version_id', 'ip', 'nickname', 'user_agent',
-                'host', 'method', 'resource', 'http_version']:
+    tr[metadata.pack((request_id, 'service_id'))] = service_id
+    tr[metadata.pack((request_id, 'version_id'))] = version_id
+    for key in ['ip', 'nickname', 'user_agent', 'host', 'method', 'resource',
+                'http_version']:
       if key in kwargs:
-        tr[metadata.pack((request_id, key))] = fdb.tuple.pack((kwargs[key],))
+        tr[metadata.pack((request_id, key))] = kwargs[key]
 
-    self._touch_last_update(tr, project_id, request_id, start_time,
-                            remove_old=False)
+    self._touch_last_update(tr, project_id, request_id, service_id, version_id,
+                            start_time, remove_old=False)
 
   @fdb.transactional
   def _insert_app_logs(self, tr, project_id, request_id, log_group):
@@ -250,9 +268,9 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     if not blob_length:
       return
 
-    chunks = [(n, n + self._CHUNK_SIZE)
-              for n in xrange(0, blob_length, self._CHUNK_SIZE)]
-    for start, end in chunks:
+    chunk_indexes = [(n, n + self._CHUNK_SIZE)
+                     for n in xrange(0, blob_length, self._CHUNK_SIZE)]
+    for start, end in chunk_indexes:
       key = app_logs_dir.pack_with_versionstamp(
         (request_id, fdb.tuple.Versionstamp(), start))
       tr.set_versionstamped_key(key, log_group[start:end])
@@ -279,13 +297,14 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
 
     request_logs = []
     for request_id in request_ids:
-      metadata = tr[metadata_dir.range((request_id,))]
+      metadata = tr.snapshot[metadata_dir.range((request_id,))]
       if not metadata:
         continue
 
       request_log = log_service_pb.RequestLog()
       request_log.set_app_id(project_id)
       request_log.set_request_id(request_id)
+      int_fields = ['start_time', 'end_time', 'status', 'response_size']
       setters = {
         'start_time': request_log.set_start_time,
         'end_time': request_log.set_end_time,
@@ -302,12 +321,15 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
         'response_size': request_log.set_response_size
       }
       for field, value in metadata:
+        if field in int_fields:
+          value = fdb.tuple.unpack(value)[0]
+
         setters[field](value)
 
       if include_app_logs:
         group_chunks = []
         group_id = None
-        for chunk_key, value in tr[app_logs_dir.range((request_id,))]:
+        for chunk_key, value in tr.snapshot[app_logs_dir.range((request_id,))]:
           new_group_id = app_logs_dir.unpack(chunk_key)[1]
           if new_group_id != group_id:
             group = log_service_pb.UserAppLogGroup(''.join(group_chunks))
@@ -325,16 +347,53 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
 
   @fdb.transactional
   def _query(self, tr, request):
+    start_time = None
+    if request.has_start_time():
+      start_time = request.start_time()
+
+    end_time = None
+    if request.has_end_time():
+      end_time = request.end_time()
+
     if request.has_count():
       limit = request.count()
     else:
       limit = self._DEFAULT_READ_COUNT
 
+    metadata_dir = self._fdb_logs_dir.create_or_open(
+      self._db, (request.app_id(), 'metadata'))
+
+    index_directories = [
+      self._fdb_logs_dir.create_or_open(
+        self._db, (request.app_id(), 'last_update_index', mv.module_id(),
+                   mv.version_id()))
+      for mv in request.module_version_list()]
+
     # Request logs should be returned in reverse chronological order by last
     # update time.
-    last_update_index = self._fdb_logs_dir.create_or_open(
-      self._db, (request.app_id(), 'last_update_index'))
-    for index_key, _ in tr.get_range
+    iterators = [
+      iter(tr.snapshot.get_range(dir.pack((0,)), dir.pack((end_time,)),
+                                 reverse=True))
+      for dir in index_directories]
+
+    candidates = [(iterator, next(iterator, None)) for iterator in iterators]
+    candidates = [(iterator, fdb.tuple.unpack(candidate)[-2:])
+                  for iterator, candidate in candidates
+                  if candidate is not None]
+    while True:
+      last_update = max(candidates, key=lambda c: c[1][0])
+      newest = candidates.pop([c[1][0] for c in candidates].index(last_update))
+      request_id = newest[1][1]
+      metadata = tr.snapshot[metadata_dir.range((request_id,))]
+      if request.has_start_time():
+        start_time = fdb.tuple.unpack(metadata['start_time'])[0]
+        if start_time <
+      if not candidates:
+        break
+
+    for index_key, _ in tr.snapshot.get_range(0, end_time, reverse=True):
+      request_id = last_update_index.unpack(index_key)[1]
+      metadata = tr.snapshot[metadata_dir.range((request_id,))]
     start_time = 0
     if request.has_start_time():
       filters.append(('start_time >= ?', request.start_time()))
