@@ -369,10 +369,23 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
                    mv.version_id()))
       for mv in request.module_version_list()]
 
+    if request.has_offset():
+      request_id = request.offset().request_id()
+      end_time = tr.snapshot[metadata_dir.pack((request_id, 'last_update'))]
+      if not end_time.present():
+        raise apiproxy_errors.ApplicationError(
+          log_service_pb.LogServiceError.INVALID_REQUEST, 'Offset not found')
+
+      end_time = fdb.tuple.unpack(end_time)[0]
+
     # Request logs should be returned in reverse chronological order by last
     # update time.
+    def range_getter(directory):
+      if start_time
     iterators = [
-      iter(tr.snapshot.get_range(dir.pack((0,)), dir.pack((end_time,)),
+      iter(tr.snapshot.get_range(
+        begin=dir.range().start if start_time is None else dir.pack((start_time,)),
+        end=dir.pack((end_time,)),
                                  reverse=True))
       for dir in index_directories]
 
@@ -380,14 +393,15 @@ class LogServiceFDB(apiproxy_stub.APIProxyStub):
     candidates = [(iterator, fdb.tuple.unpack(candidate)[-2:])
                   for iterator, candidate in candidates
                   if candidate is not None]
+    results = []
     while True:
       last_update = max(candidates, key=lambda c: c[1][0])
       newest = candidates.pop([c[1][0] for c in candidates].index(last_update))
       request_id = newest[1][1]
+      if
       metadata = tr.snapshot[metadata_dir.range((request_id,))]
-      if request.has_start_time():
-        start_time = fdb.tuple.unpack(metadata['start_time'])[0]
-        if start_time <
+
+      if
       if not candidates:
         break
 
