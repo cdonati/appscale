@@ -41,6 +41,11 @@ def init_parser():
     help='The size of the process pool that inserts data')
   main_args.add_argument('-c', '--clear-datastore', required=False,
     action="store_true", default=False, help='Start with a clean datastore.')
+  main_args.add_argument(
+    '--unsafe', action='store_true',
+    help='Insert entity data without creating transactions or updating '
+         'indexes. This should only be used if the datastore is in read-only '
+         'mode and no existing entities will be modified by the restore.')
   main_args.add_argument('-d', '--debug',  required=False, action="store_true",
     default=False, help='Display debug messages.')
 
@@ -136,7 +141,8 @@ def main():
 
   # Start restore process.
   ds_restore = DatastoreRestore(
-    args.app_id.strip('/'), args.backup_dir, zookeeper, args.workers)
+    args.app_id.strip('/'), args.backup_dir, zookeeper, args.workers,
+    use_safe_puts=(not args.unsafe))
   try:
     ds_restore.run()
   finally:

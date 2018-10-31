@@ -7,12 +7,12 @@ import time
 
 from appscale.common import appscale_info
 from appscale.common.retrying import retry
-from appscale.datastore import appscale_datastore_batch
 from appscale.datastore.backup.datastore_backup import DatastoreBackup
 from appscale.datastore.datastore_distributed import DatastoreDistributed
 from appscale.datastore.cassandra_env.cassandra_interface import (
   DatastoreProxy, LARGE_BATCH_THRESHOLD)
-from appscale.datastore.utils import tornado_synchronous
+from appscale.datastore.cassandra_env.utils import mutations_for_entity
+from appscale.datastore.utils import group_for_key, tornado_synchronous
 from appscale.datastore.zkappscale import zktransaction as zk
 from appscale.datastore.zkappscale.transaction_manager import (
   TransactionManager)
@@ -105,6 +105,44 @@ def store_entity_batch(args):
   return len(ent_protos)
 
 
+@retry(max_retries=None, retrying_timeout=None)
+def store_entity_batch_unsafe(args):
+  """ Stores a list of entities without any safeguards.
+
+  Unlike the normal write path, this does not create a transaction, lock the
+  groups being stored, or check for existing data in order to update index
+  entries. It should not be used unless the project being restored has no
+  existing data and there are no other processes making datastore mutations.
+
+  Args:
+    args: A tuple containing the project ID and a list of entities to store.
+  """
+  project_id, entity_batch = args
+  session = worker_ds_access.datastore_batch.session
+  logging.info('Storing {} entities'.format(len(entity_batch)))
+
+  for encoded_entity in entity_batch:
+    entity = entity_pb.EntityProto(encoded_entity)
+    encoded_group_key = group_for_key(entity.key()).Encode()
+    txid = 1
+
+    mutations = []
+    mutations.extend(mutations_for_entity(entity, txid))
+
+    mutations.append({'table': 'group_updates',
+                      'key': bytearray(encoded_group_key),
+                      'last_update': txid})
+
+    statements_and_params = worker_ds_access.datastore_batch.\
+      statements_for_mutations(mutations, txid)
+    futures = [session.execute_async(statement, params)
+               for statement, params in statements_and_params]
+    for future in futures:
+      future.result()
+
+  return len(entity_batch)
+
+
 class DatastoreRestore(object):
   """ Backs up all the entities for a set application ID. """
 
@@ -120,7 +158,8 @@ class DatastoreRestore(object):
   # The amount of seconds between polling to get the restore lock.
   LOCK_POLL_PERIOD = 60
 
-  def __init__(self, app_id, backup_dir, zoo_keeper, worker_count):
+  def __init__(self, app_id, backup_dir, zoo_keeper, worker_count,
+               use_safe_puts=True):
     """ Constructor.
 
     Args:
@@ -128,6 +167,7 @@ class DatastoreRestore(object):
       backup_dir: A str, the location of the backup file.
       zoo_keeper: A ZooKeeper client.
       worker_count: An integer specifying how many worker processes to use.
+      use_safe_puts: Use the normal datastore write path for put operations.
     """
     self.app_id = app_id
     self.backup_dir = backup_dir
@@ -137,6 +177,7 @@ class DatastoreRestore(object):
     self.indexes = []
 
     self._pool = multiprocessing.Pool(worker_count, initializer=worker_init)
+    self._use_safe_puts = use_safe_puts
 
   def stop(self):
     """ Stops the restore process. """
@@ -174,13 +215,22 @@ class DatastoreRestore(object):
     Args:
       backup_file: A str, the backup file location to restore from.
     """
-    # Keep the batch size relatively small to account for index entries.
-    batch_size_threshold = LARGE_BATCH_THRESHOLD / 4
+    if self._use_safe_puts:
+      store_entity_function = store_entity_batch
+      # Keep the batch size small to account for index entries while trying to
+      # stay under the large batch threshold.
+      batch_size_threshold = LARGE_BATCH_THRESHOLD / 4
+    else:
+      store_entity_function = store_entity_batch_unsafe
+      # The batch size is not as important for unsafe puts since they don't
+      # use atomic batches.
+      batch_size_threshold = LARGE_BATCH_THRESHOLD
+
     with open(backup_file, 'rb') as file_object:
       entity_loader = EntityLoader(self.app_id, file_object,
                                    batch_size_threshold)
       self.entities_restored += sum(
-        self._pool.map(store_entity_batch, entity_loader))
+        self._pool.map(store_entity_function, entity_loader))
 
   def run_restore(self):
     """ Runs the restore process. Reads the backup file and stores entities
