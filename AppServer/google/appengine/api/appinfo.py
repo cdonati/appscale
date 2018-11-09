@@ -383,6 +383,12 @@ _SUPPORTED_LIBRARIES = [
         ['2.3', '2.6'],
         ),
     _VersionedLibrary(
+        'pytz',
+        'http://pytz.sourceforge.net/',
+        'Allows accurate and cross platform timezone calculations',
+        ['2014.10'],
+        ),
+    _VersionedLibrary(
         'setuptools',
         'http://pypi.python.org/pypi/setuptools',
         'A library that provides package and module discovery capabilities.',
