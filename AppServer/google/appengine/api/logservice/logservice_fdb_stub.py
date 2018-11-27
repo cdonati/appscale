@@ -9,7 +9,7 @@ from google.appengine.api import appinfo
 from google.appengine.api.logservice import log_service_pb
 from google.appengine.runtime import apiproxy_errors
 
-fdb.api_version(520)
+fdb.api_version(600)
 
 
 
