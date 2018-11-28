@@ -176,7 +176,7 @@ def fix_sys_path(extra_extra_paths=()):
   fix_sys_path should be called before running testbed-based unit tests so that
   third-party modules are correctly added to sys.path.
   """
-  sys.path[1:1] = EXTRA_PATHS
+  sys.path.extend(EXTRA_PATHS)
 
 
 def _run_file(file_path, globals_, script_dir=_SCRIPT_DIR):
