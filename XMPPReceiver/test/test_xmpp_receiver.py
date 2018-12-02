@@ -30,9 +30,10 @@ class TestXMPPReceiver(unittest.TestCase):
     # throw up some instance vars that the tests can use
     self.appid = 'bazapp'
     self.login_ip = 'publicip1'
+    self.load_balancer_ip = 'privateip1'
     self.app_port = 1234
     self.password = 'bazpassword'
-    self.jid = self.appid + '@' + self.login_ip
+    self.jid = self.appid + '@' + self.load_balancer_ip
 
     # mock out all calls to the logging library
     flexmock(logging)
@@ -59,10 +60,11 @@ class TestXMPPReceiver(unittest.TestCase):
     fake_client.should_receive('connect').and_return(None)
 
     flexmock(xmpp)
-    xmpp.should_receive('Client').with_args(self.login_ip, debug=[]) \
+    xmpp.should_receive('Client').with_args(self.load_balancer_ip, debug=[]) \
       .and_return(fake_client)
 
-    receiver = XMPPReceiver(self.appid, self.login_ip, self.password)
+    receiver = XMPPReceiver(self.appid, self.login_ip, self.load_balancer_ip,
+                            self.password)
     self.assertRaises(SystemExit, receiver.listen_for_messages, messages_to_listen_for=1)
 
 
@@ -74,10 +76,11 @@ class TestXMPPReceiver(unittest.TestCase):
       resource='').and_return(None)
 
     flexmock(xmpp)
-    xmpp.should_receive('Client').with_args(self.login_ip, debug=[]) \
+    xmpp.should_receive('Client').with_args(self.load_balancer_ip, debug=[]) \
       .and_return(fake_client)
 
-    receiver = XMPPReceiver(self.appid, self.login_ip, self.password)
+    receiver = XMPPReceiver(self.appid, self.login_ip, self.load_balancer_ip,
+                            self.password)
     self.assertRaises(SystemExit, receiver.listen_for_messages,
       messages_to_listen_for=1)
 
@@ -101,7 +104,7 @@ class TestXMPPReceiver(unittest.TestCase):
     fake_client.should_receive('Process').with_args(1).once()
 
     flexmock(xmpp)
-    xmpp.should_receive('Client').with_args(self.login_ip, debug=[]) \
+    xmpp.should_receive('Client').with_args(self.load_balancer_ip, debug=[]) \
       .and_return(fake_client)
 
     # finally, mock out 'select', and have it put in a message
@@ -110,7 +113,8 @@ class TestXMPPReceiver(unittest.TestCase):
     select.should_receive('select').with_args(['the socket'], [], [], 1) \
       .and_return(message, None, None)
 
-    receiver = XMPPReceiver(self.appid, self.login_ip, self.password)
+    receiver = XMPPReceiver(self.appid, self.login_ip, self.load_balancer_ip,
+                            self.password)
     actual_messages_sent = receiver.listen_for_messages(
       messages_to_listen_for=1)
     self.assertEquals(1, actual_messages_sent)
@@ -142,7 +146,8 @@ class TestXMPPReceiver(unittest.TestCase):
     httplib.should_receive('HTTPConnection').with_args('publicip1', 1234) \
       .and_return(fake_http_connection)
 
-    receiver = XMPPReceiver(self.appid, self.login_ip, self.password)
+    receiver = XMPPReceiver(self.appid, self.login_ip, self.load_balancer_ip,
+                            self.password)
     receiver.xmpp_message(fake_conn, fake_event)
 
 
@@ -170,5 +175,6 @@ class TestXMPPReceiver(unittest.TestCase):
     fake_event.should_receive('getPayload').and_return('doesnt matter')
     fake_event.should_receive('getType').and_return('subscribe')
 
-    receiver = XMPPReceiver(self.appid, self.login_ip, self.password)
+    receiver = XMPPReceiver(self.appid, self.login_ip, self.load_balancer_ip,
+                            self.password)
     receiver.xmpp_presence(fake_conn, fake_event)

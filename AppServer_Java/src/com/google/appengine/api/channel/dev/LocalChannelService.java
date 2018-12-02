@@ -186,7 +186,7 @@ public final class LocalChannelService extends AbstractLocalRpcService
 
   private String getDomain()
   {
-      String domain = System.getProperty("LOGIN_SERVER");
+      String domain = System.getProperty("XMPP_PATH");
       return domain;
   }
 

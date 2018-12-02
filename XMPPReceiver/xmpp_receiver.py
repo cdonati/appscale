@@ -5,7 +5,7 @@
 # and forwards them to the app, which must have a route
 # exposed at /_ah/xmpp/message/chat/ to receive them
 
-# usage is ./xmpp_receiver.py appname login_ip app-password
+# usage is ./xmpp_receiver.py appname login_ip load_balancer_ip app-password
 
 
 # General-purpose Python libraries
@@ -47,7 +47,7 @@ class XMPPReceiver():
   }
 
 
-  def __init__(self, appid, login_ip, app_password):
+  def __init__(self, appid, login_ip, ejabberd_location, app_password):
     """Creates a new XMPPReceiver, which will listen for XMPP messages for
     an App Engine app.
 
@@ -57,15 +57,17 @@ class XMPPReceiver():
       login_ip: A str representing the IP address or FQDN that runs the
         full proxy nginx service, sitting in front of the app we'll be
         posting messages to.
+      ejabberd_location: The private IP address of the ejabberd server to use.
       app_password: A str representing the password associated with the
         XMPP user account for the Google App Engine app that the receiver
         will log in on behalf of.
     """
     self.appid = appid
+    self.ejabberd_location = ejabberd_location
     self.login_ip = login_ip
     self.app_password = app_password
 
-    self.my_jid = self.appid + "@" + self.login_ip
+    self.my_jid = self.appid + "@" + self.ejabberd_location
     log_file = "/var/log/appscale/xmppreceiver-{0}.log".format(self.my_jid)
     sys.stderr = open(log_file, 'a')
     logging.basicConfig(level=logging.INFO,
@@ -148,14 +150,14 @@ class XMPPReceiver():
     if not client.connect():
       logging.info("Could not connect")
       raise SystemExit("Could not connect to XMPP server at {0}" \
-        .format(self.login_ip))
+        .format(self.ejabberd_location))
 
     if not client.auth(jid.getNode(), self.app_password,
       resource=jid.getResource()):
       logging.info("Could not authenticate with username {0}, password {1}" \
         .format(jid.getNode(), self.app_password))
       raise SystemExit("Could not authenticate to XMPP server at {0}" \
-        .format(self.login_ip))
+        .format(self.ejabberd_location))
 
     client.RegisterHandler('message', self.xmpp_message)
     client.RegisterHandler('presence', self.xmpp_presence)
@@ -182,6 +184,6 @@ class XMPPReceiver():
 
 
 if __name__ == "__main__":
-  RECEIVER = XMPPReceiver(sys.argv[1], sys.argv[2], sys.argv[3])
+  RECEIVER = XMPPReceiver(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
   while True:
     RECEIVER.listen_for_messages()

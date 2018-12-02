@@ -54,7 +54,7 @@ public final class LocalXMPPService extends AbstractLocalRpcService
   {
       UASECRET = getUASecret();
       APPID = getAppId();
-      DOMAIN = properties.get("LOGIN_SERVER");
+      DOMAIN = properties.get("XMPP_PATH");
       UASERVER = "https://" + properties.get("DB_LOCATION");
       USERNAME = APPID;
   }
