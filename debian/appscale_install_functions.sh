@@ -16,9 +16,6 @@ if [ -z "${APPSCALE_PACKAGE_MIRROR-}" ]; then
 fi
 
 JAVA_VERSION="java-8-openjdk"
-case "${DIST}" in
-    wheezy) JAVA_VERSION="java-7-openjdk" ;;
-esac
 
 export UNAME_MACHINE=$(uname -m)
 if [ -z "${JAVA_HOME_DIRECTORY-}" ]; then
@@ -346,8 +343,10 @@ installcassandra()
 {
     CASSANDRA_VER=3.11.2
 
-    CASSANDRA_PACKAGE="apache-cassandra-${CASSANDRA_VER}-bin.tar.gz"
-    CASSANDRA_PACKAGE_MD5="1c1bc0b216f308500e219968acbd625e"
+    # The following is a Cassandra package built from source with the inclusion
+    # of https://issues.apache.org/jira/browse/CASSANDRA-12942.
+    CASSANDRA_PACKAGE="apache-cassandra-${CASSANDRA_VER}-w-12942-bin.tar.gz"
+    CASSANDRA_PACKAGE_MD5="25a9039dba8fe7ffe5e5e560e65c1f6f"
     cachepackage ${CASSANDRA_PACKAGE} ${CASSANDRA_PACKAGE_MD5}
 
     # Remove old Cassandra environment directory.
@@ -527,13 +526,6 @@ postinstallejabberd()
     fi
 }
 
-installpsutil()
-{
-    case ${DIST} in
-        wheezy) pipwrapper psutil ;;
-    esac
-}
-
 installapiclient()
 {
     # The InfrastructureManager requires the Google API client.
@@ -641,7 +633,7 @@ installapiserver()
     # The activate script fails under `set -u`.
     unset_opt=$(shopt -po nounset)
     case ${DIST} in
-        wheezy|trusty)
+        trusty)
             # Tornado 5 does not work with Python<2.7.9.
             tornado_package='tornado<5'
             ;;
@@ -675,7 +667,7 @@ upgradepip()
     # local packages with optional dependencies. Versions greater than Pip 9
     # do not allow replacing packages installed by the distro.
     case "$DIST" in
-        wheezy|trusty)
+        trusty)
             pipwrapper 'pip<10'
             # Account for the change in the path to the pip binary.
             hash -r
