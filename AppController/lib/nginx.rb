@@ -260,8 +260,13 @@ map $scheme $ssl {
 }
 
 server {
+    listen #{http_port} default_server;
+    return 444;
+}
+
+server {
     listen      #{http_port};
-    server_name #{my_public_ip}-#{version_key};
+    server_name #{my_public_ip};
 
     # Uncomment these lines to enable logging, and comment out the following two
     #access_log #{NGINX_LOG_PATH}/appscale-#{version_key}.access.log upstream;
@@ -293,8 +298,13 @@ server {
 }
 
 server {
+    listen #{https_port} default_server;
+    return 444;
+}
+
+server {
     listen      #{https_port};
-    server_name #{my_public_ip}-#{version_key}-ssl;
+    server_name #{my_public_ip};
     ssl on;
     ssl_protocols TLSv1 TLSv1.1 TLSv1.2;  # don't use SSLv3 ref: POODLE
     ssl_certificate     #{NGINX_PATH}/mycert.pem;
