@@ -65,3 +65,6 @@ INSTANCE_CLASSES = {'F1': 128,
                     'F2': 256,
                     'F4': 512,
                     'F4_1G': 1024}
+
+# The number of seconds to wait between unrouting and stopping an instance.
+UNROUTING_GRACE_PERIOD = 20

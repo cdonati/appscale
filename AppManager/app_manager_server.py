@@ -33,7 +33,8 @@ from appscale.admin.instance_manager.constants import (
   MAX_BACKGROUND_WORKERS,
   MAX_INSTANCE_RESPONSE_TIME,
   MONIT_INSTANCE_PREFIX,
-  PYTHON_APPSERVER
+  PYTHON_APPSERVER,
+  UNROUTING_GRACE_PERIOD
 )
 from appscale.admin.instance_manager.projects_manager import (
   GlobalProjectsManager)
@@ -524,6 +525,7 @@ def stop_app_instance(version_key, port):
   revision_key, port = watch[len(MONIT_INSTANCE_PREFIX):].rsplit('-', 1)
   port = int(port)
   unregister_instance(Instance(revision_key, port))
+  yield gen.sleep(UNROUTING_GRACE_PERIOD)
   yield unmonitor_and_terminate(watch)
 
   project_prefix = ''.join([MONIT_INSTANCE_PREFIX, project_id])
