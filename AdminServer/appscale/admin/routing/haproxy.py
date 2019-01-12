@@ -16,6 +16,11 @@ logger = logging.getLogger('appscale-admin')
 CONFIG_DIR = os.path.join('/', 'etc', 'haproxy')
 
 
+class InvalidConfig(Exception):
+  """ Indicates that a given HAProxy configuration cannot be enforced. """
+  pass
+
+
 class HAProxyAppVersion(object):
   """ Represents a version's HAProxy configuration. """
 
@@ -63,7 +68,7 @@ class HAProxyAppVersion(object):
     bind_location = ':'.join([self._private_ip, str(self.port)])
     return self.VERSION_TEMPLATE.format(
       version=self.version_key, bind_location=bind_location,
-      servers='\n'.join(server_lines))
+      servers='\n  '.join(server_lines))
 
 
 class HAProxy(object):
@@ -110,6 +115,14 @@ class HAProxy(object):
     Returns:
       A string containing a complete HAProxy configuration.
     """
+    unique_ports = set()
+    for version in self.versions:
+      if version.port in unique_ports:
+        raise InvalidConfig('Port {} is used by more than one '
+                            'version'.format(version.port))
+
+      unique_ports.add(version.port)
+
     version_blocks = [self.versions[key].block
                       for key in sorted(self.versions.keys())
                       if self.versions[key].block]
@@ -136,7 +149,11 @@ class HAProxy(object):
     yield gen.sleep(wait_time)
     self.last_reload = time.time()
 
-    new_content = self.config
+    try:
+      new_content = self.config
+    except InvalidConfig as error:
+      logger.error(str(error))
+      return
 
     try:
       with open(self.APP_CONFIG, 'r') as app_config_file:
