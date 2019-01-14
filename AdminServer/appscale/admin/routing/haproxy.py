@@ -168,6 +168,7 @@ class HAProxy(object):
       return
 
     with open(self.APP_CONFIG, 'w') as app_config_file:
+      logger.info('new_content: {}'.format(new_content))
       app_config_file.write(new_content)
 
     try:
