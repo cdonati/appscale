@@ -128,14 +128,12 @@ class ZKTransaction:
   # How long to wait before retrying an operation.
   ZK_RETRY_TIME = .5
 
-  def __init__(self, host=DEFAULT_HOST, db_access=None,
-               log_level=logging.INFO):
+  def __init__(self, host=DEFAULT_HOST, log_level=logging.INFO):
     """ Creates a new ZKTransaction, which will communicate with Zookeeper
     on the given host.
 
     Args:
       host: A str that indicates which machine runs the Zookeeper service.
-      db_access: A DatastoreProxy instance.
       log_level: A logging constant that specifies the instance logging level.
     """
     retry_policy = KazooRetry(max_tries=5)
@@ -154,8 +152,6 @@ class ZKTransaction:
     self.handle.start()
 
     self.__counter_cache = {}
-
-    self.db_access = db_access
 
   def close(self):
     """ Stops the thread that cleans up failed transactions and closes its

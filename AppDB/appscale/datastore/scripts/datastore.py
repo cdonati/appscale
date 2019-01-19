@@ -875,8 +875,7 @@ def main():
   datastore_batch = DatastoreFactory.getDatastore(
     args.type, log_level=logger.getEffectiveLevel())
   zookeeper = zktransaction.ZKTransaction(
-    host=zookeeper_locations, db_access=datastore_batch,
-    log_level=logger.getEffectiveLevel())
+    host=zookeeper_locations, log_level=logger.getEffectiveLevel())
 
   zookeeper.handle.add_listener(zk_state_listener)
   zookeeper.handle.ensure_path(DATASTORE_SERVERS_NODE)
