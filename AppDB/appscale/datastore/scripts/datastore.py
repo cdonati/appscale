@@ -880,10 +880,20 @@ def main():
     command_retry=retry_policy)
   zk_client.start()
 
-  datastore_batch = DatastoreFactory.getDatastore(
-    args.type, log_level=logger.getEffectiveLevel())
-  zookeeper = zktransaction.ZKTransaction(
-    zk_client, log_level=logger.getEffectiveLevel())
+  if args.type == 'cassandra':
+    datastore_batch = DatastoreFactory.getDatastore(
+      args.type, log_level=logger.getEffectiveLevel())
+    zookeeper = zktransaction.ZKTransaction(
+      zk_client, log_level=logger.getEffectiveLevel())
+    transaction_manager = TransactionManager(zk_client)
+    datastore_access = DatastoreDistributed(
+      datastore_batch, transaction_manager, zookeeper=zookeeper,
+      log_level=logger.getEffectiveLevel(),
+      taskqueue_locations=taskqueue_locations)
+  else:
+    from appscale.datastore.fdb import FDBDatastore
+    datastore_access = FDBDatastore()
+    datastore_access.start()
 
   zk_client.add_listener(zk_state_listener)
   zk_client.ensure_path(DATASTORE_SERVERS_NODE)
@@ -892,11 +902,6 @@ def main():
   zk_state_listener(zk_client.state)
   zk_client.ChildrenWatch(DATASTORE_SERVERS_NODE, update_servers_watch)
 
-  transaction_manager = TransactionManager(zk_client)
-  datastore_access = DatastoreDistributed(
-    datastore_batch, transaction_manager, zookeeper=zookeeper,
-    log_level=logger.getEffectiveLevel(),
-    taskqueue_locations=taskqueue_locations)
   index_manager = IndexManager(zk_client, datastore_access,
                                perform_admin=True)
   datastore_access.index_manager = index_manager
