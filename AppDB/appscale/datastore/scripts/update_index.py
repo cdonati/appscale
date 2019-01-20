@@ -1,7 +1,10 @@
 import argparse
 import sys
 
-from appscale.common import appscale_info
+from kazoo.client import KazooClient
+from kazoo.retry import KazooRetry
+
+from appscale.common import appscale_info, constants
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.index_manager import IndexManager
 from appscale.datastore.utils import tornado_synchronous
@@ -47,7 +50,13 @@ def main():
   datastore_batch = appscale_datastore_batch.DatastoreFactory.\
     getDatastore(args.type)
   zookeeper_locations = appscale_info.get_zk_locations_string()
-  zookeeper = zk.ZKTransaction(host=zookeeper_locations)
+  retry_policy = KazooRetry(max_tries=5)
+  zk_client = KazooClient(
+    hosts=zookeeper_locations,
+    connection_retry=constants.ZK_PERSISTENT_RECONNECTS,
+    command_retry=retry_policy)
+  zk_client.start()
+  zookeeper = zk.ZKTransaction(zk_client)
   transaction_manager = TransactionManager(zookeeper.handle)
   datastore_access = DatastoreDistributed(
     datastore_batch, transaction_manager, zookeeper=zookeeper)

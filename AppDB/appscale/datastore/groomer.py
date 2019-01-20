@@ -7,6 +7,8 @@ import sys
 import threading
 import time
 
+from kazoo.client import KazooClient
+from kazoo.retry import KazooRetry
 from tornado import gen
 
 from appscale.datastore.utils import tornado_synchronous
@@ -1155,7 +1157,14 @@ class DatastoreGroomer(threading.Thread):
 def main():
   """ This main function allows you to run the groomer manually. """
   zk_connection_locations = appscale_info.get_zk_locations_string()
-  zookeeper = zk.ZKTransaction(host=zk_connection_locations)
+  retry_policy = KazooRetry(max_tries=5)
+  zk_client = KazooClient(
+    hosts=zk_connection_locations,
+    connection_retry=constants.ZK_PERSISTENT_RECONNECTS,
+    command_retry=retry_policy)
+  zk_client.start()
+
+  zookeeper = zk.ZKTransaction(zk_client)
   db_info = appscale_info.get_db_info()
   table = db_info[':table']
 

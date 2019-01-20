@@ -8,6 +8,9 @@ import subprocess
 import sys
 import time
 
+from kazoo.client import KazooClient
+from kazoo.retry import KazooRetry
+
 from appscale.common.appscale_utils import ssh
 from appscale.datastore import dbconstants
 from appscale.datastore.dbconstants import APP_ENTITY_SCHEMA
@@ -26,7 +29,8 @@ from appscale.common.constants import (
   APPSCALE_HOME,
   CONTROLLER_SERVICE,
   KEY_DIRECTORY,
-  LOG_DIR
+  LOG_DIR,
+  ZK_PERSISTENT_RECONNECTS
 )
 
 # The number of entities retrieved in a datastore request.
@@ -153,7 +157,12 @@ def get_zookeeper(zk_location_ips):
     zk_location_ips: A list of ZooKeeper location ips.
   """
   zookeeper_locations = get_zk_locations_string(zk_location_ips)
-  zookeeper = zk.ZKTransaction(host=zookeeper_locations)
+  retry_policy = KazooRetry(max_tries=5)
+  zk_client = KazooClient(
+    hosts=zookeeper_locations, connection_retry=ZK_PERSISTENT_RECONNECTS,
+    command_retry=retry_policy)
+  zk_client.start()
+  zookeeper = zk.ZKTransaction(zk_client)
   return zookeeper
 
 

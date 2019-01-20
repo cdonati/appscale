@@ -1,7 +1,10 @@
 """ Provides a service which periodically runs the groomer. """
 import logging
 
-from appscale.common import appscale_info
+from kazoo.client import KazooClient
+from kazoo.retry import KazooRetry
+
+from appscale.common import appscale_info, constants
 from appscale.common.constants import DB_SERVER_PORT
 from appscale.common.constants import LOG_FORMAT
 from .. import groomer
@@ -12,7 +15,13 @@ def main():
   logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
   logger = logging.getLogger(__name__)
   zookeeper_locations = appscale_info.get_zk_locations_string()
-  gc_zookeeper = zk.ZKTransaction(host=zookeeper_locations)
+  retry_policy = KazooRetry(max_tries=5)
+  zk_client = KazooClient(
+    hosts=zookeeper_locations,
+    connection_retry=constants.ZK_PERSISTENT_RECONNECTS,
+    command_retry=retry_policy)
+  zk_client.start()
+  gc_zookeeper = zk.ZKTransaction(zk_client)
   logger.info("Using ZK locations {0}".format(zookeeper_locations))
 
   datastore_location = ':'.join([appscale_info.get_db_proxy(),

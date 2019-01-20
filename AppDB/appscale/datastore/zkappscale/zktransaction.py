@@ -128,28 +128,22 @@ class ZKTransaction:
   # How long to wait before retrying an operation.
   ZK_RETRY_TIME = .5
 
-  def __init__(self, host=DEFAULT_HOST, log_level=logging.INFO):
+  def __init__(self, zk_client, log_level=logging.INFO):
     """ Creates a new ZKTransaction, which will communicate with Zookeeper
     on the given host.
 
     Args:
-      host: A str that indicates which machine runs the Zookeeper service.
+      zk_client: A KazooClient.
       log_level: A logging constant that specifies the instance logging level.
     """
-    retry_policy = KazooRetry(max_tries=5)
-
     class_name = self.__class__.__name__
     self.logger = logging.getLogger(class_name)
     self.logger.setLevel(log_level)
     self.logger.info('Starting {}'.format(class_name))
 
     # Connection instance variables.
-    self.host = host
-    self.handle = kazoo.client.KazooClient(
-      hosts=host, connection_retry=ZK_PERSISTENT_RECONNECTS,
-      command_retry=retry_policy)
+    self.handle = zk_client
     self.run_with_retry = self.handle.retry
-    self.handle.start()
 
     self.__counter_cache = {}
 

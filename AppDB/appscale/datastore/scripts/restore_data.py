@@ -5,7 +5,10 @@ import argparse
 import logging
 import os
 
-from appscale.common import appscale_info
+from kazoo.client import KazooClient
+from kazoo.retry import KazooRetry
+
+from appscale.common import appscale_info, constants
 from ..backup.datastore_restore import DatastoreRestore
 from ..dbconstants import APP_ENTITY_SCHEMA
 from ..dbconstants import APP_ENTITY_TABLE
@@ -100,7 +103,13 @@ def main():
   logger.info(args)
 
   zk_connection_locations = appscale_info.get_zk_locations_string()
-  zookeeper = zk.ZKTransaction(host=zk_connection_locations)
+  retry_policy = KazooRetry(max_tries=5)
+  zk_client = KazooClient(
+    hosts=zk_connection_locations,
+    connection_retry=constants.ZK_PERSISTENT_RECONNECTS,
+    command_retry=retry_policy)
+  zk_client.start()
+  zookeeper = zk.ZKTransaction(zk_client)
 
   # Verify app is deployed.
   if not app_is_deployed(args.app_id, zookeeper.handle):
