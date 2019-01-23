@@ -372,6 +372,19 @@ installcassandra()
     chown -R cassandra ${CASSANDRA_DATA_DIR}
 }
 
+installfdb()
+{
+    FDB_CLIENT_LIB="foundationdb-clients_6.0.15-1_amd64.deb"
+    FDB_CLIENT_LIB_MD5="188db76d49a6b3fce3ec9e8e181522f5"
+    cachepackage ${FDB_CLIENT_LIB} ${FDB_CLIENT_LIB_MD5}
+    dpkg -i "${PACKAGE_CACHE}/${FDB_CLIENT_LIB}"
+
+    FDB_PYTHON_LIB="foundationdb-6.0.15.tar.gz"
+    FDB_PYTHON_LIB_MD5="7ea8bb3e3e2329654e5c81dd89612b76"
+    cachepackage ${FDB_PYTHON_LIB} ${FDB_PYTHON_LIB_MD5}
+    pip install "${PACKAGE_CACHE}/${FDB_PYTHON_LIB}"
+}
+
 postinstallcassandra()
 {
     mkdir -p ${CONFIG_DIR}/${APPSCALE_VERSION}
