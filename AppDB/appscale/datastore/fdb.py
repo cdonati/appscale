@@ -92,28 +92,26 @@ class FDBDatastore(object):
     futures = []
     for entity in put_request.entity_list():
       namespace_dir = namespace_dirs[entity.key().name_space()]
-      futures.append(self._insert_entity(namespace_dir, entity))
+      futures.append(self._upsert(namespace_dir, entity))
+
+    yield futures
 
   @gen.coroutine
-  def _insert_entity(self, namespace_dir, entity):
+  def _upsert(self, namespace_dir, entity):
     path = []
-    logger.info('entity: {}'.format(entity))
     for element in entity.key().path().element_list():
-      id_or_name = None
       if element.has_id():
-        logger.info('has id')
-        id_or_name = element.id()
+        path.append([element.type(), element.id()])
       elif element.has_name():
-        logger.info('has name')
-        id_or_name = element.name()
+        path.append([element.type(), element.name()])
+      else:
+        raise BadRequest('All path elements must either have a name or ID')
 
-      path.append([element.type(), id_or_name])
-
-    if any(element[1] is None for element in path[:-1]):
-      raise BadRequest('All non-terminal path elements must have an id or'
+    if not all(element[1] for element in path[:-1]):
+      raise BadRequest('All non-terminal path elements must have an ID or'
                        'name')
 
-    auto_id = path[-1][1] is None
+    auto_id = path[-1][1] == 0
     if auto_id:
       path[-1][1] = self._scattered_allocator.get_id()
 
