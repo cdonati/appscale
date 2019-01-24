@@ -78,6 +78,7 @@ class FDBDatastore(object):
                   for entity in put_request.entity_list()}
 
     # Ensure the client is not performing mutations for a different project.
+    logger.info('namespaces: {}'.format(namespaces))
     invalid_project_id = next(
       (namespace[0] != project_id for namespace in namespaces), None)
     if invalid_project_id is not None:
