@@ -91,7 +91,7 @@ class FDBDatastore(object):
 
     futures = []
     for entity in put_request.entity_list():
-      namespace_dir = namespace_dirs[(project_id, entity.key().name_space())]
+      namespace_dir = namespace_dirs[entity.key().name_space()]
       futures.append(self._insert_entity(namespace_dir, entity))
 
   @gen.coroutine
