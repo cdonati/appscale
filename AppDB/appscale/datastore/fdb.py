@@ -100,8 +100,10 @@ class FDBDatastore(object):
     for element in entity.key().path().element_list():
       id_or_name = None
       if element.has_id():
+        logger.info('has id')
         id_or_name = element.id()
       elif element.has_name():
+        logger.info('has name')
         id_or_name = element.name()
 
       path.append([element.type(), id_or_name])
@@ -111,7 +113,11 @@ class FDBDatastore(object):
                        'name')
 
     auto_id = path[-1][1] is None
-    path[-1][1] = self._scattered_allocator.get_id()
+    if auto_id:
+      path[-1][1] = self._scattered_allocator.get_id()
+
+    logger.info('auto_id: {}'.format(auto_id))
+    logger.info('path: {}'.format(path))
     key_range = namespace_dir.range(
       tuple(item for element in path for item in element))
     logger.info('key_range: {}'.format(key_range))
