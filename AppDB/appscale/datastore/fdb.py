@@ -86,7 +86,7 @@ class FDBDatastore(object):
                        '{} != {}'.format(invalid_project_id, project_id))
 
     namespace_dirs = {
-      ns: self._ds_dir.create_or_open(self._db, (project_id, ns))
+      ns[1]: self._ds_dir.create_or_open(self._db, (project_id, ns[1]))
       for ns in namespaces}
 
     futures = []
