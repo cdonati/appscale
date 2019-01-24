@@ -48,9 +48,12 @@ class ScatteredAllocator(object):
   def get_id(self):
     id_ = (_MAX_SEQUENTIAL_ID + 1 +
            long(ReverseBitsInt64(self._counter << _SCATTER_SHIFT)))
+
     self._counter += 1
     if self._counter > _MAX_SCATTERED_COUNTER:
       self._counter = 1
+
+    return id_
 
 
 class FDBDatastore(object):
