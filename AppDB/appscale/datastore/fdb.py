@@ -79,8 +79,8 @@ class FDBDatastore(object):
 
     # Ensure the client is not performing mutations for a different project.
     logger.info('namespaces: {}'.format(namespaces))
-    invalid_project_id = next(
-      (namespace[0] != project_id for namespace in namespaces), None)
+    invalid_project_id = next((namespace[0] for namespace in namespaces
+                               if namespace[0] != project_id), None)
     if invalid_project_id is not None:
       raise BadRequest('Project ID mismatch: '
                        '{} != {}'.format(invalid_project_id, project_id))
