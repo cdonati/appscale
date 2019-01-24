@@ -97,6 +97,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def _insert_entity(self, namespace_dir, entity):
     path = []
+    logger.info('entity: {}'.format(entity))
     for element in entity.key().path().element_list():
       id_or_name = None
       if element.has_id():
