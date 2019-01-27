@@ -179,12 +179,13 @@ class FDBDatastore(object):
 
     key_range = namespace_dir.range(
       tuple(item for element in path for item in element))
-    logging.info('start: {}'.format(key_range.start))
-    logging.info('end: {}'.format(key_range.stop))
+    logging.info('start: {}'.format(repr(key_range.start)))
+    logging.info('end: {}'.format(repr(key_range.stop)))
     iterator = tr.snapshot.get_range(
       key_range.start, key_range.stop, reverse=True)
     for item in iterator:
-      logging.info('item: {}'.format(item))
+      key_parts = fdb.tuple.unpack(item.key)
+      logging.info('key_parts: {}'.format(key_parts))
 
     tr.cancel()
 
