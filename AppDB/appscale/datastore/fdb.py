@@ -132,6 +132,62 @@ class FDBDatastore(object):
     yield futures
 
   @gen.coroutine
+  def dynamic_get(self, project_id, get_request, get_response):
+    if get_request.has_transaction():
+      raise BadRequest('Transactions are not implemented')
+
+    namespaces = {(key.app(), key.name_space())
+                  for key in get_request.key_list()}
+
+    # Ensure the client is not requesting entities from a different project.
+    invalid_project_id = next((namespace[0] for namespace in namespaces
+                               if namespace[0] != project_id), None)
+    if invalid_project_id is not None:
+      raise BadRequest('Project ID mismatch: '
+                       '{} != {}'.format(invalid_project_id, project_id))
+
+    namespace_dirs = {
+      ns[1]: self._ds_dir.create_or_open(self._db, (project_id, ns[1]))
+      for ns in namespaces}
+
+    futures = []
+    for key in get_request.key_list():
+      namespace_dir = namespace_dirs[key.name_space()]
+      futures.append(self._get(namespace_dir, key))
+
+    response = yield futures
+    raise gen.Return(response)
+
+  @gen.coroutine
+  def _get(self, namespace_dir, key):
+    path = []
+    for element in key.path().element_list():
+      if element.has_id():
+        path.append([element.type(), element.id()])
+      elif element.has_name():
+        path.append([element.type(), element.name()])
+      else:
+        raise BadRequest('All path elements must either have a name or ID')
+
+    if not all(element[1] for element in path[:-1]):
+      raise BadRequest('All non-terminal path elements must have an ID or'
+                       'name')
+
+    prefix = [item for element in path for item in element]
+    logger.info('prefix: {}'.format(prefix))
+    tr = self._db.create_transaction()
+
+    key_range = namespace_dir.range(
+      tuple(item for element in path for item in element))
+    logging.info('start: {}'.format(key_range[0]))
+    logging.info('end: {}'.format(key_range[-1]))
+    iterator = tr.snapshot.get_range(key_range[0], key_range[-1], reverse=True)
+    for item in iterator:
+      logging.info('item: {}'.format(item))
+
+    tr.cancel()
+
+  @gen.coroutine
   def _upsert(self, namespace_dir, entity):
     path = []
     for element in entity.key().path().element_list():
