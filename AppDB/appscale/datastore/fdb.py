@@ -6,6 +6,8 @@ import random
 
 import fdb
 from tornado import gen
+from tornado.concurrent import Future as TornadoFuture
+from tornado.ioloop import IOLoop
 
 from appscale.datastore.dbconstants import BadRequest
 
@@ -18,6 +20,9 @@ _MAX_SEQUENTIAL_ID = (1 << _MAX_SEQUENTIAL_BIT) - 1
 _MAX_SCATTERED_COUNTER = (1 << (_MAX_SEQUENTIAL_BIT - 1)) - 1
 _MAX_SCATTERED_ID = _MAX_SEQUENTIAL_ID + 1 + _MAX_SCATTERED_COUNTER
 _SCATTER_SHIFT = 64 - _MAX_SEQUENTIAL_BIT + 1
+
+
+ENTITY_V3 = '0'
 
 
 def ReverseBitsInt64(v):
@@ -56,18 +61,46 @@ class ScatteredAllocator(object):
     return id_
 
 
+class TornadoFDB(object):
+  def __init__(self, io_loop):
+    self._io_loop = io_loop
+
+  def commit(self, tr):
+    tornado_future = TornadoFuture()
+    callback = lambda fdb_future: self._handle_fdb_callback(
+      fdb_future, tornado_future)
+    commit_future = tr.commit()
+    commit_future.on_ready(callback)
+    return tornado_future
+
+  def _handle_fdb_callback(self, fdb_future, tornado_future):
+    try:
+      result = fdb_future.wait()
+    except Exception as fdb_error:
+      self._io_loop.add_callback(tornado_future.set_exception, fdb_error)
+      return
+
+    self._io_loop.add_callback(tornado_future.set_result, result)
+
+
 class FDBDatastore(object):
   """ A datastore implementation that uses FoundationDB.
       This is experimental. Don't use it in production. """
+
+  # The max number of bytes for each chunk in an encoded entity.
+  _CHUNK_SIZE = 10000
+
   def __init__(self):
     self._db = None
     self._ds_dir = None
     self._scattered_allocator = ScatteredAllocator()
+    self._tornado_fdb = None
 
   def start(self):
     self._db = fdb.open()
     self._ds_dir = fdb.directory.create_or_open(
       self._db, ('appscale', 'datastore'))
+    self._tornado_fdb = TornadoFDB(IOLoop.current())
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
@@ -81,7 +114,6 @@ class FDBDatastore(object):
                   for entity in put_request.entity_list()}
 
     # Ensure the client is not performing mutations for a different project.
-    logger.info('namespaces: {}'.format(namespaces))
     invalid_project_id = next((namespace[0] for namespace in namespaces
                                if namespace[0] != project_id), None)
     if invalid_project_id is not None:
@@ -118,10 +150,17 @@ class FDBDatastore(object):
     if auto_id:
       path[-1][1] = self._scattered_allocator.get_id()
 
-    logger.info('auto_id: {}'.format(auto_id))
-    logger.info('path: {}'.format(path))
-    key_range = namespace_dir.range(
-      tuple(item for element in path for item in element))
+    prefix = [item for element in path for item in element]
+    logger.info('prefix: {}'.format(prefix))
+    # key_range = namespace_dir.range(
+    #   tuple(item for element in path for item in element))
+    value = ''.join([ENTITY_V3, entity.Encode()])
+
     tr = self._db.create_transaction()
-    
-    logger.info('key_range: {}'.format(key_range))
+
+    # TODO: Get old value.
+
+    key = namespace_dir.pack_with_versionstamp(
+      tuple(prefix + [fdb.tuple.Versionstamp(), 0]))
+    tr.set_versionstamped_key(key, value)
+    yield self._tornado_fdb.commit(tr)
