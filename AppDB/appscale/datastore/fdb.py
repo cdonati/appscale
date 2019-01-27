@@ -179,9 +179,10 @@ class FDBDatastore(object):
 
     key_range = namespace_dir.range(
       tuple(item for element in path for item in element))
-    logging.info('start: {}'.format(key_range[0]))
-    logging.info('end: {}'.format(key_range[-1]))
-    iterator = tr.snapshot.get_range(key_range[0], key_range[-1], reverse=True)
+    logging.info('start: {}'.format(key_range.start))
+    logging.info('end: {}'.format(key_range.stop))
+    iterator = tr.snapshot.get_range(
+      key_range.start, key_range.stop, reverse=True)
     for item in iterator:
       logging.info('item: {}'.format(item))
 
