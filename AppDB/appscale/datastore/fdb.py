@@ -182,7 +182,7 @@ class FDBDatastore(object):
     logging.info('start: {}'.format(repr(key_range.start)))
     logging.info('end: {}'.format(repr(key_range.stop)))
     iterator = tr.snapshot.get_range(
-      key_range.start, key_range.stop, reverse=True)
+      key_range.start, key_range.stop, limit=1, reverse=True)
     for item in iterator:
       key_parts = fdb.tuple.unpack(item.key)
       logging.info('key_parts: {}'.format(key_parts))
@@ -213,12 +213,16 @@ class FDBDatastore(object):
     # key_range = namespace_dir.range(
     #   tuple(item for element in path for item in element))
     value = ''.join([ENTITY_V3, entity.Encode()])
+    chunk_indexes = [(n, n + self._CHUNK_SIZE)
+                     for n in xrange(0, len(value), self._CHUNK_SIZE)]
 
     tr = self._db.create_transaction()
 
     # TODO: Get old value.
 
-    key = namespace_dir.pack_with_versionstamp(
-      tuple(prefix + [fdb.tuple.Versionstamp(), 0]))
-    tr.set_versionstamped_key(key, value)
+    for start, end in chunk_indexes:
+      key = namespace_dir.pack_with_versionstamp(
+        tuple(prefix + [fdb.tuple.Versionstamp(), start]))
+      tr.set_versionstamped_key(key, value[start:end])
+
     yield self._tornado_fdb.commit(tr)
