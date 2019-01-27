@@ -122,4 +122,6 @@ class FDBDatastore(object):
     logger.info('path: {}'.format(path))
     key_range = namespace_dir.range(
       tuple(item for element in path for item in element))
+    tr = self._db.create_transaction()
+    
     logger.info('key_range: {}'.format(key_range))
