@@ -73,6 +73,18 @@ class TornadoFDB(object):
     commit_future.on_ready(callback)
     return tornado_future
 
+  def get_range(self, tr, snapshot, *args, **kwargs):
+    tx_reader = tr
+    if snapshot:
+      tx_reader = tr.snapshot
+
+    tornado_future = TornadoFuture()
+    callback = lambda fdb_future: self._handle_fdb_callback(
+      fdb_future, tornado_future)
+    get_future = tx_reader._get_range(*args, **kwargs)
+    get_future.on_ready(callback)
+    return tornado_future
+
   def _handle_fdb_callback(self, fdb_future, tornado_future):
     try:
       result = fdb_future.wait()
@@ -81,6 +93,71 @@ class TornadoFDB(object):
       return
 
     self._io_loop.add_callback(tornado_future.set_result, result)
+
+
+# class RangeIterator(object):
+#     def __init__(self, tr, begin, end, limit, reverse, streaming_mode):
+#       self._tr = tr
+#
+#       self._bsel = begin
+#       self._esel = end
+#
+#       self._limit = limit
+#       self._reverse = reverse
+#       self._mode = streaming_mode
+#
+#       self._future = self._tr._get_range(begin, end, limit, streaming_mode, 1, reverse)
+#
+#     def to_list(self):
+#       if self._mode == StreamingMode.iterator:
+#         if self._limit > 0:
+#           mode = StreamingMode.exact
+#         else:
+#           mode = StreamingMode.want_all
+#       else:
+#         mode = self._mode
+#
+#       return list(self.__iter__(mode=mode))
+#
+#     @gen.coroutine
+#     def __iter__(self, mode=None):
+#       if mode is None:
+#         mode = self._mode
+#       bsel = self._bsel
+#       esel = self._esel
+#       limit = self._limit
+#
+#       iteration = 1  # the first read was fired off when the FDBRange was initialized
+#       future = self._future
+#
+#       done = False
+#
+#       while not done:
+#         if future:
+#           (kvs, count, more) = future.wait()
+#           index = 0
+#           future = None
+#
+#           if not count:
+#             return
+#
+#         result = kvs[index]
+#         index += 1
+#
+#         if index == count:
+#           if not more or limit == count:
+#             done = True
+#           else:
+#             iteration += 1
+#             if limit > 0:
+#               limit = limit - count
+#             if self._reverse:
+#               esel = KeySelector.first_greater_or_equal(kvs[-1].key)
+#             else:
+#               bsel = KeySelector.first_greater_than(kvs[-1].key)
+#             future = self._tr._get_range(bsel, esel, limit, mode, iteration, self._reverse)
+#
+#         yield result
 
 
 class FDBDatastore(object):
@@ -181,9 +258,14 @@ class FDBDatastore(object):
       tuple(item for element in path for item in element))
     logging.info('start: {}'.format(repr(key_range.start)))
     logging.info('end: {}'.format(repr(key_range.stop)))
-    iterator = tr.snapshot.get_range(
-      key_range.start, key_range.stop, limit=1, reverse=True)
-    for item in iterator:
+
+    (results, count, more) = yield self._tornado_fdb.get_range(
+      tr, True, key_range.start, key_range.stop, 1, 1, True)
+    logger.info('results: {}'.format(results))
+    logger.info('count: {}'.format(count))
+    logger.info('more: {}'.format(more))
+
+    for item in results:
       key_parts = fdb.tuple.unpack(item.key)
       logging.info('key_parts: {}'.format(key_parts))
 
