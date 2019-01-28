@@ -73,15 +73,21 @@ class TornadoFDB(object):
     commit_future.on_ready(callback)
     return tornado_future
 
-  def get_range(self, tr, snapshot, *args, **kwargs):
+  def get_range(self, tr, snapshot, begin, end, *args, **kwargs):
     tx_reader = tr
     if snapshot:
       tx_reader = tr.snapshot
 
+    if not isinstance(begin, fdb.KeySelector):
+      begin = fdb.KeySelector.first_greater_or_equal(begin)
+
+    if not isinstance(end, fdb.KeySelector):
+      end = fdb.KeySelector.first_greater_or_equal(end)
+
     tornado_future = TornadoFuture()
     callback = lambda fdb_future: self._handle_fdb_callback(
       fdb_future, tornado_future)
-    get_future = tx_reader._get_range(*args, **kwargs)
+    get_future = tx_reader._get_range(begin, end, *args, **kwargs)
     get_future.on_ready(callback)
     return tornado_future
 
