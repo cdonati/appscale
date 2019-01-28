@@ -37,7 +37,13 @@ _MAX_SCATTERED_ID = _MAX_SEQUENTIAL_ID + 1 + _MAX_SCATTERED_COUNTER
 _SCATTER_SHIFT = 64 - _MAX_SEQUENTIAL_BIT + 1
 
 
-ENTITY_V3 = '0'
+class EntityTypes(object):
+  ENTITY_V3 = '0'
+
+
+class EntitySections(object):
+  DATA = '1'
+  JOURNAL = '0'
 
 
 def ReverseBitsInt64(v):
@@ -82,7 +88,7 @@ class TornadoFDB(object):
 
   def commit(self, tr):
     tornado_future = TornadoFuture()
-    callback = lambda fdb_future: self._handle_fdb_callback(
+    callback = lambda fdb_future: self._handle_fdb_result(
       fdb_future, tornado_future)
     commit_future = tr.commit()
     commit_future.on_ready(callback)
@@ -100,13 +106,13 @@ class TornadoFDB(object):
       end = fdb.KeySelector.first_greater_or_equal(end)
 
     tornado_future = TornadoFuture()
-    callback = lambda fdb_future: self._handle_fdb_callback(
+    callback = lambda fdb_future: self._handle_fdb_result(
       fdb_future, tornado_future)
     get_future = tx_reader._get_range(begin, end, *args, **kwargs)
     get_future.on_ready(callback)
     return tornado_future
 
-  def _handle_fdb_callback(self, fdb_future, tornado_future):
+  def _handle_fdb_result(self, fdb_future, tornado_future):
     try:
       result = fdb_future.wait()
     except Exception as fdb_error:
@@ -337,6 +343,11 @@ class FDBDatastore(object):
                      for n in xrange(0, len(value), self._CHUNK_SIZE)]
 
     tr = self._db.create_transaction()
+
+    # Select the latest version for the entity key.
+    response = yield self._tornado_fdb.get_range(
+      tr, True, key_range.start, key_range.stop, 1, fdb.StreamingMode.want_all,
+      1, True)
 
     # TODO: Get old value.
 
