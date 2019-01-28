@@ -1,15 +1,30 @@
-""" A datastore implementation that uses FoundationDB. """
+""" A datastore implementation that uses FoundationDB.
+
+An entity key looks like this:
+  [directory-------------------------------------] (compressed)
+  (appscale, datastore, <project-id>, <namespace>,
+   <element1_type>, <element1_id_or_name>, ..., txid, chunk_index)
+
+The first byte of an entity value indicates the type of object that is stored.
+Due to FDB's value size limit, values that exceed the chunk size threshold are
+split into multiple key-values.
+"""
 from __future__ import absolute_import
 
 import logging
 import random
+import sys
 
 import fdb
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 from tornado.ioloop import IOLoop
 
+from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest
+
+sys.path.append(APPSCALE_PYTHON_APPSERVER)
+from google.appengine.datastore import entity_pb
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -239,6 +254,10 @@ class FDBDatastore(object):
       futures.append(self._get(namespace_dir, key))
 
     response = yield futures
+    for encoded_entity in response:
+      group = get_response.add_entity()
+      group.mutable_entity().CopyFrom(entity_pb.EntityProto(encoded_entity))
+
     raise gen.Return(response)
 
   @gen.coroutine
@@ -257,26 +276,38 @@ class FDBDatastore(object):
                        'name')
 
     prefix = [item for element in path for item in element]
-    logger.info('prefix: {}'.format(prefix))
     tr = self._db.create_transaction()
 
-    key_range = namespace_dir.range(
-      tuple(item for element in path for item in element))
-    logging.info('start: {}'.format(repr(key_range.start)))
-    logging.info('end: {}'.format(repr(key_range.stop)))
+    key_range = namespace_dir.range(tuple(prefix))
+    logger.info('start: {}, {}'.format(key_range.start, fdb.tuple.unpack(key_range.start)))
+    logger.info('end: {}, {}'.format(key_range.end, fdb.tuple.unpack(key_range.end)))
 
-    (results, count, more) = yield self._tornado_fdb.get_range(
+    # Select the latest versionstamp for the entity key.
+    response = yield self._tornado_fdb.get_range(
       tr, True, key_range.start, key_range.stop, 1, fdb.StreamingMode.want_all,
       1, True)
-    logger.info('results: {}'.format(results))
-    logger.info('count: {}'.format(count))
-    logger.info('more: {}'.format(more))
 
-    for item in results:
-      key_parts = fdb.tuple.unpack(item.key)
-      logging.info('key_parts: {}'.format(key_parts))
+    kv = response[0][0]
+    last_part = kv.value
+    key_parts = fdb.tuple.unpack(kv.key)
+
+    # If the entity contains more than one chunk, fetch earlier ones.
+    earlier_chunks = []
+    if key_parts[-1] > 0:
+      begin = namespace_dir.range(tuple(prefix + [key_parts[-2]])).start
+      response = yield self._tornado_fdb.get_range(
+        tr, True, begin, kv.key, 0, fdb.StreamingMode.want_all, 1, False)
+      logger.info('response: {}'.format(response))
+      earlier_chunks = [kv.value for kv in response[0]]
 
     tr.cancel()
+
+    encoded_value = ''.join(earlier_chunks + [last_part])
+    entity_type = encoded_value[0]
+    if entity_type != ENTITY_V3:
+      raise Exception('unknown value')
+
+    raise gen.Return(encoded_value[1:])
 
   @gen.coroutine
   def _upsert(self, namespace_dir, entity):
