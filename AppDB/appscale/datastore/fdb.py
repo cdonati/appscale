@@ -5,7 +5,6 @@ import logging
 import random
 
 import fdb
-from fdb import StreamingMode
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 from tornado.ioloop import IOLoop
@@ -261,8 +260,8 @@ class FDBDatastore(object):
     logging.info('end: {}'.format(repr(key_range.stop)))
 
     (results, count, more) = yield self._tornado_fdb.get_range(
-      tr, True, key_range.start, key_range.stop, 1, StreamingMode.want_all, 1,
-      True)
+      tr, True, key_range.start, key_range.stop, 1, fdb.StreamingMode.want_all,
+      1, True)
     logger.info('results: {}'.format(results))
     logger.info('count: {}'.format(count))
     logger.info('more: {}'.format(more))
