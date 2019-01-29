@@ -1,13 +1,36 @@
 """ A datastore implementation that uses FoundationDB.
 
-An entity key looks like this:
-  [directory-------------------------------------] (compressed)
-  (appscale, datastore, <project-id>, <namespace>,
-   <element1_type>, <element1_id_or_name>, ..., txid, chunk_index)
+All datastore state is split between multiple FoundationDB directories. All of
+the state for a given project/namespace is stored in
+(appscale, datastore, <project-id>, <namespace>). Within
+each namespace directory, there is a directory for each of the following:
+
+journal: This maps entity versions to FoundationDB versionstamps. This mapping
+is necessary because the API requires 64-bit values for entity versions, but
+this implementation requires 80-bit versionstamps for determining if a
+transaction can succeed. Here is the template along with an example key-value.
+Items wrapped in "[]" represent multiple elements for brevity.
+
+  ([journal_dir], [entity-path], <entity-version>) -> <versionstamp>
+  ([journal_dir], Guestbook, default, Greeting, 5, 1) -> <versionstamp>
+
+entities: This maps entity keys to encoded entity data. The data is prefixed by
+a byte that indicates how it is encoded. Due to FDB's value size limit, data
+that exceeds the chunk size threshold is split into multiple key-values. The
+index value indicates the position of the chunk. Here is the template along
+with an example key-value:
+
+  ([entities_dir], [entity-path], <version>, <index>) -> <encoding><data>
+  ([entities_dir], Guestbook, default, Greeting, 5, 1, 0) -> 0<protobuffer>
+
+indexes...
+
+When an entity is updated, non-ancestor indexes from older versions are erased
+immediately, but older entity versions are kept for at least the maximum
+transaction duration to allow a transaction to see a consistent snapshot.
 
 The first byte of an entity value indicates the type of object that is stored.
-Due to FDB's value size limit, values that exceed the chunk size threshold are
-split into multiple key-values.
+
 """
 from __future__ import absolute_import
 
@@ -82,6 +105,33 @@ class ScatteredAllocator(object):
     return id_
 
 
+class DirectoryManager(object):
+  """ Manages a cache of recently opened directories. """
+  def __init__(self, size=256):
+    """ Creates new OperationsCache.
+
+    Args:
+      size: An integer specifying the maximum size of the cache.
+    """
+    super(DirectoryCache, self).__init__()
+    self.directory_list = []
+    self.max_size = size
+
+  def __setitem__(self, key, value):
+    """ Adds a new directory to the cache.
+
+    Args:
+      key: A tuple identifying the directory path.
+      value: A directory object.
+    """
+    super(DirectoryCache, self).__setitem__(key, value)
+    self.directory_list.append(key)
+    to_remove = len(self) - self.max_size
+    for _ in range(to_remove):
+      old_key = self.operations_list.pop(0)
+      del self[old_key]
+
+
 class TornadoFDB(object):
   def __init__(self, io_loop):
     self._io_loop = io_loop
@@ -124,69 +174,18 @@ class TornadoFDB(object):
     self._io_loop.add_callback(tornado_future.set_result, result)
 
 
-# class RangeIterator(object):
-#     def __init__(self, tr, begin, end, limit, reverse, streaming_mode):
-#       self._tr = tr
-#
-#       self._bsel = begin
-#       self._esel = end
-#
-#       self._limit = limit
-#       self._reverse = reverse
-#       self._mode = streaming_mode
-#
-#       self._future = self._tr._get_range(begin, end, limit, streaming_mode, 1, reverse)
-#
-#     def to_list(self):
-#       if self._mode == StreamingMode.iterator:
-#         if self._limit > 0:
-#           mode = StreamingMode.exact
-#         else:
-#           mode = StreamingMode.want_all
-#       else:
-#         mode = self._mode
-#
-#       return list(self.__iter__(mode=mode))
-#
-#     @gen.coroutine
-#     def __iter__(self, mode=None):
-#       if mode is None:
-#         mode = self._mode
-#       bsel = self._bsel
-#       esel = self._esel
-#       limit = self._limit
-#
-#       iteration = 1  # the first read was fired off when the FDBRange was initialized
-#       future = self._future
-#
-#       done = False
-#
-#       while not done:
-#         if future:
-#           (kvs, count, more) = future.wait()
-#           index = 0
-#           future = None
-#
-#           if not count:
-#             return
-#
-#         result = kvs[index]
-#         index += 1
-#
-#         if index == count:
-#           if not more or limit == count:
-#             done = True
-#           else:
-#             iteration += 1
-#             if limit > 0:
-#               limit = limit - count
-#             if self._reverse:
-#               esel = KeySelector.first_greater_or_equal(kvs[-1].key)
-#             else:
-#               bsel = KeySelector.first_greater_than(kvs[-1].key)
-#             future = self._tr._get_range(bsel, esel, limit, mode, iteration, self._reverse)
-#
-#         yield result
+def flat_path(key):
+  path = []
+  for element in key.path().element_list():
+    path.append(element.type())
+    if element.has_id():
+      path.append(element.id())
+    elif element.has_name():
+      path.append(element.name())
+    else:
+      raise BadRequest('All path elements must either have a name or ID')
+
+  return path
 
 
 class FDBDatastore(object):
@@ -269,6 +268,36 @@ class FDBDatastore(object):
     raise gen.Return(response)
 
   @gen.coroutine
+  def _upsert(self, data_dir, journal_dir, entity):
+    path = flat_path(entity.key())
+
+    auto_id = path[-1] == 0
+    if auto_id:
+      path[-1] = self._scattered_allocator.get_id()
+
+    journal_range = namespace_dir.range(tuple(path + [EntitySections.JOURNAL]))
+    data_range = namespace_dir.range(tuple(path + EntitySections.DATA))
+
+    encoded_entity = entity.Encode()
+    chunk_indexes = [(n, n + self._CHUNK_SIZE)
+                     for n in xrange(0, len(encoded_entity), self._CHUNK_SIZE)]
+
+    tr = self._db.create_transaction()
+
+    # Select the latest entity version.
+    response = yield self._tornado_fdb.get_range(tr, data_range, limit=1,
+                                                 reverse=True)
+    if response[0]
+
+
+    for start, end in chunk_indexes:
+      key = namespace_dir.pack_with_versionstamp(
+        tuple(prefix + [fdb.tuple.Versionstamp(), start]))
+      tr.set_versionstamped_key(key, value[start:end])
+
+    yield self._tornado_fdb.commit(tr)
+
+  @gen.coroutine
   def _get(self, namespace_dir, key):
     path = []
     for element in key.path().element_list():
@@ -316,47 +345,3 @@ class FDBDatastore(object):
       raise Exception('unknown value')
 
     raise gen.Return(encoded_value[1:])
-
-  @gen.coroutine
-  def _upsert(self, namespace_dir, entity):
-    path = []
-    for element in entity.key().path().element_list():
-      if element.has_id():
-        path.append([element.type(), element.id()])
-      elif element.has_name():
-        path.append([element.type(), element.name()])
-      else:
-        raise BadRequest('All path elements must either have a name or ID')
-
-    if not all(element[1] for element in path[:-1]):
-      raise BadRequest('All non-terminal path elements must have an ID or'
-                       'name')
-
-    auto_id = path[-1][1] == 0
-    if auto_id:
-      path[-1][1] = self._scattered_allocator.get_id()
-
-    prefix = [item for element in path for item in element]
-    journal_range = namespace_dir.
-    logger.info('prefix: {}'.format(prefix))
-    # key_range = namespace_dir.range(
-    #   tuple(item for element in path for item in element))
-    value = ''.join([ENTITY_V3, entity.Encode()])
-    chunk_indexes = [(n, n + self._CHUNK_SIZE)
-                     for n in xrange(0, len(value), self._CHUNK_SIZE)]
-
-    tr = self._db.create_transaction()
-
-    # Select the latest version for the entity key.
-    response = yield self._tornado_fdb.get_range(
-      tr, True, key_range.start, key_range.stop, 1, fdb.StreamingMode.want_all,
-      1, True)
-
-    # TODO: Get old value.
-
-    for start, end in chunk_indexes:
-      key = namespace_dir.pack_with_versionstamp(
-        tuple(prefix + [fdb.tuple.Versionstamp(), start]))
-      tr.set_versionstamped_key(key, value[start:end])
-
-    yield self._tornado_fdb.commit(tr)
