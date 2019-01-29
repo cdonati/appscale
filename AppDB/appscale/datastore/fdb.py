@@ -94,21 +94,23 @@ class TornadoFDB(object):
     commit_future.on_ready(callback)
     return tornado_future
 
-  def get_range(self, tr, snapshot, begin, end, *args, **kwargs):
+  def get_range(self, tr, key_slice, limit=0,
+                streaming_mode=fdb.StreamingMode.iterator, iteration=1,
+                reverse=False, snapshot=False):
     tx_reader = tr
     if snapshot:
       tx_reader = tr.snapshot
 
-    if not isinstance(begin, fdb.KeySelector):
-      begin = fdb.KeySelector.first_greater_or_equal(begin)
-
-    if not isinstance(end, fdb.KeySelector):
-      end = fdb.KeySelector.first_greater_or_equal(end)
+    begin = fdb.KeySelector.first_greater_or_equal(key_slice.start)
+    end = fdb.KeySelector.first_greater_or_equal(key_slice.stop)
 
     tornado_future = TornadoFuture()
     callback = lambda fdb_future: self._handle_fdb_result(
       fdb_future, tornado_future)
-    get_future = tx_reader._get_range(begin, end, *args, **kwargs)
+
+    get_future = tx_reader._get_range(begin, end, limit, streaming_mode,
+                                      iteration, reverse)
+
     get_future.on_ready(callback)
     return tornado_future
 
@@ -335,6 +337,7 @@ class FDBDatastore(object):
       path[-1][1] = self._scattered_allocator.get_id()
 
     prefix = [item for element in path for item in element]
+    journal_range = namespace_dir.
     logger.info('prefix: {}'.format(prefix))
     # key_range = namespace_dir.range(
     #   tuple(item for element in path for item in element))
