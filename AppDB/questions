@@ -1,2 +1,53 @@
 is open directory expensive? should I be caching it or passing it around?
 
+
+'\x15\x1f\x01Greeting\x00\x1b\x15\xcdU\xe8\xf5x\xef\x00'
+'\x15\x1f\x01Greeting\x00\x1b\x15\xcdU\xe8\xf5x\xef\xff'
+(31, 'Greeting', 6136743375239407, fdb.tuple.Versionstamp('\x00\x00\x00\x1ey:f\xbb\x00\x00', 0), 0)
+
+['Greeting', 6136743375239407L]
+
+1548712642177000
+9,223,372,036,854,775,807
+
+{
+  "missing": [
+    {
+      "entity": {
+        "key": {
+          "partitionId": {
+            "projectId": "appscale-cdonati"
+          },
+          "path": [
+            {
+              "kind": "Greeting",
+              "name": "test"
+            }
+          ]
+        }
+      },
+      "version": "1"
+    }
+  ]
+}
+
+{
+  "found": [
+    {
+      "entity": {
+        "key": {
+          "partitionId": {
+            "projectId": "appscale-cdonati"
+          },
+          "path": [
+            {
+              "kind": "Greeting",
+              "name": "test"
+            }
+          ]
+        }
+      },
+      "version": "1548712642177000"
+    }
+  ]
+}
