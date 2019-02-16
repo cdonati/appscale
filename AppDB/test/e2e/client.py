@@ -1,4 +1,3 @@
-import logging
 import os
 import random
 import sys
@@ -60,7 +59,6 @@ class Datastore(object):
 
     encoded_response = yield self._make_request('Get', request.Encode())
     get_response = datastore_pb.GetResponse(encoded_response)
-    logging.info('get_response: {}'.format(get_response))
     response_entity = get_response.entity(0).entity()
     if not response_entity.has_key():
       return

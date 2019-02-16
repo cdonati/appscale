@@ -69,7 +69,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
-    logger.debug('put_request: {}'.format(put_request))
+    logger.debug('put_request:\n{}'.format(put_request))
 
     if put_request.has_transaction():
       raise BadRequest('Transactions are not implemented')
@@ -87,17 +87,14 @@ class FDBDatastore(object):
 
     writes = yield futures
     for key, version in writes:
-      # new_key = put_response.add_key()
-      # logger.info('new_key: {}'.format(new_key))
-      # logger.info('key: {}'.format(key))
       put_response.add_key().CopyFrom(key)
       put_response.add_version(version)
 
-    logger.debug('put_response: {}'.format(put_response))
+    logger.debug('put_response:\n{}'.format(put_response))
 
   @gen.coroutine
   def dynamic_get(self, project_id, get_request, get_response):
-    logger.debug('get_request: {}'.format(get_request))
+    logger.debug('get_request:\n{}'.format(get_request))
 
     if get_request.has_transaction():
       raise BadRequest('Transactions are not implemented')
@@ -118,7 +115,27 @@ class FDBDatastore(object):
       if entity is not None:
         response_entity.mutable_entity().CopyFrom(entity)
 
-    logger.debug('get_response: {}'.format(get_response))
+    logger.debug('get_response:\n{}'.format(get_response))
+
+  @gen.coroutine
+  def dynamic_delete(self, project_id, delete_request):
+    logger.debug('delete_request:\n{}'.format(delete_request))
+
+    if delete_request.has_transaction():
+      raise BadRequest('Transactions are not implemented')
+
+    futures = []
+    for key in delete_request.key_list():
+      if key.app() != project_id:
+        raise BadRequest('Project ID mismatch: '
+                         '{} != {}'.format(key.app(), project_id))
+
+      futures.append(self._delete(key))
+
+    writes = yield futures
+    for key, version in writes:
+      put_response.add_key().CopyFrom(key)
+      put_response.add_version(version)
 
   @gen.coroutine
   def _upsert(self, entity):
@@ -143,15 +160,11 @@ class FDBDatastore(object):
       tr, data_dir.range(tuple(path)))
 
     # If the datastore chose an ID, don't overwrite existing data.
-    if auto_id and old_entity is not None:
+    if auto_id and old_version != 0:
       self._scattered_allocator.invalidate()
       raise InternalError('The datastore chose an existing ID')
 
-    if old_version is None:
-      new_version = 1
-    else:
-      new_version = old_version + 1
-
+    new_version = old_version + 1
     for start, end in chunk_indexes:
       chunk_key = data_dir.pack(tuple(path + [new_version, start]))
       tr[chunk_key] = encoded_value[start:end]
@@ -180,9 +193,35 @@ class FDBDatastore(object):
     entity, version = yield self._get_from_range(
       tr, data_dir.range(tuple(path)))
 
-    tr.commit()
-
     raise gen.Return((key, entity, version))
+
+  @gen.coroutine
+  def _delete(self, key):
+    path = flat_path(key)
+
+    namespace = (key.app(), key.name_space())
+    journal_dir = self._directory_cache.get(namespace + ('journal',))
+    data_dir = self._directory_cache.get(namespace + ('data',))
+
+    tr = self._db.create_transaction()
+
+    old_entity, old_version = yield self._get_from_range(
+      tr, data_dir.range(tuple(path)))
+
+    if old_version == 0:
+      raise gen.Return(old_version)
+
+    new_version = old_version + 1
+
+    chunk_key = data_dir.pack(tuple(path + [new_version, 0]))
+    tr[chunk_key] = ''
+
+    journal_key = journal_dir.pack(tuple(path + [new_version]))
+    tr.set_versionstamped_value(journal_key, '\x00' * 14)
+
+    yield self._tornado_fdb.commit(tr)
+
+    raise gen.Return(new_version)
 
   @gen.coroutine
   def _get_from_range(self, tr, data_range):
