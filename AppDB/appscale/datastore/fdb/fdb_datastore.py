@@ -103,10 +103,10 @@ class FDBDatastore(object):
 
     results = yield futures
     for entity, version in results:
-      get_response.add_entity().CopyFrom(entity)
-      get_response.mutable_entity().CopyFrom(entity)
-      get_response.mutable_key().CopyFrom(entity.key())
-      get_response.set_version(version)
+      response_entity = get_response.add_entity()
+      response_entity.mutable_entity().CopyFrom(entity)
+      response_entity.mutable_key().CopyFrom(entity.key())
+      response_entity.set_version(version)
 
   @gen.coroutine
   def _upsert(self, entity):
@@ -145,11 +145,12 @@ class FDBDatastore(object):
       tr[chunk_key] = encoded_value[start:end]
 
     journal_key = journal_dir.pack(tuple(path + [new_version]))
-    #tr.set_versionstamped_value(journal_key, '\x00' * 10)
+    tr.set_versionstamped_value(journal_key, '\x00' * 12)
 
     yield self._tornado_fdb.commit(tr)
 
-    new_key = entity_pb.Reference().CopyFrom(entity.key())
+    new_key = entity_pb.Reference()
+    new_key.CopyFrom(entity.key())
     if auto_id:
       new_key.path().element_list()[-1] = path[-1]
 
