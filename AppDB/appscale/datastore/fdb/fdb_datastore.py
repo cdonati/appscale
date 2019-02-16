@@ -148,9 +148,12 @@ class FDBDatastore(object):
     tr.set_versionstamped_value(journal_key, '\x00' * 10)
     try:
       tr.commit().wait()
-    except Exception as e:
-      logger.exception('error')
-      logger.error('e object: {}'.format(dir(e)))
+    except fdb.FDBError as e:
+      logger.error(e.args)
+      logger.error(e.message)
+      logger.error(e.code)
+      logger.error(e.description)
+      raise
 
     # yield self._tornado_fdb.commit(tr)
 
