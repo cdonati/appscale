@@ -1,0 +1,206 @@
+""" A datastore implementation that uses FoundationDB.
+
+All datastore state is split between multiple FoundationDB directories. All of
+the state for a given project/namespace is stored in
+(appscale, datastore, <project-id>, <namespace>). Within
+each namespace directory, there is a directory for each of the following:
+
+journal: This maps entity versions to FoundationDB versionstamps. This mapping
+is necessary because the API requires 64-bit values for entity versions, but
+this implementation requires 80-bit versionstamps for determining if a
+transaction can succeed. Here is the template along with an example key-value.
+Items wrapped in "[]" represent multiple elements for brevity.
+
+  ([journal_dir], [entity-path], <entity-version>) -> <versionstamp>
+  ([journal_dir], Guestbook, default, Greeting, 5, 1) -> <versionstamp>
+
+entities: This maps entity keys to encoded entity data. The data is prefixed by
+a byte that indicates how it is encoded. Due to FDB's value size limit, data
+that exceeds the chunk size threshold is split into multiple key-values. The
+index value indicates the position of the chunk. Here is the template along
+with an example key-value:
+
+  ([entities_dir], [entity-path], <version>, <index>) -> <encoding><data>
+  ([entities_dir], Guestbook, default, Greeting, 5, 1, 0) -> 0<protobuffer>
+
+indexes...
+
+When an entity is updated, non-ancestor indexes from older versions are erased
+immediately, but older entity versions are kept for at least the maximum
+transaction duration to allow a transaction to see a consistent snapshot.
+
+The first byte of an entity value indicates the type of object that is stored.
+
+"""
+from __future__ import absolute_import
+
+import logging
+import sys
+
+from tornado import gen
+
+from tornado.ioloop import IOLoop
+
+from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
+from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.fdb.utils import (
+  DirectoryCache, EntityTypes, flat_path, fdb, ScatteredAllocator, TornadoFDB)
+
+sys.path.append(APPSCALE_PYTHON_APPSERVER)
+from google.appengine.datastore import entity_pb
+
+logger = logging.getLogger(__name__)
+
+
+class FDBDatastore(object):
+  """ A datastore implementation that uses FoundationDB. """
+
+  # The max number of bytes for each chunk in an encoded entity.
+  _CHUNK_SIZE = 10000
+
+  def __init__(self):
+    self._db = None
+    self._directory_cache = DirectoryCache()
+    self._scattered_allocator = ScatteredAllocator()
+    self._tornado_fdb = None
+
+  def start(self):
+    self._db = fdb.open()
+    self._directory_cache.start(self._db)
+    self._tornado_fdb = TornadoFDB(IOLoop.current())
+
+  @gen.coroutine
+  def dynamic_put(self, project_id, put_request, put_response):
+    if put_request.has_transaction():
+      raise BadRequest('Transactions are not implemented')
+
+    if put_request.auto_id_policy() != put_request.CURRENT:
+      raise BadRequest('Sequential allocator is not implemented')
+
+    futures = []
+    for entity in put_request.entity_list():
+      if entity.key().app() != project_id:
+        raise BadRequest('Project ID mismatch: '
+                         '{} != {}'.format(entity.key().app(), project_id))
+
+      futures.append(self._upsert(entity))
+
+    writes = yield futures
+    for key, version in writes:
+      put_response.add_key().CopyFrom(key)
+      put_response.add_version(version)
+
+  @gen.coroutine
+  def dynamic_get(self, project_id, get_request, get_response):
+    if get_request.has_transaction():
+      raise BadRequest('Transactions are not implemented')
+
+    futures = []
+    for key in get_request.key_list():
+      if key().app() != project_id:
+        raise BadRequest('Project ID mismatch: '
+                         '{} != {}'.format(key().app(), project_id))
+
+      futures.append(self._get(key))
+
+    results = yield futures
+    for entity, version in results:
+      get_response.add_entity().CopyFrom(entity)
+      get_response.mutable_entity().CopyFrom(entity)
+      get_response.mutable_key().CopyFrom(entity.key())
+      get_response.set_version(version)
+
+  @gen.coroutine
+  def _upsert(self, entity):
+    path = flat_path(entity.key())
+
+    auto_id = path[-1] == 0
+    if auto_id:
+      path[-1] = self._scattered_allocator.get_id()
+
+    namespace = (entity.key().app(), entity.key().name_space())
+    journal_dir = self._directory_cache.get(namespace + ('journal',))
+    data_dir = self._directory_cache.get(namespace + ('data',))
+
+    encoded_entity = entity.Encode()
+    encoded_value = EntityTypes.ENTITY_V3 + encoded_entity
+    chunk_indexes = [(n, n + self._CHUNK_SIZE)
+                     for n in xrange(0, len(encoded_value), self._CHUNK_SIZE)]
+
+    tr = self._db.create_transaction()
+
+    old_entity, old_version = yield self._get_from_range(
+      tr, data_dir.range(tuple(path)))
+
+    # If the datastore chose an ID, don't overwrite existing data.
+    if auto_id and old_entity is not None:
+      self._scattered_allocator.invalidate()
+      raise InternalError('The datastore chose an existing ID')
+
+    if old_version is None:
+      new_version = 1
+    else:
+      new_version = old_version + 1
+
+    for start, end in chunk_indexes:
+      chunk_key = data_dir.pack(tuple(path + [new_version, start]))
+      tr[chunk_key] = encoded_value[start:end]
+
+    journal_key = journal_dir.pack(tuple(path + [new_version]))
+    tr.set_versionstamped_value(journal_key, fdb.tuple.Versionstamp())
+
+    yield self._tornado_fdb.commit(tr)
+
+    new_key = entity_pb.Reference().CopyFrom(entity.key())
+    if auto_id:
+      new_key.path().element_list()[-1] = path[-1]
+
+    raise gen.Return((new_key, new_version))
+
+  @gen.coroutine
+  def _get(self, key):
+    path = flat_path(key)
+
+    namespace = (key.app(), key.name_space())
+    data_dir = self._directory_cache.get(namespace + ('data',))
+
+    tr = self._db.create_transaction()
+
+    entity, version = yield self._get_from_range(
+      tr, data_dir.range(tuple(path)))
+
+    tr.commit()
+
+    raise gen.Return((entity, version))
+
+  @gen.coroutine
+  def _get_from_range(self, tr, data_range):
+    entity = None
+    entity_key = None
+
+    # Select the latest entity version.
+    kvs, count, more_results = yield self._tornado_fdb.get_range(
+      tr, data_range, limit=1, reverse=True)
+
+    if not count:
+      raise gen.Return((entity, entity_key))
+
+    last_chunk = kvs[0]
+    last_key_path = fdb.tuple.unpack(last_chunk.key)
+    version = last_key_path[-2]
+
+    start_key = fdb.tuple.pack(last_key_path[:-1])
+    end_key = last_chunk.key
+    value = last_chunk.value
+    while more_results:
+      remaining_range = slice(start_key, end_key)
+      kvs, count, more_results = yield self._tornado_fdb.get_range(
+        tr, remaining_range, limit=1, reverse=True)
+      value = ''.join([kv.value for kv in reversed(kvs)]) + value
+      end_key = kvs[0].key
+
+    if value[0] != EntityTypes.ENTITY_V3:
+      raise InternalError('Unknown entity type')
+
+    entity = entity_pb.EntityProto(value[1:])
+    raise gen.Return((entity, version))
