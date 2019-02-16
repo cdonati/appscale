@@ -69,6 +69,8 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
+    logger.debug('put_request: {}'.format(put_request))
+
     if put_request.has_transaction():
       raise BadRequest('Transactions are not implemented')
 
@@ -91,8 +93,12 @@ class FDBDatastore(object):
       put_response.add_key().CopyFrom(key)
       put_response.add_version(version)
 
+    logger.debug('put_response: {}'.format(put_response))
+
   @gen.coroutine
   def dynamic_get(self, project_id, get_request, get_response):
+    logger.debug('get_request: {}'.format(get_request))
+
     if get_request.has_transaction():
       raise BadRequest('Transactions are not implemented')
 
@@ -111,6 +117,8 @@ class FDBDatastore(object):
       response_entity.set_version(version)
       if entity is not None:
         response_entity.mutable_entity().CopyFrom(entity)
+
+    logger.debug('get_response: {}'.format(get_response))
 
   @gen.coroutine
   def _upsert(self, entity):
