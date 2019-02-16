@@ -31,13 +31,13 @@ class TestBasicOperations(AsyncTestCase):
     # for entity in results:
     #   yield self.datastore.delete([entity.key()])
 
-  @gen_test
-  def test_put(self):
-    entity = Entity('Greeting', _app=PROJECT_ID)
-    entity['content'] = 'b'
-    yield self.datastore.put(entity)
-
   # @gen_test
-  # def test_get(self):
-  #   key = Key.from_path('Greeting', 6136743375239407, _app=PROJECT_ID)
-  #   yield self.datastore.get(key)
+  # def test_put(self):
+  #   entity = Entity('Greeting', _app=PROJECT_ID)
+  #   entity['content'] = 'b'
+  #   yield self.datastore.put(entity)
+
+  @gen_test
+  def test_get(self):
+    key = Key.from_path('Greeting', 6136743375239407, _app=PROJECT_ID)
+    yield self.datastore.get(key)

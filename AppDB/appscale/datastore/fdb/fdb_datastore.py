@@ -98,9 +98,9 @@ class FDBDatastore(object):
 
     futures = []
     for key in get_request.key_list():
-      if key().app() != project_id:
+      if key.app() != project_id:
         raise BadRequest('Project ID mismatch: '
-                         '{} != {}'.format(key().app(), project_id))
+                         '{} != {}'.format(key.app(), project_id))
 
       futures.append(self._get(key))
 
