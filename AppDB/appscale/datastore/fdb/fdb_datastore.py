@@ -132,10 +132,11 @@ class FDBDatastore(object):
 
       futures.append(self._delete(key))
 
-    writes = yield futures
-    for key, version in writes:
-      put_response.add_key().CopyFrom(key)
-      put_response.add_version(version)
+    deletes = yield futures
+    for version in deletes:
+      delete_request.add_version(version)
+
+    logger.debug('delete_response:\n{}'.format(delete_response))
 
   @gen.coroutine
   def _upsert(self, entity):
