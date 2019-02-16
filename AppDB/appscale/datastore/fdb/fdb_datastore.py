@@ -32,8 +32,6 @@ transaction duration to allow a transaction to see a consistent snapshot.
 The first byte of an entity value indicates the type of object that is stored.
 
 """
-from __future__ import absolute_import
-
 import logging
 import sys
 

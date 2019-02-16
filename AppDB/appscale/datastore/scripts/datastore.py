@@ -5,8 +5,6 @@ This web service interfaces with the datastore. It takes protocol buffer
 requests from AppServers and responds according to the type of request its
 given (Put, Get, Delete, Query, etc).
 """
-from __future__ import absolute_import
-
 import argparse
 import json
 import logging
@@ -893,7 +891,7 @@ def main():
       log_level=logger.getEffectiveLevel(),
       taskqueue_locations=taskqueue_locations)
   else:
-    from appscale.datastore.fdb.fdb_datastore import FDBDatastore
+    from appscale.datastore.fdb import FDBDatastore
     datastore_access = FDBDatastore()
     datastore_access.start()
 
