@@ -5,6 +5,8 @@ This web service interfaces with the datastore. It takes protocol buffer
 requests from AppServers and responds according to the type of request its
 given (Put, Get, Delete, Query, etc).
 """
+from __future__ import absolute_import
+
 import argparse
 import json
 import logging
