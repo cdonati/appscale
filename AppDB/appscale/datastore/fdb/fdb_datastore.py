@@ -146,8 +146,9 @@ class FDBDatastore(object):
 
     journal_key = journal_dir.pack(tuple(path + [new_version]))
     tr.set_versionstamped_value(journal_key, '\x00' * 10)
+    tr.commit().wait()
 
-    yield self._tornado_fdb.commit(tr)
+    # yield self._tornado_fdb.commit(tr)
 
     new_key = entity_pb.Reference().CopyFrom(entity.key())
     if auto_id:
