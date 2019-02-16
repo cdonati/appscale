@@ -85,7 +85,10 @@ class FDBDatastore(object):
 
     writes = yield futures
     for key, version in writes:
-      put_response.add_key().CopyFrom(key)
+      new_key = put_response.add_key()
+      logger.info('new_key: {}'.format(new_key))
+      logger.info('key: {}'.format(key))
+      # put_response.add_key().CopyFrom(key)
       put_response.add_version(version)
 
   @gen.coroutine
@@ -194,7 +197,7 @@ class FDBDatastore(object):
     while more_results:
       remaining_range = slice(start_key, end_key)
       kvs, count, more_results = yield self._tornado_fdb.get_range(
-        tr, remaining_range, limit=1, reverse=True)
+        tr, remaining_range, reverse=True)
       value = ''.join([kv.value for kv in reversed(kvs)]) + value
       end_key = kvs[0].key
 
