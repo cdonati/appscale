@@ -85,10 +85,10 @@ class FDBDatastore(object):
 
     writes = yield futures
     for key, version in writes:
-      new_key = put_response.add_key()
-      logger.info('new_key: {}'.format(new_key))
-      logger.info('key: {}'.format(key))
-      # put_response.add_key().CopyFrom(key)
+      # new_key = put_response.add_key()
+      # logger.info('new_key: {}'.format(new_key))
+      # logger.info('key: {}'.format(key))
+      put_response.add_key().CopyFrom(key)
       put_response.add_version(version)
 
   @gen.coroutine
@@ -155,7 +155,7 @@ class FDBDatastore(object):
     new_key = entity_pb.Reference()
     new_key.CopyFrom(entity.key())
     if auto_id:
-      new_key.path().element_list()[-1] = path[-1]
+      new_key.path().element_list()[-1].set_id(path[-1])
 
     raise gen.Return((new_key, new_version))
 
