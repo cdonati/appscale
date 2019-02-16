@@ -105,11 +105,12 @@ class FDBDatastore(object):
       futures.append(self._get(key))
 
     results = yield futures
-    for entity, version in results:
+    for key, entity, version in results:
       response_entity = get_response.add_entity()
-      response_entity.mutable_entity().CopyFrom(entity)
       response_entity.mutable_key().CopyFrom(entity.key())
       response_entity.set_version(version)
+      if entity is not None:
+        response_entity.mutable_entity().CopyFrom(entity)
 
   @gen.coroutine
   def _upsert(self, entity):
@@ -173,23 +174,26 @@ class FDBDatastore(object):
 
     tr.commit()
 
-    raise gen.Return((entity, version))
+    raise gen.Return((key, entity, version))
 
   @gen.coroutine
   def _get_from_range(self, tr, data_range):
     entity = None
-    entity_key = None
+    version = 0
 
     # Select the latest entity version.
     kvs, count, more_results = yield self._tornado_fdb.get_range(
       tr, data_range, limit=1, reverse=True)
 
     if not count:
-      raise gen.Return((entity, entity_key))
+      raise gen.Return((entity, version))
 
     last_chunk = kvs[0]
     last_key_path = fdb.tuple.unpack(last_chunk.key)
     version = last_key_path[-2]
+
+    if not last_chunk.value:
+      raise gen.Return((entity, version))
 
     start_key = fdb.tuple.pack(last_key_path[:-1])
     end_key = last_chunk.key
