@@ -145,7 +145,7 @@ class FDBDatastore(object):
       tr[chunk_key] = encoded_value[start:end]
 
     journal_key = journal_dir.pack(tuple(path + [new_version]))
-    tr.set_versionstamped_value(journal_key, '\x00' * 12)
+    tr.set_versionstamped_value(journal_key, '\x00' * 14)
 
     yield self._tornado_fdb.commit(tr)
 
