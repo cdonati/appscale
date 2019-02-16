@@ -132,11 +132,10 @@ class FDBDatastore(object):
 
       futures.append(self._delete(key))
 
+    # TODO: Once the Cassandra backend is removed, populate a delete response.
     deletes = yield futures
     for version in deletes:
-      delete_request.add_version(version)
-
-    logger.debug('delete_response:\n{}'.format(delete_response))
+      logger.debug('version: {}'.format(version))
 
   @gen.coroutine
   def _upsert(self, entity):
