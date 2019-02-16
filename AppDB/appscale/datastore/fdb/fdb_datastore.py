@@ -230,8 +230,12 @@ class FDBDatastore(object):
     version = 0
 
     # Select the latest entity version.
+    logger.info('data_range: {}'.format(data_range))
     kvs, count, more_results = yield self._tornado_fdb.get_range(
       tr, data_range, limit=1, reverse=True)
+    logger.info('kvs: {}'.format(kvs))
+    logger.info('count: {}'.format(count))
+    logger.info('more_results: {}'.format(more_results))
 
     if not count:
       raise gen.Return((entity, version))
