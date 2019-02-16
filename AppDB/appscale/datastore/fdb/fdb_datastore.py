@@ -145,17 +145,9 @@ class FDBDatastore(object):
       tr[chunk_key] = encoded_value[start:end]
 
     journal_key = journal_dir.pack(tuple(path + [new_version]))
-    tr.set_versionstamped_value(journal_key, '\x00' * 10)
-    try:
-      tr.commit().wait()
-    except fdb.FDBError as e:
-      logger.error(e.args)
-      logger.error(e.message)
-      logger.error(e.code)
-      logger.error(e.description)
-      raise
+    #tr.set_versionstamped_value(journal_key, '\x00' * 10)
 
-    # yield self._tornado_fdb.commit(tr)
+    yield self._tornado_fdb.commit(tr)
 
     new_key = entity_pb.Reference().CopyFrom(entity.key())
     if auto_id:
