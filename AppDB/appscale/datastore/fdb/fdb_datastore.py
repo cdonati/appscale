@@ -230,32 +230,34 @@ class FDBDatastore(object):
     version = 0
 
     # Select the latest entity version.
-    logger.info('data_range: {}'.format(data_range))
     kvs, count, more_results = yield self._tornado_fdb.get_range(
       tr, data_range, limit=1, reverse=True)
-    logger.info('kvs: {}'.format(kvs))
-    logger.info('count: {}'.format(count))
-    logger.info('more_results: {}'.format(more_results))
 
     if not count:
       raise gen.Return((entity, version))
 
     last_chunk = kvs[0]
     last_key_path = fdb.tuple.unpack(last_chunk.key)
+    index = last_key_path[-1]
     version = last_key_path[-2]
 
-    if not last_chunk.value:
-      raise gen.Return((entity, version))
-
+    # If the entity is split into chunks, fetch the rest of the chunks.
     start_key = fdb.tuple.pack(last_key_path[:-1])
     end_key = last_chunk.key
     value = last_chunk.value
-    while more_results:
+    while index > 0:
       remaining_range = slice(start_key, end_key)
       kvs, count, more_results = yield self._tornado_fdb.get_range(
         tr, remaining_range, reverse=True)
+      if not count:
+        raise InternalError('Incomplete entity record')
+
       value = ''.join([kv.value for kv in reversed(kvs)]) + value
-      end_key = kvs[0].key
+      end_key = kvs[-1].key
+      index = fdb.tuple.unpack(end_key)[-1]
+
+    if not value:
+      raise gen.Return((entity, version))
 
     if value[0] != EntityTypes.ENTITY_V3:
       raise InternalError('Unknown entity type')
