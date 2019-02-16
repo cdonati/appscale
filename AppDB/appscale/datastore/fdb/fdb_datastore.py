@@ -107,7 +107,7 @@ class FDBDatastore(object):
     results = yield futures
     for key, entity, version in results:
       response_entity = get_response.add_entity()
-      response_entity.mutable_key().CopyFrom(entity.key())
+      response_entity.mutable_key().CopyFrom(key)
       response_entity.set_version(version)
       if entity is not None:
         response_entity.mutable_entity().CopyFrom(entity)
