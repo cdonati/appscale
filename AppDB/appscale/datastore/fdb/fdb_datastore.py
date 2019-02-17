@@ -42,8 +42,8 @@ from tornado.ioloop import IOLoop
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.utils import (
-  DirectoryCache, EntityTypes, flat_path, fdb, next_entity_version,
-  ScatteredAllocator, TornadoFDB)
+  DirectoryCache, EntityTypes, flat_path, fdb, gc_entity_value,
+  next_entity_version, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -57,8 +57,8 @@ class FDBDatastore(object):
   # The max number of bytes for each chunk in an encoded entity.
   _CHUNK_SIZE = 10000
 
-  # Cloud Datastore uses microseconds as versions. When the entity doesn't
-  # exist, it reports the version as "1".
+  # The Cloud Datastore API uses microseconds as versions. When the entity
+  # doesn't exist, it reports the version as "1".
   _ABSENT_VERSION = 1
 
   def __init__(self):
@@ -151,8 +151,8 @@ class FDBDatastore(object):
       path[-1] = self._scattered_allocator.get_id()
 
     namespace = (entity.key().app(), entity.key().name_space())
-    journal_dir = self._directory_cache.get(namespace + ('journal',))
     data_dir = self._directory_cache.get(namespace + ('data',))
+    gc_dir = self._directory_cache.get(('_garbage',))
 
     encoded_entity = entity.Encode()
     encoded_value = EntityTypes.ENTITY_V3 + encoded_entity
@@ -174,8 +174,13 @@ class FDBDatastore(object):
       chunk_key = data_dir.pack(tuple(path + [new_version, start]))
       tr[chunk_key] = encoded_value[start:end]
 
-    #journal_key = journal_dir.pack(tuple(path + [new_version]))
-    #tr.set_versionstamped_value(journal_key, '\x00' * 14)
+    if old_version != self._ABSENT_VERSION:
+      # Though there aren't any cases yet when a single transaction inserts
+      # multiple GC actions, op_id allows for that possibility in the future.
+      op_id = 0
+      gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
+      tr.set_versionstamped_key(gc_key,
+                                gc_entity_value(namespace, path, old_version))
 
     yield self._tornado_fdb.commit(tr)
 
@@ -205,8 +210,8 @@ class FDBDatastore(object):
     path = flat_path(key)
 
     namespace = (key.app(), key.name_space())
-    journal_dir = self._directory_cache.get(namespace + ('journal',))
     data_dir = self._directory_cache.get(namespace + ('data',))
+    gc_dir = self._directory_cache.get(('_garbage',))
 
     tr = self._db.create_transaction()
 
@@ -220,8 +225,12 @@ class FDBDatastore(object):
     chunk_key = data_dir.pack(tuple(path + [new_version, 0]))
     tr[chunk_key] = ''
 
-    # journal_key = journal_dir.pack(tuple(path + [new_version]))
-    # tr.set_versionstamped_value(journal_key, '\x00' * 14)
+    # Though there aren't any cases yet when a single transaction inserts
+    # multiple GC actions, op_id allows for that possibility in the future.
+    op_id = 0
+    gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
+    tr.set_versionstamped_key(gc_key,
+                              gc_entity_value(namespace, path, old_version))
 
     yield self._tornado_fdb.commit(tr)
 

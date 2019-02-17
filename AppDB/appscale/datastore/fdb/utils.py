@@ -4,7 +4,7 @@ import time
 import fdb
 from tornado.concurrent import Future as TornadoFuture
 
-from appscale.datastore.dbconstants import BadRequest
+from appscale.datastore.dbconstants import BadRequest, MAX_TX_DURATION
 
 fdb.api_version(600)
 
@@ -17,6 +17,10 @@ _SCATTER_SHIFT = 64 - _MAX_SEQUENTIAL_BIT + 1
 
 class EntityTypes(object):
   ENTITY_V3 = '0'
+
+
+class GCActions(object):
+  REMOVE_ENTITY_VERSION = 1
 
 
 def ReverseBitsInt64(v):
@@ -164,3 +168,12 @@ def next_entity_version(old_version):
   # Since client timestamps are unreliable, ensure the new version is greater
   # than the old one.
   return max(int(time.time() * 1000 * 1000), old_version + 1)
+
+
+def gc_entity_value(namespace, path, version):
+
+  fields = ((GCActions.REMOVE_ENTITY_VERSION, MAX_TX_DURATION) +
+            namespace +
+            tuple(path) +
+            (version,))
+  return fdb.tuple.pack(fields)
