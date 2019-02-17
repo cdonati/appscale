@@ -213,7 +213,7 @@ class FDBDatastore(object):
     old_entity, old_version = yield self._get_from_range(
       tr, data_dir.range(tuple(path)))
 
-    if old_version == self._ABSENT_VERSION:
+    if old_entity is None:
       raise gen.Return(old_version)
 
     new_version = next_entity_version(old_version)
