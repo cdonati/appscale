@@ -1,4 +1,5 @@
 import random
+import time
 
 import fdb
 from tornado.concurrent import Future as TornadoFuture
@@ -157,3 +158,9 @@ def flat_path(key):
       raise BadRequest('All path elements must either have a name or ID')
 
   return path
+
+
+def next_entity_version(old_version):
+  # Since client timestamps are unreliable, ensure the new version is greater
+  # than the old one.
+  return max(time.time() * 1000 * 1000, old_version + 1)

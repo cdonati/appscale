@@ -34,7 +34,6 @@ The first byte of an entity value indicates the type of object that is stored.
 """
 import logging
 import sys
-import time
 
 from tornado import gen
 
@@ -43,7 +42,8 @@ from tornado.ioloop import IOLoop
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.utils import (
-  DirectoryCache, EntityTypes, flat_path, fdb, ScatteredAllocator, TornadoFDB)
+  DirectoryCache, EntityTypes, flat_path, fdb, next_entity_version,
+  ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -169,9 +169,7 @@ class FDBDatastore(object):
       self._scattered_allocator.invalidate()
       raise InternalError('The datastore chose an existing ID')
 
-    # Since client timestamps are unreliable, ensure the new version is greater
-    # than the old one.
-    new_version = max(time.time() * 1000 * 1000, old_version + 1)
+    new_version = next_entity_version(old_version)
     for start, end in chunk_indexes:
       chunk_key = data_dir.pack(tuple(path + [new_version, start]))
       tr[chunk_key] = encoded_value[start:end]
@@ -215,16 +213,15 @@ class FDBDatastore(object):
     old_entity, old_version = yield self._get_from_range(
       tr, data_dir.range(tuple(path)))
 
-    if old_version == 0:
+    if old_version == self._ABSENT_VERSION:
       raise gen.Return(old_version)
 
-    new_version = old_version + 1
-
+    new_version = next_entity_version(old_version)
     chunk_key = data_dir.pack(tuple(path + [new_version, 0]))
     tr[chunk_key] = ''
 
-    journal_key = journal_dir.pack(tuple(path + [new_version]))
-    tr.set_versionstamped_value(journal_key, '\x00' * 14)
+    # journal_key = journal_dir.pack(tuple(path + [new_version]))
+    # tr.set_versionstamped_value(journal_key, '\x00' * 14)
 
     yield self._tornado_fdb.commit(tr)
 
