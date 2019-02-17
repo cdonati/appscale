@@ -31,19 +31,20 @@ class TestBasicOperations(AsyncTestCase):
     # for entity in results:
     #   yield self.datastore.delete([entity.key()])
 
-  # @gen_test
-  # def test_put(self):
-  #   entity = Entity('Greeting', name='long', _app=PROJECT_ID)
-  #   entity['content'] = 'a' * 10000
-  #   yield self.datastore.put(entity)
-
   @gen_test
-  def test_get(self):
-    # key = Key.from_path('Greeting', 6136743375239407, _app=PROJECT_ID)
-    # key = Key.from_path('Greeting', 'test', _app=PROJECT_ID)
-    key = Key.from_path('Greeting', 'long', _app=PROJECT_ID)
-    entity = yield self.datastore.get(key)
-    self.assertEqual(entity['content'], 'a' * 10000)
+  def test_put(self):
+    entity = Entity('Greeting', name='test', _app=PROJECT_ID)
+    # entity = Entity('Greeting', name='long', _app=PROJECT_ID)
+    # entity['content'] = 'a' * 10000
+    yield self.datastore.put(entity)
+
+  # @gen_test
+  # def test_get(self):
+  #   # key = Key.from_path('Greeting', 6136743375239407, _app=PROJECT_ID)
+  #   key = Key.from_path('Greeting', 'test', _app=PROJECT_ID)
+  #   # key = Key.from_path('Greeting', 'long', _app=PROJECT_ID)
+  #   entity = yield self.datastore.get(key)
+  #   # self.assertEqual(entity['content'], 'a' * 10000)
 
   # @gen_test
   # def test_delete(self):
