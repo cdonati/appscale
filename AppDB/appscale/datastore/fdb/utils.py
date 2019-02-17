@@ -67,14 +67,14 @@ class DirectoryCache(object):
 
   def __init__(self):
     """ Creates a new DirectoryCache. """
+    self.ds_dir = None
+    self._db = None
     self._directory_list = []
     self._directory_dict = {}
-    self._db = None
-    self._ds_dir = None
 
   def start(self, db):
+    self.ds_dir = fdb.directory.create_or_open(db, ('appscale', 'datastore'))
     self._db = db
-    self._ds_dir = fdb.directory.create_or_open(db, ('appscale', 'datastore'))
 
   def get(self, path):
     try:
@@ -118,6 +118,14 @@ class TornadoFDB(object):
       fdb_future, tornado_future)
     commit_future = tr.commit()
     commit_future.on_ready(callback)
+    return tornado_future
+
+  def get(self, tr, key):
+    tornado_future = TornadoFuture()
+    callback = lambda fdb_future: self._handle_fdb_result(
+      fdb_future, tornado_future)
+    get_future = tr.get(key)
+    get_future.on_ready(callback)
     return tornado_future
 
   def get_range(self, tr, key_slice, limit=0,

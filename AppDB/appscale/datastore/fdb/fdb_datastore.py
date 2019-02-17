@@ -31,6 +31,8 @@ transaction duration to allow a transaction to see a consistent snapshot.
 
 The first byte of an entity value indicates the type of object that is stored.
 
+TODO:
+retry some operations when they fail.
 """
 import logging
 import sys
@@ -41,6 +43,7 @@ from tornado.ioloop import IOLoop
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.fdb.garbage_collector import GarbageCollector
 from appscale.datastore.fdb.utils import (
   DirectoryCache, EntityTypes, flat_path, fdb, gc_entity_value,
   next_entity_version, ScatteredAllocator, TornadoFDB)
@@ -66,11 +69,13 @@ class FDBDatastore(object):
     self._directory_cache = DirectoryCache()
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
+    self._garbage_collector = GarbageCollector()
 
   def start(self):
     self._db = fdb.open()
     self._directory_cache.start(self._db)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
+    self._garbage_collector.start(self._db, self._directory_cache)
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
