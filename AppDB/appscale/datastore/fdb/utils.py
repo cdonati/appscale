@@ -163,4 +163,4 @@ def flat_path(key):
 def next_entity_version(old_version):
   # Since client timestamps are unreliable, ensure the new version is greater
   # than the old one.
-  return max(time.time() * 1000 * 1000, old_version + 1)
+  return max(int(time.time() * 1000 * 1000), old_version + 1)
