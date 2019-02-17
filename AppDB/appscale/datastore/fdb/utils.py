@@ -178,10 +178,8 @@ def next_entity_version(old_version):
   return max(int(time.time() * 1000 * 1000), old_version + 1)
 
 
-def gc_entity_value(namespace, path, version):
-
+def gc_entity_value(path, version):
   fields = ((GCActions.REMOVE_ENTITY_VERSION, MAX_TX_DURATION) +
-            namespace +
             tuple(path) +
             (version,))
   return fdb.tuple.pack(fields)

@@ -75,7 +75,8 @@ class FDBDatastore(object):
     self._db = fdb.open()
     self._directory_cache.start(self._db)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
-    self._garbage_collector.start(self._db, self._directory_cache)
+    self._garbage_collector.start(self._db, self._directory_cache,
+                                  self._tornado_fdb)
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
@@ -157,7 +158,7 @@ class FDBDatastore(object):
 
     namespace = (entity.key().app(), entity.key().name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(('_garbage',))
+    gc_dir = self._directory_cache.get(namespace + ('garbage',))
 
     encoded_entity = entity.Encode()
     encoded_value = EntityTypes.ENTITY_V3 + encoded_entity
@@ -184,8 +185,7 @@ class FDBDatastore(object):
       # multiple GC actions, op_id allows for that possibility in the future.
       op_id = 0
       gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-      tr.set_versionstamped_key(gc_key,
-                                gc_entity_value(namespace, path, old_version))
+      tr.set_versionstamped_key(gc_key, gc_entity_value(path, old_version))
 
     yield self._tornado_fdb.commit(tr)
 
@@ -216,7 +216,7 @@ class FDBDatastore(object):
 
     namespace = (key.app(), key.name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(('_garbage',))
+    gc_dir = self._directory_cache.get(namespace + ('garbage',))
 
     tr = self._db.create_transaction()
 
@@ -234,8 +234,7 @@ class FDBDatastore(object):
     # multiple GC actions, op_id allows for that possibility in the future.
     op_id = 0
     gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-    tr.set_versionstamped_key(gc_key,
-                              gc_entity_value(namespace, path, old_version))
+    tr.set_versionstamped_key(gc_key, gc_entity_value(path, old_version))
 
     yield self._tornado_fdb.commit(tr)
 
