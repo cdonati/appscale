@@ -34,6 +34,7 @@ The first byte of an entity value indicates the type of object that is stored.
 """
 import logging
 import sys
+import time
 
 from tornado import gen
 
@@ -55,6 +56,10 @@ class FDBDatastore(object):
 
   # The max number of bytes for each chunk in an encoded entity.
   _CHUNK_SIZE = 10000
+
+  # Cloud Datastore uses microseconds as versions. When the entity doesn't
+  # exist, it reports the version as "1".
+  _ABSENT_VERSION = 1
 
   def __init__(self):
     self._db = None
@@ -160,17 +165,19 @@ class FDBDatastore(object):
       tr, data_dir.range(tuple(path)))
 
     # If the datastore chose an ID, don't overwrite existing data.
-    if auto_id and old_version != 0:
+    if auto_id and old_version != self._ABSENT_VERSION:
       self._scattered_allocator.invalidate()
       raise InternalError('The datastore chose an existing ID')
 
-    new_version = old_version + 1
+    # Since client timestamps are unreliable, ensure the new version is greater
+    # than the old one.
+    new_version = max(time.time() * 1000 * 1000, old_version + 1)
     for start, end in chunk_indexes:
       chunk_key = data_dir.pack(tuple(path + [new_version, start]))
       tr[chunk_key] = encoded_value[start:end]
 
-    journal_key = journal_dir.pack(tuple(path + [new_version]))
-    tr.set_versionstamped_value(journal_key, '\x00' * 14)
+    #journal_key = journal_dir.pack(tuple(path + [new_version]))
+    #tr.set_versionstamped_value(journal_key, '\x00' * 14)
 
     yield self._tornado_fdb.commit(tr)
 
@@ -226,7 +233,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def _get_from_range(self, tr, data_range):
     entity = None
-    version = 0
+    version = self._ABSENT_VERSION
 
     # Select the latest entity version.
     kvs, count, more_results = yield self._tornado_fdb.get_range(
