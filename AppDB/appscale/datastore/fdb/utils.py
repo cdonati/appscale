@@ -2,6 +2,7 @@ import random
 import time
 
 import fdb
+from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 
 from appscale.datastore.dbconstants import BadRequest, MAX_TX_DURATION
@@ -65,22 +66,18 @@ class DirectoryCache(object):
   # The number of items the cache can hold.
   SIZE = 512
 
-  def __init__(self):
+  def __init__(self, db, root):
     """ Creates a new DirectoryCache. """
-    self.ds_dir = None
-    self._db = None
+    self.root = root
+    self._db = db
     self._directory_list = []
     self._directory_dict = {}
-
-  def start(self, db):
-    self.ds_dir = fdb.directory.create_or_open(db, ('appscale', 'datastore'))
-    self._db = db
 
   def get(self, path):
     try:
       return self._directory_dict[path]
     except KeyError:
-      self[path] = self._ds_dir.create_or_open(self._db, path)
+      self[path] = self.root.create_or_open(self._db, path)
       return self[path]
 
   def __setitem__(self, key, value):
@@ -148,6 +145,22 @@ class TornadoFDB(object):
     get_future.on_ready(callback)
     return tornado_future
 
+  def list_subdirectories(self, tr, directory):
+    dir_layer = directory._directory_layer
+    dir_subspace = dir_layer._node_with_prefix(directory.rawPrefix).subspace(
+      dir_layer.SUBDIRS)
+
+    subdirectories = []
+    more_results = True
+    iteration = 1
+    while more_results:
+      kvs, count, more_results = yield self.get_range(
+        tr, dir_subspace.range(), iteration=iteration)
+      subdirectories.extend([dir_subspace.unpack(kv.key)[0] for kv in kvs])
+      iteration += 1
+
+    raise gen.Return(subdirectories)
+
   def _handle_fdb_result(self, fdb_future, tornado_future):
     try:
       result = fdb_future.wait()
@@ -183,3 +196,8 @@ def gc_entity_value(path, version):
             tuple(path) +
             (version,))
   return fdb.tuple.pack(fields)
+
+
+def range_for_directory_list(directory):
+  path = directory._tuplify_path(path)
+  return self._directory_layer.list(tr, self._partition_subpath(path))

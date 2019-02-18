@@ -88,8 +88,9 @@ class PollingLock(object):
 
 
 class GarbageCollector(object):
-  def __init__(self, db, lock, directory_cache):
-    self._db = None
+  def __init__(self, db, tornado_fdb, lock, directory_cache):
+    self._db = db
+    self._tornado_fdb = tornado_fdb
     self._lock = lock
     self._directory_cache = directory_cache
 
@@ -109,5 +110,12 @@ class GarbageCollector(object):
   @gen.coroutine
   def _clean_garbage(self):
     tr = self._db.create_transaction()
-    tr.get
+    # TODO: Get and clean entries
+
+    ds_dir = self._directory_cache.root
+    project_ids = yield self._tornado_fdb.list_subdirectories(ds_dir)
+    for project_id in project_ids:
+      project_dir = self._directory_cache.get((project_id,))
+      namespaces = yield self._tornado_fdb.list_subdirectories(project_dir)
+      for 
     return

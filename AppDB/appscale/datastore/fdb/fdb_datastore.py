@@ -43,7 +43,8 @@ from tornado.ioloop import IOLoop
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
-from appscale.datastore.fdb.garbage_collector import GarbageCollector
+from appscale.datastore.fdb.garbage_collector import (
+  GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
   DirectoryCache, EntityTypes, flat_path, fdb, gc_entity_value,
   next_entity_version, ScatteredAllocator, TornadoFDB)
@@ -66,17 +67,23 @@ class FDBDatastore(object):
 
   def __init__(self):
     self._db = None
-    self._directory_cache = DirectoryCache()
+    self._directory_cache = None
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
-    self._garbage_collector = GarbageCollector()
+    self._garbage_collector = None
 
   def start(self):
     self._db = fdb.open()
-    self._directory_cache.start(self._db)
+    ds_dir = fdb.directory.create_or_open(self._db, ('appscale', 'datastore'))
+    self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
-    self._garbage_collector.start(self._db, self._directory_cache,
-                                  self._tornado_fdb)
+    gc_lock = PollingLock(
+      self._db, self._tornado_fdb, ds_dir.pack(('_gc_lock',)))
+    gc_lock.start()
+
+    self._garbage_collector = GarbageCollector(
+      self._db, self._tornado_fdb, gc_lock, self._directory_cache)
+    self._garbage_collector.start()
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
@@ -158,7 +165,7 @@ class FDBDatastore(object):
 
     namespace = (entity.key().app(), entity.key().name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(namespace + ('garbage',))
+    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
 
     encoded_entity = entity.Encode()
     encoded_value = EntityTypes.ENTITY_V3 + encoded_entity
@@ -216,7 +223,7 @@ class FDBDatastore(object):
 
     namespace = (key.app(), key.name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(namespace + ('garbage',))
+    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
 
     tr = self._db.create_transaction()
 
@@ -261,15 +268,17 @@ class FDBDatastore(object):
     start_key = fdb.tuple.pack(last_key_path[:-1])
     end_key = last_chunk.key
     value = last_chunk.value
+    iteration = 1
     while index > 0:
       remaining_range = slice(start_key, end_key)
       kvs, count, more_results = yield self._tornado_fdb.get_range(
-        tr, remaining_range, reverse=True)
+        tr, remaining_range, iteration=iteration, reverse=True)
       if not count:
         raise InternalError('Incomplete entity record')
 
       value = ''.join([kv.value for kv in reversed(kvs)]) + value
       end_key = kvs[-1].key
+      iteration += 1
       index = fdb.tuple.unpack(end_key)[-1]
 
     if not value:
