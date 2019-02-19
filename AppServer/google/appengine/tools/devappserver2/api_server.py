@@ -39,6 +39,8 @@ import urlparse
 import google
 import yaml
 
+from collections import defaultdict
+
 # Stubs
 from google.appengine.api import datastore_file_stub
 from google.appengine.api import mail_stub
@@ -147,6 +149,10 @@ class APIServer(wsgi_server.WsgiServer):
   def __init__(self, host, port, app_id):
     self._app_id = app_id
     self._host = host
+    self._method_counts = defaultdict(int)
+    self._min_latencies = defaultdict(float)
+    self._max_latencies = defaultdict(float)
+    self._total_latencies = defaultdict(float)
     super(APIServer, self).__init__((host, port), self)
 
   def start(self):
@@ -198,10 +204,23 @@ class APIServer(wsgi_server.WsgiServer):
       logging.log(level, 'Exception while handling %s\n%s', request,
                   traceback.format_exc())
     encoded_response = response.Encode()
-    logging.debug('Handled %s.%s in %0.4f',
-                  request.service_name(),
-                  request.method(),
-                  time.time() - start_time)
+    request_duration = time.time() - start_time
+    method_id = '.'.join([request.service_name(), request.method()])
+    logging.debug('Handled %s in %0.4f',
+                  method_id,
+                  request_duration)
+
+    self._method_counts[method_id] += 1
+    current_min = self._min_latencies[method_id]
+    if not current_min:
+      self._min_latencies[method_id] = request_duration
+    else:
+      self._min_latencies[method_id] = min(current_min, request_duration)
+
+    current_max = self._max_latencies[method_id]
+    self._max_latencies[method_id] = max(current_max, request_duration)
+    self._total_latencies[method_id] += request_duration
+
     return [encoded_response]
 
   def _handle_GET(self, environ, start_response):
@@ -210,7 +229,11 @@ class APIServer(wsgi_server.WsgiServer):
 
     start_response('200 OK', [('Content-Type', 'text/plain')])
     return [yaml.dump({'app_id': self._app_id,
-                       'rtok': rtok})]
+                       'rtok': rtok,
+                       'method_counts': self._method_counts,
+                       'min_latencies': self._min_latencies,
+                       'max_latencies': self._max_latencies,
+                       'total_latencies': self._total_latencies})]
 
   def __call__(self, environ, start_response):
     if environ['REQUEST_METHOD'] == 'GET':
