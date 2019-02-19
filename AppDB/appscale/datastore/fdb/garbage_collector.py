@@ -107,7 +107,6 @@ class GarbageCollector(object):
   def _run_under_lock(self):
     while True:
       try:
-        yield self._lock.acquire()
         yield self._clean_garbage()
       except Exception:
         logger.exception('Unable to clean garbage')
@@ -116,11 +115,13 @@ class GarbageCollector(object):
   @gen.coroutine
   def _clean_garbage(self):
     tr = self._db.create_transaction()
-    work_cutoff =
+    work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
+    versions_deleted = 0
     while self._disposable_keys:
       safe_timestamp, gc_dir, key = self._disposable_keys.pop()
       yield gen.sleep(max(safe_timestamp - time.time(), 0))
 
+      yield self._lock.acquire()
       safe_range = slice(gc_dir.range().start,
                          fdb.KeySelector.first_greater_than(key))
       iterator = RangeIterator(self._tornado_fdb, tr, safe_range)
@@ -135,12 +136,21 @@ class GarbageCollector(object):
         path_with_version = fdb.tuple.unpack(kv.value)
         del tr[data_dir.subspace(path_with_version)]
         del tr[kv.key]
-        if time.time()
+        versions_deleted += 1
+        if time.time() > work_cutoff:
+          break
+
+      if time.time() > work_cutoff:
+        break
 
     yield self._tornado_fdb.commit(tr)
+    logger.info('Cleaned up {} old entity versions'.format(versions_deleted))
+
+    yield self._lock.acquire()
 
     # Record key ranges that will be disposable after a safe time period.
     tr = self._db.create_transaction()
+    self._disposable_keys = []
     ds_dir = self._directory_cache.root
     project_ids = yield self._tornado_fdb.list_subdirectories(ds_dir)
     for project_id in project_ids:
@@ -156,3 +166,6 @@ class GarbageCollector(object):
 
         safe_timestamp = time.time() + MAX_TX_DURATION
         self._disposable_keys.append((safe_timestamp, gc_dir, kvs[0].key))
+
+    if not self._disposable_keys:
+      yield gen.sleep(MAX_TX_DURATION)
