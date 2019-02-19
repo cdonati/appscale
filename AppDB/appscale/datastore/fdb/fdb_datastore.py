@@ -46,8 +46,7 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.garbage_collector import (
   GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
-  DirectoryCache, EntityTypes, flat_path, fdb, gc_entity_value,
-  next_entity_version, ScatteredAllocator, TornadoFDB)
+  DirectoryCache, EntityTypes, flat_path, fdb, next_entity_version, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -188,11 +187,11 @@ class FDBDatastore(object):
       tr[chunk_key] = encoded_value[start:end]
 
     if old_version != self._ABSENT_VERSION:
-      # Though there aren't any cases yet when a single transaction inserts
-      # multiple GC actions, op_id allows for that possibility in the future.
+      # op_id allows multiple versions to be deleted in a single transaction.
       op_id = 0
       gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-      tr.set_versionstamped_key(gc_key, gc_entity_value(path, old_version))
+      gc_val = fdb.tuple.pack(tuple(path) + (old_version,))
+      tr.set_versionstamped_key(gc_key, gc_val)
 
     yield self._tornado_fdb.commit(tr)
 
@@ -237,11 +236,11 @@ class FDBDatastore(object):
     chunk_key = data_dir.pack(tuple(path + [new_version, 0]))
     tr[chunk_key] = ''
 
-    # Though there aren't any cases yet when a single transaction inserts
-    # multiple GC actions, op_id allows for that possibility in the future.
+    # op_id allows multiple versions to be deleted in a single transaction.
     op_id = 0
     gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-    tr.set_versionstamped_key(gc_key, gc_entity_value(path, old_version))
+    gc_val = fdb.tuple.pack(tuple(path) + (old_version,))
+    tr.set_versionstamped_key(gc_key, gc_val)
 
     yield self._tornado_fdb.commit(tr)
 

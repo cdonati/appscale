@@ -6,6 +6,7 @@ if a datastore server isn't able to clean up after itself.
 
 TODO: Retry some operations when they fail.
 """
+from __future__ import division
 
 import logging
 import time
@@ -15,7 +16,9 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 from tornado.locks import Event
 
-from appscale.datastore.fdb.utils import fdb
+from appscale.datastore.dbconstants import MAX_TX_DURATION
+from appscale.datastore.fdb.utils import (
+  fdb, MAX_FDB_TX_DURATION, RangeIterator)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,7 @@ class PollingLock(object):
       self._op_id = op_id
       self._deadline = time.time() + self._LEASE_TIMEOUT
       self._event.set()
+      logger.info('Acquired lock for {}'.format(self.key))
       yield gen.sleep(self._HEARTBEAT_INTERVAL)
       return
 
@@ -93,6 +97,8 @@ class GarbageCollector(object):
     self._tornado_fdb = tornado_fdb
     self._lock = lock
     self._directory_cache = directory_cache
+
+    self._disposable_keys = []
 
   def start(self):
     IOLoop.current().spawn_callback(self._run_under_lock)
@@ -110,12 +116,43 @@ class GarbageCollector(object):
   @gen.coroutine
   def _clean_garbage(self):
     tr = self._db.create_transaction()
-    # TODO: Get and clean entries
+    work_cutoff =
+    while self._disposable_keys:
+      safe_timestamp, gc_dir, key = self._disposable_keys.pop()
+      yield gen.sleep(max(safe_timestamp - time.time(), 0))
 
+      safe_range = slice(gc_dir.range().start,
+                         fdb.KeySelector.first_greater_than(key))
+      iterator = RangeIterator(self._tornado_fdb, tr, safe_range)
+      while True:
+        try:
+          kv = yield iterator.next()
+        except StopIteration:
+          break
+
+        data_path = gc_dir.get_path()[:-1] + ('data',)
+        data_dir = self._directory_cache.get(data_path)
+        path_with_version = fdb.tuple.unpack(kv.value)
+        del tr[data_dir.subspace(path_with_version)]
+        del tr[kv.key]
+        if time.time()
+
+    yield self._tornado_fdb.commit(tr)
+
+    # Record key ranges that will be disposable after a safe time period.
+    tr = self._db.create_transaction()
     ds_dir = self._directory_cache.root
     project_ids = yield self._tornado_fdb.list_subdirectories(ds_dir)
     for project_id in project_ids:
       project_dir = self._directory_cache.get((project_id,))
       namespaces = yield self._tornado_fdb.list_subdirectories(project_dir)
-      for 
-    return
+      for namespace in namespaces:
+        gc_dir = self._directory_cache.get(
+          (project_id, namespace, 'deleted_versions'))
+        kvs, count, more_results = yield self._tornado_fdb.get_range(
+          tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
+        if not count:
+          continue
+
+        safe_timestamp = time.time() + MAX_TX_DURATION
+        self._disposable_keys.append((safe_timestamp, gc_dir, kvs[0].key))

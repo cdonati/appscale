@@ -9,6 +9,8 @@ from appscale.datastore.dbconstants import BadRequest, MAX_TX_DURATION
 
 fdb.api_version(600)
 
+MAX_FDB_TX_DURATION = 5
+
 _MAX_SEQUENTIAL_BIT = 52
 _MAX_SEQUENTIAL_ID = (1 << _MAX_SEQUENTIAL_BIT) - 1
 _MAX_SCATTERED_COUNTER = (1 << (_MAX_SEQUENTIAL_BIT - 1)) - 1
@@ -145,6 +147,7 @@ class TornadoFDB(object):
     get_future.on_ready(callback)
     return tornado_future
 
+  @gen.coroutine
   def list_subdirectories(self, tr, directory):
     dir_layer = directory._directory_layer
     dir_subspace = dir_layer._node_with_prefix(directory.rawPrefix).subspace(
@@ -171,6 +174,42 @@ class TornadoFDB(object):
     self._io_loop.add_callback(tornado_future.set_result, result)
 
 
+class RangeIterator(object):
+  def __init__(self, tornado_fdb, tr, key_slice,
+               streaming_mode=fdb.StreamingMode.iterator, reverse=False,
+               snapshot=False):
+    self._tornado_fdb = tornado_fdb
+    self._tr = tr
+    self._key_slice = key_slice
+    self._streaming_mode = streaming_mode
+    self._reverse = reverse
+    self._snapshot = snapshot
+
+    self._iteration = 1
+    self._cache = []
+    self._exhausted = False
+
+  @gen.coroutine
+  def next(self):
+    if self._exhausted and not self._cache:
+      raise StopIteration()
+
+    if not self._cache:
+      kvs, count, more_results = yield self._tornado_fdb.get_range(
+        self._tr, self._key_slice, 0, self._streaming_mode, self._iteration,
+        self._reverse, self._snapshot)
+      self._iteration += 1
+      if not more_results:
+        self._exhausted = True
+
+      if not count:
+        raise StopIteration()
+
+      self._cache.extend(kvs)
+
+    raise gen.Return(self._cache.pop(0))
+
+
 def flat_path(key):
   path = []
   for element in key.path().element_list():
@@ -189,15 +228,3 @@ def next_entity_version(old_version):
   # Since client timestamps are unreliable, ensure the new version is greater
   # than the old one.
   return max(int(time.time() * 1000 * 1000), old_version + 1)
-
-
-def gc_entity_value(path, version):
-  fields = ((GCActions.REMOVE_ENTITY_VERSION, MAX_TX_DURATION) +
-            tuple(path) +
-            (version,))
-  return fdb.tuple.pack(fields)
-
-
-def range_for_directory_list(directory):
-  path = directory._tuplify_path(path)
-  return self._directory_layer.list(tr, self._partition_subpath(path))
