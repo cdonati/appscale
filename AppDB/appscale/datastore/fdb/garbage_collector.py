@@ -116,7 +116,7 @@ class GarbageCollector(object):
         yield self._clean_garbage()
       except Exception:
         logger.exception('Unable to clean garbage')
-        gen.sleep(10)
+        yield gen.sleep(10)
 
   @gen.coroutine
   def _clean_garbage(self):
