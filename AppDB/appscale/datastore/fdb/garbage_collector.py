@@ -121,14 +121,14 @@ class GarbageCollector(object):
   @gen.coroutine
   def _clean_garbage(self):
     # Record key ranges that will be disposable after a safe time period.
-    disposable_keys = []
+    disposable_ranges = []
     ds_dir = self._directory_cache.root
     tr = self._db.create_transaction()
-    project_ids = yield self._tornado_fdb.list_subdirectories(ds_dir)
-    for project_id in project_ids:
-      project_dir = self._directory_cache.get((project_id,))
-      namespaces = yield self._tornado_fdb.list_subdirectories(project_dir)
-      for namespace in namespaces:
+    project_dirs = yield self._tornado_fdb.list_subdirectories(ds_dir)
+    for project_dir in project_dirs:
+      namespace_dirs = yield self._tornado_fdb.list_subdirectories(project_dir)
+      for namespace_dir in namespace_dirs:
+        project_id, namespace = namespace_dir.get_path()[:2]
         gc_dir = self._directory_cache.get(
           (project_id, namespace, 'deleted_versions'))
         kvs, count, more_results = yield self._tornado_fdb.get_range(
@@ -136,34 +136,32 @@ class GarbageCollector(object):
         if not count:
           continue
 
-        safe_timestamp = time.time() + MAX_TX_DURATION
-        self._disposable_keys.append((safe_timestamp, gc_dir, kvs[0].key))
+        data_dir = self._directory_cache.get((project_id, namespace, 'data'))
+        disposable_range = slice(
+          gc_dir.range().start, fdb.KeySelector.first_greater_than(kvs[0].key))
+        disposable_ranges.append((disposable_range, data_dir))
 
-    if not self._disposable_keys:
+    if not disposable_ranges:
       yield gen.sleep(MAX_TX_DURATION)
+      return
+
+    # Wait until any existing transactions to expire before removing the
+    # deleted versions.
+    yield gen.sleep(MAX_TX_DURATION)
+    if not self._lock.acquired:
+      return
 
     versions_deleted = 0
-    while self._disposable_keys:
-      safe_timestamp, gc_dir, key = self._disposable_keys.pop()
-      yield gen.sleep(max(safe_timestamp - time.time(), 0))
-
-      # Since the above sleep time can be substantial, re-check lock.
-      if not self._lock.acquired:
-        return
-
+    for disposable_range, data_dir in disposable_ranges:
       work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
       tr = self._db.create_transaction()
-      safe_range = slice(gc_dir.range().start,
-                         fdb.KeySelector.first_greater_than(key))
-      iterator = RangeIterator(self._tornado_fdb, tr, safe_range)
+      iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)
       while True:
         try:
           kv = yield iterator.next()
         except StopIteration:
           break
 
-        data_path = gc_dir.get_path()[:-1] + ('data',)
-        data_dir = self._directory_cache.get(data_path)
         path_with_version = fdb.tuple.unpack(kv.value)
         del tr[data_dir.subspace(path_with_version)]
         del tr[kv.key]

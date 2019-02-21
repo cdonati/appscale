@@ -46,7 +46,8 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.garbage_collector import (
   GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
-  DirectoryCache, EntityTypes, flat_path, fdb, next_entity_version, ScatteredAllocator, TornadoFDB)
+  DirectoryCache, EntityTypes, flat_path, fdb, next_entity_version,
+  ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -162,13 +163,9 @@ class FDBDatastore(object):
     if auto_id:
       path[-1] = self._scattered_allocator.get_id()
 
-    project_dir = self._directory_cache.get((entity.key().app(),),
-                                            create_if_necessary=False)
-    namespace = entity.key().app()
-    data_dir = self._directory_cache.get((namespace, 'data',),
-                                         base=project_dir)
-    gc_dir = self._directory_cache.get((namespace, 'deleted_versions'),
-                                       base=project_dir)
+    namespace = (entity.key().app(), entity.key().name_space())
+    data_dir = self._directory_cache.get(namespace + ('data',))
+    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
 
     encoded_entity = entity.Encode()
     encoded_value = EntityTypes.ENTITY_V3 + encoded_entity

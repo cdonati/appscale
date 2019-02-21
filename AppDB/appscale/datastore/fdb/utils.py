@@ -2,6 +2,7 @@ import random
 import time
 
 import fdb
+from fdb.directory_impl import DirectorySubspace
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 
@@ -157,17 +158,13 @@ class TornadoFDB(object):
 
   @gen.coroutine
   def list_subdirectories(self, tr, directory):
-    dir_layer = directory._directory_layer
-    dir_subspace = dir_layer._node_with_prefix(directory.rawPrefix).subspace(
-      dir_layer.SUBDIRS)
-
     subdirectories = []
     more_results = True
     iteration = 1
     while more_results:
       kvs, count, more_results = yield self.get_range(
-        tr, dir_subspace.range(), iteration=iteration)
-      subdirectories.extend([dir_subspace.unpack(kv.key)[0] for kv in kvs])
+        tr, subdirs_subspace(directory).range(), iteration=iteration)
+      subdirectories.extend([kv_to_dir(directory, kv) for kv in kvs])
       iteration += 1
 
     raise gen.Return(subdirectories)
@@ -216,6 +213,27 @@ class RangeIterator(object):
       self._cache.extend(kvs)
 
     raise gen.Return(self._cache.pop(0))
+
+
+def subdirs_subspace(directory):
+  """ Returns the subspace that the directory layer uses to keep track of
+      child directories.
+
+  Args:
+    directory: The parent DirectorySubspace object.
+
+  Returns:
+    A Subspace.
+  """
+  dir_layer = directory._directory_layer
+  parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
+  return parent_subspace.subspace(dir_layer.SUBDIRS)
+
+
+def kv_to_dir(parent, kv):
+  name = subdirs_subspace(parent).unpack(kv.key)[0]
+  path = parent.to_path() + (name,)
+  return DirectorySubspace(path, kv.value)
 
 
 def flat_path(key):
