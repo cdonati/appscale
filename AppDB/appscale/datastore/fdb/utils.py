@@ -202,9 +202,11 @@ class RangeIterator(object):
       raise StopIteration()
 
     if not self._cache:
+      logger.debug('slice: {}'.format(self._key_slice))
       kvs, count, more_results = yield self._tornado_fdb.get_range(
         self._tr, self._key_slice, 0, self._streaming_mode, self._iteration,
         self._reverse, self._snapshot)
+      logger.debug('kvs: {}'.format(kvs))
       self._iteration += 1
       if not more_results:
         self._exhausted = True

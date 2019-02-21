@@ -124,7 +124,7 @@ class GarbageCollector(object):
   def _run_under_lock(self):
     while True:
       try:
-        yield self._lock.acquire()
+        # yield self._lock.acquire()
         yield self._clean_garbage()
       except Exception:
         logger.exception('Unable to clean garbage')
@@ -152,6 +152,7 @@ class GarbageCollector(object):
         data_dir = self._directory_cache.get((project_id, namespace, 'data'))
         disposable_range = slice(
           gc_dir.range().start, fdb.KeySelector.first_greater_than(kvs[0].key))
+        logger.debug('disposable_range: {}'.format(disposable_range))
         disposable_ranges.append((disposable_range, data_dir))
 
     if not disposable_ranges:
@@ -161,14 +162,15 @@ class GarbageCollector(object):
     # Wait until any existing transactions to expire before removing the
     # deleted versions.
     yield gen.sleep(MAX_TX_DURATION)
-    if not self._lock.acquired:
-      return
+    # if not self._lock.acquired:
+    #   return
 
     versions_deleted = 0
     for disposable_range, data_dir in disposable_ranges:
       work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
       tr = self._db.create_transaction()
       iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)
+      logger.debug('iterator: {}'.format(disposable_range))
       while True:
         try:
           kv = yield iterator.next()
