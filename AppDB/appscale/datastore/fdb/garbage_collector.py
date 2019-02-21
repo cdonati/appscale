@@ -75,6 +75,7 @@ class PollingLock(object):
     tr = self._db.create_transaction()
     lease_value = yield self._tornado_fdb.get(tr, self.key)
 
+    logger.info('lease_value: {}'.format(lease_value))
     if lease_value is None:
       self._owner = None
     else:
