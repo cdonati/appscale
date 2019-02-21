@@ -1,9 +1,4 @@
 """
-We don't want to depend on client timestamps. We could infer the interval that's
-passed from the versionstamp, but we don't want to do that either.
-We don't need an HA garbage collector. The only time garbage can build up is
-if a datastore server isn't able to clean up after itself.
-
 TODO: Retry some operations when they fail.
 """
 from __future__ import division
@@ -26,12 +21,18 @@ logger = logging.getLogger(__name__)
 class PollingLock(object):
   """ Acquires a lock by writing to a key. This is suitable for a leader
       election in cases where some downtime and initial acquisition delay is
-      acceptable. Unlike ZooKeeper and etcd, FoundationDB does not have a way
+      acceptable.
+
+      Unlike ZooKeeper and etcd, FoundationDB does not have a way
       to specify that a key should be automatically deleted if a client does
       not heartbeat at a regular interval. This implementation requires the
       leader to update the key at regular intervals to indicate that it is
       still alive. All the other lock candidates check at a longer interval to
       see if the leader has stopped updating the key.
+
+      Since client timestamps are unreliable, candidates do not know the
+      absolute time the key was updated. Therefore, they each wait for the full
+      timeout interval before checking the key again.
   """
   # The number of seconds to wait before trying to claim the lease.
   _LEASE_TIMEOUT = 60
@@ -107,6 +108,7 @@ class PollingLock(object):
       yield gen.sleep(self._HEARTBEAT_INTERVAL)
       return
 
+    # Since another candidate holds the lock, wait until it might expire.
     yield gen.sleep(max(self._deadline - time.time(), 0))
 
 
@@ -124,7 +126,7 @@ class GarbageCollector(object):
   def _run_under_lock(self):
     while True:
       try:
-        # yield self._lock.acquire()
+        yield self._lock.acquire()
         yield self._clean_garbage()
       except Exception:
         logger.exception('Unable to clean garbage')
@@ -155,16 +157,14 @@ class GarbageCollector(object):
         disposable_ranges.append((disposable_range, data_dir))
 
     if not disposable_ranges:
-      # yield gen.sleep(MAX_TX_DURATION)
-      yield gen.sleep(10)
+      yield gen.sleep(MAX_TX_DURATION)
       return
 
     # Wait until any existing transactions to expire before removing the
     # deleted versions.
     yield gen.sleep(MAX_TX_DURATION)
-    yield gen.sleep(10)
-    # if not self._lock.acquired:
-    #   return
+    if not self._lock.acquired:
+      return
 
     versions_deleted = 0
     for disposable_range, data_dir in disposable_ranges:
@@ -177,8 +177,6 @@ class GarbageCollector(object):
           break
 
         path_with_version = fdb.tuple.unpack(kv.value)
-        logger.debug('path_with_version: {}'.format(path_with_version))
-        logger.debug('range deleted: {}'.format(data_dir.subspace(path_with_version).range()))
         del tr[data_dir.subspace(path_with_version).range()]
         del tr[kv.key]
         versions_deleted += 1

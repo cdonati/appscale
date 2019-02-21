@@ -219,8 +219,7 @@ class RangeIterator(object):
 
       self._cache.extend(kvs)
 
-    value = self._cache.pop(0)
-    raise gen.Return(value)
+    raise gen.Return(self._cache.pop(0))
 
 
 def subdirs_subspace(directory):
