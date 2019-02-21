@@ -234,7 +234,7 @@ def subdirs_subspace(directory):
 
 def kv_to_dir(parent, kv):
   name = subdirs_subspace(parent).unpack(kv.key)[0]
-  path = parent.to_path() + (name,)
+  path = parent.get_path() + (name,)
   return DirectorySubspace(path, kv.value)
 
 
