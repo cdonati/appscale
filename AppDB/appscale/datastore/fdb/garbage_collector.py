@@ -24,7 +24,15 @@ logger = logging.getLogger(__name__)
 
 
 class PollingLock(object):
-  """ Acquires a lock by writing to a key and keeps the lease with regular updates. """
+  """ Acquires a lock by writing to a key. This is suitable for a leader
+      election in cases where some downtime and initial acquisition delay is
+      acceptable. Unlike ZooKeeper and etcd, FoundationDB does not have a way
+      to specify that a key should be automatically deleted if a client does
+      not heartbeat at a regular interval. This implementation requires the
+      leader to update the key at regular intervals to indicate that it is
+      still alive. All the other lock candidates check at a longer interval to
+      see if the leader has stopped updating the key.
+  """
   # The number of seconds to wait before trying to claim the lease.
   _LEASE_TIMEOUT = 60
 
