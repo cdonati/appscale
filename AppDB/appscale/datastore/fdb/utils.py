@@ -231,7 +231,7 @@ def subdirs_subspace(directory):
   dir_layer = directory._directory_layer
   parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
   logging.info('parent_subspace: {}'.format(parent_subspace))
-  return parent_subspace.subspace(dir_layer.SUBDIRS)
+  return parent_subspace.subspace((dir_layer.SUBDIRS,))
 
 
 def kv_to_dir(parent, kv):
