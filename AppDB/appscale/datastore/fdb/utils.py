@@ -204,28 +204,22 @@ class RangeIterator(object):
   @gen.coroutine
   def next(self):
     if self._exhausted and not self._cache:
-      logger.debug('exhausted')
-      raise StopIteration()
+      return
 
     if not self._cache:
-      logger.debug('slice: {}'.format(self._key_slice))
       kvs, count, more_results = yield self._tornado_fdb.get_range(
         self._tr, self._key_slice, 0, self._streaming_mode, self._iteration,
         self._reverse, self._snapshot)
-      logger.debug('kvs: {}'.format(kvs))
       self._iteration += 1
       if not more_results:
         self._exhausted = True
 
       if not count:
-        logger.debug('no count')
-        raise StopIteration()
+        return
 
       self._cache.extend(kvs)
 
-    logger.debug('cache: {}'.format(self._cache))
     value = self._cache.pop(0)
-    logger.debug('value: {}'.format(value))
     raise gen.Return(value)
 
 

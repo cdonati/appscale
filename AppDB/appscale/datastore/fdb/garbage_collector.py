@@ -174,15 +174,11 @@ class GarbageCollector(object):
       work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
       tr = self._db.create_transaction()
       iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)
-      logger.debug('iterator: {}'.format(disposable_range))
       while True:
-        try:
-          kv = yield iterator.next()
-        except StopIteration:
-          logger.debug('breaking from stop iter')
+        kv = yield iterator.next()
+        if kv is None:
           break
 
-        logger.debug('kv*: {}'.format(kv))
         path_with_version = fdb.tuple.unpack(kv.value)
         del tr[data_dir.subspace(path_with_version)]
         del tr[kv.key]
