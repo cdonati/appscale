@@ -83,7 +83,8 @@ class PollingLock(object):
     else:
       self._owner = None
 
-    if self._owner in (None, self._client_id) or time.time() > self._deadline:
+    can_acquire = self._owner is None or time.time() > self._deadline
+    if can_acquire or self._owner == self._client_id:
       op_id = uuid.uuid4()
       tr[self.key] = fdb.tuple.pack((self._client_id, op_id))
       yield self._tornado_fdb.commit(tr)
@@ -91,7 +92,9 @@ class PollingLock(object):
       self._op_id = op_id
       self._deadline = time.time() + self._LEASE_TIMEOUT
       self._event.set()
-      logger.info('Acquired lock for {}'.format(self.key))
+      if can_acquire:
+        logger.info('Acquired lock for {}'.format(repr(self.key)))
+
       yield gen.sleep(self._HEARTBEAT_INTERVAL)
       return
 
@@ -124,9 +127,10 @@ class GarbageCollector(object):
     disposable_ranges = []
     ds_dir = self._directory_cache.root
     tr = self._db.create_transaction()
-    project_dirs = yield self._tornado_fdb.list_subdirectories(ds_dir)
+    project_dirs = yield self._tornado_fdb.list_subdirectories(tr, ds_dir)
     for project_dir in project_dirs:
-      namespace_dirs = yield self._tornado_fdb.list_subdirectories(project_dir)
+      namespace_dirs = yield self._tornado_fdb.list_subdirectories(
+        tr, project_dir)
       for namespace_dir in namespace_dirs:
         project_id, namespace = namespace_dir.get_path()[:2]
         gc_dir = self._directory_cache.get(
