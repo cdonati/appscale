@@ -71,11 +71,23 @@ class DirectoryCache(object):
     self._directory_list = []
     self._directory_dict = {}
 
-  def get(self, path):
+  def get(self, path, base=None, create_if_necessary=True):
+    if base is not None:
+      root_elements = len(self.root.get_path())
+      if base.get_path()[:root_elements] != self.root.get_path():
+        raise Exception('Invalid base')
+
+      base_path = base.get_path()[root_elements:]
+      path = base_path + path
+
     try:
       return self._directory_dict[path]
     except KeyError:
-      self[path] = self.root.create_or_open(self._db, path)
+      method = self.root.open
+      if create_if_necessary:
+        method = self.root.create_or_open
+
+      self[path] = method(self._db, path)
       return self[path]
 
   def __setitem__(self, key, value):

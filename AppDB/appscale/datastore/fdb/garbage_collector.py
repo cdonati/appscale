@@ -41,6 +41,13 @@ class PollingLock(object):
     self._deadline = None
     self._event = Event()
 
+  @property
+  def acquired(self):
+    if self._deadline is None:
+      return False
+
+    return self._owner == self._client_id and time.time() < self._deadline
+
   @gen.coroutine
   def start(self):
     IOLoop.current().spawn_callback(self._run)
@@ -49,7 +56,7 @@ class PollingLock(object):
   def acquire(self):
     # Since there is no automatic event timeout, the condition is checked
     # before every acquisition.
-    if self._owner != self._client_id or time.time() > self._deadline:
+    if not self.acquired:
       self._event.clear()
 
     yield self._event.wait()
@@ -98,8 +105,6 @@ class GarbageCollector(object):
     self._lock = lock
     self._directory_cache = directory_cache
 
-    self._disposable_keys = []
-
   def start(self):
     IOLoop.current().spawn_callback(self._run_under_lock)
 
@@ -107,6 +112,7 @@ class GarbageCollector(object):
   def _run_under_lock(self):
     while True:
       try:
+        yield self._lock.acquire()
         yield self._clean_garbage()
       except Exception:
         logger.exception('Unable to clean garbage')
@@ -114,14 +120,39 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def _clean_garbage(self):
+    # Record key ranges that will be disposable after a safe time period.
+    disposable_keys = []
+    ds_dir = self._directory_cache.root
     tr = self._db.create_transaction()
-    work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
+    project_ids = yield self._tornado_fdb.list_subdirectories(ds_dir)
+    for project_id in project_ids:
+      project_dir = self._directory_cache.get((project_id,))
+      namespaces = yield self._tornado_fdb.list_subdirectories(project_dir)
+      for namespace in namespaces:
+        gc_dir = self._directory_cache.get(
+          (project_id, namespace, 'deleted_versions'))
+        kvs, count, more_results = yield self._tornado_fdb.get_range(
+          tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
+        if not count:
+          continue
+
+        safe_timestamp = time.time() + MAX_TX_DURATION
+        self._disposable_keys.append((safe_timestamp, gc_dir, kvs[0].key))
+
+    if not self._disposable_keys:
+      yield gen.sleep(MAX_TX_DURATION)
+
     versions_deleted = 0
     while self._disposable_keys:
       safe_timestamp, gc_dir, key = self._disposable_keys.pop()
       yield gen.sleep(max(safe_timestamp - time.time(), 0))
 
-      yield self._lock.acquire()
+      # Since the above sleep time can be substantial, re-check lock.
+      if not self._lock.acquired:
+        return
+
+      work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
+      tr = self._db.create_transaction()
       safe_range = slice(gc_dir.range().start,
                          fdb.KeySelector.first_greater_than(key))
       iterator = RangeIterator(self._tornado_fdb, tr, safe_range)
@@ -140,32 +171,6 @@ class GarbageCollector(object):
         if time.time() > work_cutoff:
           break
 
-      if time.time() > work_cutoff:
-        break
-
-    yield self._tornado_fdb.commit(tr)
-    logger.info('Cleaned up {} old entity versions'.format(versions_deleted))
-
-    yield self._lock.acquire()
-
-    # Record key ranges that will be disposable after a safe time period.
-    tr = self._db.create_transaction()
-    self._disposable_keys = []
-    ds_dir = self._directory_cache.root
-    project_ids = yield self._tornado_fdb.list_subdirectories(ds_dir)
-    for project_id in project_ids:
-      project_dir = self._directory_cache.get((project_id,))
-      namespaces = yield self._tornado_fdb.list_subdirectories(project_dir)
-      for namespace in namespaces:
-        gc_dir = self._directory_cache.get(
-          (project_id, namespace, 'deleted_versions'))
-        kvs, count, more_results = yield self._tornado_fdb.get_range(
-          tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
-        if not count:
-          continue
-
-        safe_timestamp = time.time() + MAX_TX_DURATION
-        self._disposable_keys.append((safe_timestamp, gc_dir, kvs[0].key))
-
-    if not self._disposable_keys:
-      yield gen.sleep(MAX_TX_DURATION)
+      yield self._tornado_fdb.commit(tr)
+      if versions_deleted:
+        logger.info('Removed {} old entity versions'.format(versions_deleted))
