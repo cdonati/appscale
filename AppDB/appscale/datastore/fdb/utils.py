@@ -221,6 +221,7 @@ class RangeIterator(object):
 
       self._cache.extend(kvs)
 
+    logger.debug('cache: {}'.format(self._cache))
     raise gen.Return(self._cache.pop(0))
 
 

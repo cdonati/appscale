@@ -159,7 +159,8 @@ class GarbageCollector(object):
         disposable_ranges.append((disposable_range, data_dir))
 
     if not disposable_ranges:
-      yield gen.sleep(MAX_TX_DURATION)
+      # yield gen.sleep(MAX_TX_DURATION)
+      yield gen.sleep(5)
       return
 
     # Wait until any existing transactions to expire before removing the
