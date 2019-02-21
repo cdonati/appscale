@@ -156,12 +156,13 @@ class GarbageCollector(object):
 
     if not disposable_ranges:
       # yield gen.sleep(MAX_TX_DURATION)
-      yield gen.sleep(5)
+      yield gen.sleep(10)
       return
 
     # Wait until any existing transactions to expire before removing the
     # deleted versions.
-    # yield gen.sleep(MAX_TX_DURATION)
+    yield gen.sleep(MAX_TX_DURATION)
+    yield gen.sleep(10)
     # if not self._lock.acquired:
     #   return
 
@@ -177,8 +178,8 @@ class GarbageCollector(object):
 
         path_with_version = fdb.tuple.unpack(kv.value)
         logger.debug('path_with_version: {}'.format(path_with_version))
-        logger.info('range deleted: {}'.format(data_dir.subspace(path_with_version)))
-        del tr[data_dir.subspace(path_with_version)]
+        logger.debug('range deleted: {}'.format(data_dir.subspace(path_with_version).range()))
+        del tr[data_dir.subspace(path_with_version).range()]
         del tr[kv.key]
         versions_deleted += 1
         if time.time() > work_cutoff:
