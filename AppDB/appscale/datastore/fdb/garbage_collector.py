@@ -75,14 +75,13 @@ class PollingLock(object):
     tr = self._db.create_transaction()
     lease_value = yield self._tornado_fdb.get(tr, self.key)
 
-    logger.info('lease_value: {}'.format(lease_value))
-    if lease_value is None:
-      self._owner = None
-    else:
+    if lease_value.present():
       self._owner, new_op_id = fdb.tuple.unpack(lease_value)
       if new_op_id != self._op_id:
         self._deadline = time.time() + self._LEASE_TIMEOUT
         self._op_id = new_op_id
+    else:
+      self._owner = None
 
     if self._owner in (None, self._client_id) or time.time() > self._deadline:
       op_id = uuid.uuid4()
