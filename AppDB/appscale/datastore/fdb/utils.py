@@ -204,6 +204,7 @@ class RangeIterator(object):
   @gen.coroutine
   def next(self):
     if self._exhausted and not self._cache:
+      logger.debug('exhausted')
       raise StopIteration()
 
     if not self._cache:
@@ -217,13 +218,14 @@ class RangeIterator(object):
         self._exhausted = True
 
       if not count:
+        logger.debug('no count')
         raise StopIteration()
 
       self._cache.extend(kvs)
 
     logger.debug('cache: {}'.format(self._cache))
     value = self._cache.pop(0)
-    logger.debug('value: {}'.format(self._cache))
+    logger.debug('value: {}'.format(value))
     raise gen.Return(value)
 
 

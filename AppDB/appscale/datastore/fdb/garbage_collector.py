@@ -179,6 +179,7 @@ class GarbageCollector(object):
         try:
           kv = yield iterator.next()
         except StopIteration:
+          logger.debug('breaking from stop iter')
           break
 
         logger.debug('kv*: {}'.format(kv))
