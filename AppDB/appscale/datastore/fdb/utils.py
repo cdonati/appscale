@@ -164,6 +164,7 @@ class TornadoFDB(object):
     more_results = True
     iteration = 1
     while more_results:
+      logger.debug('subdirs subspace: {}'.format(subdirs_subspace(directory)))
       kvs, count, more_results = yield self.get_range(
         tr, subdirs_subspace(directory).range(), iteration=iteration)
       subdirectories.extend([kv_to_dir(directory, kv) for kv in kvs])
