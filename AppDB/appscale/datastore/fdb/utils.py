@@ -1,3 +1,4 @@
+import logging
 import random
 import time
 
@@ -9,6 +10,7 @@ from tornado.concurrent import Future as TornadoFuture
 from appscale.datastore.dbconstants import BadRequest
 
 fdb.api_version(600)
+logger = logging.getLogger(__name__)
 
 MAX_FDB_TX_DURATION = 5
 
@@ -225,8 +227,10 @@ def subdirs_subspace(directory):
   Returns:
     A Subspace.
   """
+  logging.info('directory: {}'.format(directory))
   dir_layer = directory._directory_layer
   parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
+  logging.info('parent_subspace: {}'.format(parent_subspace))
   return parent_subspace.subspace(dir_layer.SUBDIRS)
 
 

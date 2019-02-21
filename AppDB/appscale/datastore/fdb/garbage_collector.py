@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class PollingLock(object):
+  """ Acquires a lock by writing to a key and keeps the lease with regular updates. """
   # The number of seconds to wait before trying to claim the lease.
   _LEASE_TIMEOUT = 60
 
