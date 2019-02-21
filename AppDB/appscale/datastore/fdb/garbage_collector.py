@@ -143,7 +143,7 @@ class GarbageCollector(object):
         tr, project_dir)
       logger.debug('namespace_dirs: {}'.format(namespace_dirs))
       for namespace_dir in namespace_dirs:
-        project_id, namespace = namespace_dir.get_path()[:2]
+        project_id, namespace = namespace_dir.get_path()[-2:]
         gc_dir = self._directory_cache.get(
           (project_id, namespace, 'deleted_versions'))
         logger.debug('gc_dir: {}'.format(gc_dir))
@@ -164,7 +164,7 @@ class GarbageCollector(object):
 
     # Wait until any existing transactions to expire before removing the
     # deleted versions.
-    yield gen.sleep(MAX_TX_DURATION)
+    # yield gen.sleep(MAX_TX_DURATION)
     # if not self._lock.acquired:
     #   return
 
