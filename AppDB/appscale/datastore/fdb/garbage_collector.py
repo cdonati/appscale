@@ -137,13 +137,16 @@ class GarbageCollector(object):
     ds_dir = self._directory_cache.root
     tr = self._db.create_transaction()
     project_dirs = yield self._tornado_fdb.list_subdirectories(tr, ds_dir)
+    logger.debug('project_dirs: {}'.format(project_dirs))
     for project_dir in project_dirs:
       namespace_dirs = yield self._tornado_fdb.list_subdirectories(
         tr, project_dir)
+      logger.debug('namespace_dirs: {}'.format(namespace_dirs))
       for namespace_dir in namespace_dirs:
         project_id, namespace = namespace_dir.get_path()[:2]
         gc_dir = self._directory_cache.get(
           (project_id, namespace, 'deleted_versions'))
+        logger.debug('gc_dir: {}'.format(gc_dir))
         kvs, count, more_results = yield self._tornado_fdb.get_range(
           tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
         if not count:
