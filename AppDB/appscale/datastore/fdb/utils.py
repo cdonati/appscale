@@ -145,8 +145,13 @@ class TornadoFDB(object):
     if snapshot:
       tx_reader = tr.snapshot
 
-    begin = fdb.KeySelector.first_greater_or_equal(key_slice.start)
-    end = fdb.KeySelector.first_greater_or_equal(key_slice.stop)
+    begin = key_slice.start
+    if not isinstance(begin, fdb.KeySelector):
+      begin = fdb.KeySelector.first_greater_or_equal(begin)
+
+    end = key_slice.stop
+    if not isinstance(end, fdb.KeySelector):
+      end = fdb.KeySelector.first_greater_or_equal(end)
 
     tornado_future = TornadoFuture()
     callback = lambda fdb_future: self._handle_fdb_result(
