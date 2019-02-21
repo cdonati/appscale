@@ -222,7 +222,9 @@ class RangeIterator(object):
       self._cache.extend(kvs)
 
     logger.debug('cache: {}'.format(self._cache))
-    raise gen.Return(self._cache.pop(0))
+    value = self._cache.pop(0)
+    logger.debug('value: {}'.format(self._cache))
+    raise gen.Return(value)
 
 
 def subdirs_subspace(directory):

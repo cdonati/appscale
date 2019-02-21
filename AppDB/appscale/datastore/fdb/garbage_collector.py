@@ -181,6 +181,7 @@ class GarbageCollector(object):
         except StopIteration:
           break
 
+        logger.debug('kv*: {}'.format(kv))
         path_with_version = fdb.tuple.unpack(kv.value)
         del tr[data_dir.subspace(path_with_version)]
         del tr[kv.key]
