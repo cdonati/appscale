@@ -196,7 +196,8 @@ class FDBDatastore(object):
     yield self._tornado_fdb.commit(tr)
 
     if delete_old_version:
-      gc_versionstamp = versionstamp_future.wait()
+      gc_versionstamp = fdb.tuple.Versionstamp.from_bytes(
+        versionstamp_future.wait())
       logger.debug('gc_versionstamp: {}'.format(type(gc_versionstamp)))
       logger.debug('gc_versionstamp: {}'.format(repr(gc_versionstamp)))
       IOLoop.current().call_later(

@@ -135,7 +135,7 @@ class GarbageCollector(object):
     logger.debug('namespace: {}'.format(namespace))
     logger.debug('path: {}'.format(path))
     logger.debug('version: {}'.format(version))
-    logger.debug('gc_versionstamp: {}'.format(gc_versionstamp))
+    logger.debug('gc_versionstamp: {}'.format(repr(gc_versionstamp)))
     logger.debug('op_id: {}'.format(op_id))
     create_transaction = tr is None
     if create_transaction:
