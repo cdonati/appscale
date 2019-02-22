@@ -139,7 +139,7 @@ class GarbageCollector(object):
     data_dir = self._directory_cache.get(namespace + ('data',))
     gc_dir = self._directory_cache.get(namespace + ('deleted_verisons',))
     gc_key = gc_dir.pack((gc_versionstamp, op_id))
-    logger.debug('gc_key: {}'.format(gc_key))
+    logger.debug('gc_key: {}'.format(repr(gc_key)))
 
     del tr[data_dir.subspace(path + (version,)).range()]
     del tr[gc_key]
