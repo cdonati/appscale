@@ -144,7 +144,7 @@ class GarbageCollector(object):
     del tr[gc_key]
 
     if create_transaction:
-      yield self._tornado_fdb.commit()
+      yield self._tornado_fdb.commit(tr)
 
   @gen.coroutine
   def _run_under_lock(self):
