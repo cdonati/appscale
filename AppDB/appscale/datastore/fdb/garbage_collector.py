@@ -122,6 +122,30 @@ class GarbageCollector(object):
   def start(self):
     IOLoop.current().spawn_callback(self._run_under_lock)
 
+  def index_deleted_version(self, tr, namespace, path, version, op_id=0):
+    # op_id allows multiple versions to be deleted in a single transaction.
+    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
+    gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
+    gc_val = fdb.tuple.pack(tuple(path) + (version,))
+    tr.set_versionstamped_key(gc_key, gc_val)
+
+  @gen.coroutine
+  def clear_version(self, namespace, path, version, gc_versionstamp, op_id=0,
+                    tr=None):
+    create_transaction = tr is None
+    if create_transaction:
+      tr = self._db.create_transaction()
+
+    data_dir = self._directory_cache.get(namespace + ('data',))
+    gc_dir = self._directory_cache.get(namespace + ('deleted_verisons',))
+    gc_key = gc_dir.pack((gc_versionstamp, op_id))
+
+    del tr[data_dir.subspace(path + (version,)).range()]
+    del tr[gc_key]
+
+    if create_transaction:
+      yield self._tornado_fdb.commit()
+
   @gen.coroutine
   def _run_under_lock(self):
     while True:
@@ -133,8 +157,12 @@ class GarbageCollector(object):
         yield gen.sleep(10)
 
   @gen.coroutine
-  def _clean_garbage(self):
-    # Record key ranges that will be disposable after a safe time period.
+  def _get_disposable_ranges(self):
+    """ Fetches key ranges that will be disposable after a safe time period.
+
+    Returns:
+      A list of (namespace, range) tuples that can be cleared later.
+    """
     disposable_ranges = []
     ds_dir = self._directory_cache.root
     tr = self._db.create_transaction()
@@ -143,19 +171,50 @@ class GarbageCollector(object):
       namespace_dirs = yield self._tornado_fdb.list_subdirectories(
         tr, project_dir)
       for namespace_dir in namespace_dirs:
-        project_id, namespace = namespace_dir.get_path()[-2:]
-        gc_dir = self._directory_cache.get(
-          (project_id, namespace, 'deleted_versions'))
+        namespace = namespace_dir.get_path()[-2:]
+        gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
         kvs, count, more_results = yield self._tornado_fdb.get_range(
           tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
         if not count:
           continue
 
-        data_dir = self._directory_cache.get((project_id, namespace, 'data'))
         disposable_range = slice(
           gc_dir.range().start, fdb.KeySelector.first_greater_than(kvs[0].key))
-        disposable_ranges.append((disposable_range, data_dir))
+        disposable_ranges.append((namespace, disposable_range))
 
+    raise gen.Return(disposable_ranges)
+
+  @gen.coroutine
+  def _clear_ranges(self, disposable_ranges):
+    versions_deleted = 0
+    for namespace, disposable_range in disposable_ranges:
+      gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
+      work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
+      tr = self._db.create_transaction()
+      iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)
+      while True:
+        kv = yield iterator.next()
+        if kv is None:
+          break
+
+        path_with_version = fdb.tuple.unpack(kv.value)
+        path = path_with_version[:-1]
+        version = path_with_version[-1]
+        gc_versionstamp, op_id = gc_dir.unpack(kv.key)
+
+        yield self.clear_version(namespace, path, version, gc_versionstamp,
+                                 op_id, tr)
+        versions_deleted += 1
+        if time.time() > work_cutoff:
+          break
+
+      yield self._tornado_fdb.commit(tr)
+      if versions_deleted:
+        logger.info('Removed {} old entity versions'.format(versions_deleted))
+
+  @gen.coroutine
+  def _clean_garbage(self):
+    disposable_ranges = yield self._get_disposable_ranges()
     if not disposable_ranges:
       yield gen.sleep(MAX_TX_DURATION)
       return
@@ -166,23 +225,4 @@ class GarbageCollector(object):
     if not self._lock.acquired:
       return
 
-    versions_deleted = 0
-    for disposable_range, data_dir in disposable_ranges:
-      work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
-      tr = self._db.create_transaction()
-      iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)
-      while True:
-        kv = yield iterator.next()
-        if kv is None:
-          break
-
-        path_with_version = fdb.tuple.unpack(kv.value)
-        del tr[data_dir.subspace(path_with_version).range()]
-        del tr[kv.key]
-        versions_deleted += 1
-        if time.time() > work_cutoff:
-          break
-
-      yield self._tornado_fdb.commit(tr)
-      if versions_deleted:
-        logger.info('Removed {} old entity versions'.format(versions_deleted))
+    yield self._clear_ranges(disposable_ranges)

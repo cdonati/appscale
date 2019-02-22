@@ -42,7 +42,8 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.dbconstants import (BadRequest, InternalError,
+                                            MAX_TX_DURATION)
 from appscale.datastore.fdb.garbage_collector import (
   GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
@@ -70,7 +71,7 @@ class FDBDatastore(object):
     self._directory_cache = None
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
-    self._garbage_collector = None
+    self._gc = None
 
   def start(self):
     self._db = fdb.open()
@@ -81,9 +82,9 @@ class FDBDatastore(object):
       self._db, self._tornado_fdb, ds_dir.pack(('_gc_lock',)))
     gc_lock.start()
 
-    self._garbage_collector = GarbageCollector(
+    self._gc = GarbageCollector(
       self._db, self._tornado_fdb, gc_lock, self._directory_cache)
-    self._garbage_collector.start()
+    self._gc.start()
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
@@ -165,7 +166,6 @@ class FDBDatastore(object):
 
     namespace = (entity.key().app(), entity.key().name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
 
     encoded_entity = entity.Encode()
     encoded_value = EntityTypes.ENTITY_V3 + encoded_entity
@@ -187,14 +187,19 @@ class FDBDatastore(object):
       chunk_key = data_dir.pack(tuple(path + [new_version, start]))
       tr[chunk_key] = encoded_value[start:end]
 
-    if old_version != self._ABSENT_VERSION:
-      # op_id allows multiple versions to be deleted in a single transaction.
-      op_id = 0
-      gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-      gc_val = fdb.tuple.pack(tuple(path) + (old_version,))
-      tr.set_versionstamped_key(gc_key, gc_val)
+    delete_old_version = old_version != self._ABSENT_VERSION
+    versionstamp_future = None
+    if delete_old_version:
+      self._gc.index_deleted_version(tr, namespace, path, old_version)
+      versionstamp_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
+
+    if delete_old_version:
+      gc_versionstamp = versionstamp_future.wait()
+      IOLoop.current().call_later(
+        MAX_TX_DURATION, self._gc.clear_version, namespace, path, old_version,
+        gc_versionstamp)
 
     new_key = entity_pb.Reference()
     new_key.CopyFrom(entity.key())
@@ -223,7 +228,6 @@ class FDBDatastore(object):
 
     namespace = (key.app(), key.name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
 
     tr = self._db.create_transaction()
 
@@ -237,13 +241,15 @@ class FDBDatastore(object):
     chunk_key = data_dir.pack(tuple(path + [new_version, 0]))
     tr[chunk_key] = ''
 
-    # op_id allows multiple versions to be deleted in a single transaction.
-    op_id = 0
-    gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-    gc_val = fdb.tuple.pack(tuple(path) + (old_version,))
-    tr.set_versionstamped_key(gc_key, gc_val)
+    self._gc.index_deleted_version(tr, namespace, path, old_version)
+    versionstamp_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
+
+    gc_versionstamp = versionstamp_future.wait()
+    IOLoop.current().call_later(
+      MAX_TX_DURATION, self._gc.clear_version, namespace, path, old_version,
+      gc_versionstamp)
 
     raise gen.Return(new_version)
 
