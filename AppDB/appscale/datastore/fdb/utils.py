@@ -254,7 +254,7 @@ def flat_path(key):
     else:
       raise BadRequest('All path elements must either have a name or ID')
 
-  return path
+  return tuple(path)
 
 
 def next_entity_version(old_version):

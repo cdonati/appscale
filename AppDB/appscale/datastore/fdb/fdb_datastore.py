@@ -158,14 +158,14 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def _upsert(self, entity):
-    path = flat_path(entity.key())
-
-    auto_id = path[-1] == 0
+    last_element = entity.key().path().element(-1)
+    auto_id = last_element.has_id() and last_element.id() == 0
     if auto_id:
-      path[-1] = self._scattered_allocator.get_id()
+      last_element.set_id(self._scattered_allocator.get_id())
 
     namespace = (entity.key().app(), entity.key().name_space())
     data_dir = self._directory_cache.get(namespace + ('data',))
+    path = flat_path(entity.key())
 
     encoded_entity = entity.Encode()
     encoded_value = EntityTypes.ENTITY_V3 + encoded_entity
@@ -175,7 +175,7 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
 
     old_entity, old_version = yield self._get_from_range(
-      tr, data_dir.range(tuple(path)))
+      tr, data_dir.range(path))
 
     # If the datastore chose an ID, don't overwrite existing data.
     if auto_id and old_version != self._ABSENT_VERSION:
@@ -184,7 +184,7 @@ class FDBDatastore(object):
 
     new_version = next_entity_version(old_version)
     for start, end in chunk_indexes:
-      chunk_key = data_dir.pack(tuple(path + [new_version, start]))
+      chunk_key = data_dir.pack(path + (new_version, start))
       tr[chunk_key] = encoded_value[start:end]
 
     delete_old_version = old_version != self._ABSENT_VERSION
@@ -201,12 +201,7 @@ class FDBDatastore(object):
         MAX_TX_DURATION, self._gc.clear_version, namespace, path, old_version,
         gc_versionstamp)
 
-    new_key = entity_pb.Reference()
-    new_key.CopyFrom(entity.key())
-    if auto_id:
-      new_key.path().element_list()[-1].set_id(path[-1])
-
-    raise gen.Return((new_key, new_version))
+    raise gen.Return((entity.key(), new_version))
 
   @gen.coroutine
   def _get(self, key):
@@ -216,10 +211,7 @@ class FDBDatastore(object):
     data_dir = self._directory_cache.get(namespace + ('data',))
 
     tr = self._db.create_transaction()
-
-    entity, version = yield self._get_from_range(
-      tr, data_dir.range(tuple(path)))
-
+    entity, version = yield self._get_from_range(tr, data_dir.range(path))
     raise gen.Return((key, entity, version))
 
   @gen.coroutine
@@ -232,13 +224,13 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
 
     old_entity, old_version = yield self._get_from_range(
-      tr, data_dir.range(tuple(path)))
+      tr, data_dir.range(path))
 
     if old_entity is None:
       raise gen.Return(old_version)
 
     new_version = next_entity_version(old_version)
-    chunk_key = data_dir.pack(tuple(path + [new_version, 0]))
+    chunk_key = data_dir.pack(path + (new_version, 0))
     tr[chunk_key] = ''
 
     self._gc.index_deleted_version(tr, namespace, path, old_version)

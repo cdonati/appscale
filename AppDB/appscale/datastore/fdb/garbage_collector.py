@@ -126,7 +126,7 @@ class GarbageCollector(object):
     # op_id allows multiple versions to be deleted in a single transaction.
     gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
     gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-    gc_val = fdb.tuple.pack(tuple(path) + (version,))
+    gc_val = fdb.tuple.pack(path + (version,))
     tr.set_versionstamped_key(gc_key, gc_val)
 
   @gen.coroutine
