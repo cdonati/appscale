@@ -197,6 +197,7 @@ class FDBDatastore(object):
 
     if delete_old_version:
       gc_versionstamp = versionstamp_future.wait()
+      logger.debug('gc_versionstamp: {}'.format(type(gc_versionstamp)))
       logger.debug('gc_versionstamp: {}'.format(repr(gc_versionstamp)))
       IOLoop.current().call_later(
         # MAX_TX_DURATION, self._gc.clear_version, namespace, path, old_version,

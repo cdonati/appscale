@@ -132,6 +132,11 @@ class GarbageCollector(object):
   @gen.coroutine
   def clear_version(self, namespace, path, version, gc_versionstamp, op_id=0,
                     tr=None):
+    logger.debug('namespace: {}'.format(namespace))
+    logger.debug('path: {}'.format(path))
+    logger.debug('version: {}'.format(version))
+    logger.debug('gc_versionstamp: {}'.format(gc_versionstamp))
+    logger.debug('op_id: {}'.format(op_id))
     create_transaction = tr is None
     if create_transaction:
       tr = self._db.create_transaction()
