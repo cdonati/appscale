@@ -35,8 +35,7 @@ class PollingLock(object):
       timeout interval before checking the key again.
   """
   # The number of seconds to wait before trying to claim the lease.
-  # _LEASE_TIMEOUT = 60
-  _LEASE_TIMEOUT = 20
+  _LEASE_TIMEOUT = 60
 
   # The number of seconds to wait before updating the lease.
   _HEARTBEAT_INTERVAL = int(_LEASE_TIMEOUT / 10)
@@ -133,26 +132,27 @@ class GarbageCollector(object):
   @gen.coroutine
   def clear_version(self, namespace, path, version, gc_versionstamp, op_id=0,
                     tr=None):
-    logger.debug('namespace: {}'.format(namespace))
-    logger.debug('path: {}'.format(path))
-    logger.debug('version: {}'.format(version))
-    logger.debug('gc_versionstamp: {}'.format(repr(gc_versionstamp)))
-    logger.debug('op_id: {}'.format(op_id))
     create_transaction = tr is None
     if create_transaction:
       tr = self._db.create_transaction()
 
     data_dir = self._directory_cache.get(namespace + Directories.DATA)
     gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
-    logger.debug('gc_dir: {}'.format(gc_dir))
     gc_key = gc_dir.pack((gc_versionstamp, op_id))
-    logger.debug('gc_key: {}'.format(repr(gc_key)))
 
     del tr[data_dir.subspace(path + (version,)).range()]
     del tr[gc_key]
 
     if create_transaction:
       yield self._tornado_fdb.commit(tr)
+
+  def clear_later(self, namespace, path, version, gc_versionstamp):
+    if not isinstance(gc_versionstamp, fdb.tuple.Versionstamp):
+      gc_versionstamp = fdb.tuple.Versionstamp(str(gc_versionstamp))
+
+    IOLoop.current().call_later(
+      MAX_TX_DURATION, self.clear_version, namespace, path, version,
+      gc_versionstamp)
 
   @gen.coroutine
   def _run_under_lock(self):
