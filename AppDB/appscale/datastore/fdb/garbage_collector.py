@@ -35,7 +35,8 @@ class PollingLock(object):
       timeout interval before checking the key again.
   """
   # The number of seconds to wait before trying to claim the lease.
-  _LEASE_TIMEOUT = 60
+  # _LEASE_TIMEOUT = 60
+  _LEASE_TIMEOUT = 20
 
   # The number of seconds to wait before updating the lease.
   _HEARTBEAT_INTERVAL = int(_LEASE_TIMEOUT / 10)
