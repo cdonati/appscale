@@ -47,8 +47,8 @@ from appscale.datastore.dbconstants import (BadRequest, InternalError,
 from appscale.datastore.fdb.garbage_collector import (
   GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
-  DirectoryCache, EntityTypes, flat_path, fdb, next_entity_version,
-  ScatteredAllocator, TornadoFDB)
+  Directories, DirectoryCache, EntityTypes, flat_path, fdb,
+  next_entity_version, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -164,7 +164,7 @@ class FDBDatastore(object):
       last_element.set_id(self._scattered_allocator.get_id())
 
     namespace = (entity.key().app(), entity.key().name_space())
-    data_dir = self._directory_cache.get(namespace + ('data',))
+    data_dir = self._directory_cache.get(namespace + Directories.DATA)
     path = flat_path(entity.key())
 
     encoded_entity = entity.Encode()
@@ -197,8 +197,6 @@ class FDBDatastore(object):
 
     if delete_old_version:
       gc_versionstamp = fdb.tuple.Versionstamp(versionstamp_future.wait())
-      logger.debug('gc_versionstamp: {}'.format(type(gc_versionstamp)))
-      logger.debug('gc_versionstamp: {}'.format(repr(gc_versionstamp)))
       IOLoop.current().call_later(
         # MAX_TX_DURATION, self._gc.clear_version, namespace, path, old_version,
         10, self._gc.clear_version, namespace, path, old_version,
@@ -211,7 +209,7 @@ class FDBDatastore(object):
     path = flat_path(key)
 
     namespace = (key.app(), key.name_space())
-    data_dir = self._directory_cache.get(namespace + ('data',))
+    data_dir = self._directory_cache.get(namespace + Directories.DATA)
 
     tr = self._db.create_transaction()
     entity, version = yield self._get_from_range(tr, data_dir.range(path))
@@ -222,7 +220,7 @@ class FDBDatastore(object):
     path = flat_path(key)
 
     namespace = (key.app(), key.name_space())
-    data_dir = self._directory_cache.get(namespace + ('data',))
+    data_dir = self._directory_cache.get(namespace + Directories.DATA)
 
     tr = self._db.create_transaction()
 

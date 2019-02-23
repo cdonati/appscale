@@ -13,7 +13,7 @@ from tornado.locks import Event
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
 from appscale.datastore.fdb.utils import (
-  fdb, MAX_FDB_TX_DURATION, RangeIterator)
+  Directories, fdb, MAX_FDB_TX_DURATION, RangeIterator)
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class GarbageCollector(object):
 
   def index_deleted_version(self, tr, namespace, path, version, op_id=0):
     # op_id allows multiple versions to be deleted in a single transaction.
-    gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
+    gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
     gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
     gc_val = fdb.tuple.pack(path + (version,))
     tr.set_versionstamped_key(gc_key, gc_val)
@@ -141,8 +141,9 @@ class GarbageCollector(object):
     if create_transaction:
       tr = self._db.create_transaction()
 
-    data_dir = self._directory_cache.get(namespace + ('data',))
-    gc_dir = self._directory_cache.get(namespace + ('deleted_verisons',))
+    data_dir = self._directory_cache.get(namespace + Directories.DATA)
+    gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
+    logger.debug('gc_dir: {}'.format(gc_dir))
     gc_key = gc_dir.pack((gc_versionstamp, op_id))
     logger.debug('gc_key: {}'.format(repr(gc_key)))
 
@@ -178,7 +179,7 @@ class GarbageCollector(object):
         tr, project_dir)
       for namespace_dir in namespace_dirs:
         namespace = namespace_dir.get_path()[-2:]
-        gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
+        gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
         kvs, count, more_results = yield self._tornado_fdb.get_range(
           tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
         if not count:
@@ -194,7 +195,7 @@ class GarbageCollector(object):
   def _clear_ranges(self, disposable_ranges):
     versions_deleted = 0
     for namespace, disposable_range in disposable_ranges:
-      gc_dir = self._directory_cache.get(namespace + ('deleted_versions',))
+      gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
       work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
       tr = self._db.create_transaction()
       iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)

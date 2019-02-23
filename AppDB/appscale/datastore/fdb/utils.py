@@ -25,6 +25,11 @@ class EntityTypes(object):
   ENTITY_V3 = '0'
 
 
+class Directories(object):
+  DATA = ('data',)
+  DELETED = ('deleted_versions',)
+
+
 def ReverseBitsInt64(v):
   """Reverse the bits of a 64-bit integer.
 
