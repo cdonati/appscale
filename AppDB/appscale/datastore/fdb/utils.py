@@ -12,6 +12,8 @@ from appscale.datastore.dbconstants import BadRequest
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
 
+DATA_DIR = 'data'
+
 MAX_FDB_TX_DURATION = 5
 
 _MAX_SEQUENTIAL_BIT = 52
@@ -23,11 +25,6 @@ _SCATTER_SHIFT = 64 - _MAX_SEQUENTIAL_BIT + 1
 
 class EntityTypes(object):
   ENTITY_V3 = '0'
-
-
-class Directories(object):
-  DATA = ('data',)
-  DELETED = ('deleted_versions',)
 
 
 def ReverseBitsInt64(v):

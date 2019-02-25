@@ -113,6 +113,10 @@ class PollingLock(object):
 
 
 class GarbageCollector(object):
+  GC_DIR = 'deleted_versions'
+
+  LOCK_KEY = '_gc_lock'
+
   def __init__(self, db, tornado_fdb, lock, directory_cache):
     self._db = db
     self._tornado_fdb = tornado_fdb
@@ -122,26 +126,24 @@ class GarbageCollector(object):
   def start(self):
     IOLoop.current().spawn_callback(self._run_under_lock)
 
-  def index_deleted_version(self, tr, namespace, path, version, op_id=0):
+  def index_deleted_version(self, tr, project_id, version_prefix, op_id=0):
     # op_id allows multiple versions to be deleted in a single transaction.
-    gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
+    gc_dir = self._directory_cache.get((project_id, self.GC_DIR))
     gc_key = gc_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-    gc_val = fdb.tuple.pack(path + (version,))
-    tr.set_versionstamped_key(gc_key, gc_val)
+    tr.set_versionstamped_key(gc_key, version_prefix)
 
   @gen.coroutine
-  def clear_version(self, namespace, path, version, gc_versionstamp, op_id=0,
-                    tr=None):
+  def clear_version(self, version_prefixes, gc_keys, tr=None):
     create_transaction = tr is None
     if create_transaction:
       tr = self._db.create_transaction()
 
-    data_dir = self._directory_cache.get(namespace + Directories.DATA)
-    gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
-    gc_key = gc_dir.pack((gc_versionstamp, op_id))
+    for version_prefix in version_prefixes:
+      version_range = fdb.Subspace(rawPrefix=version_prefix).range()
+      del tr[version_range]
 
-    del tr[data_dir.subspace(path + (version,)).range()]
-    del tr[gc_key]
+    for gc_key in gc_keys:
+      del tr[gc_key]
 
     if create_transaction:
       yield self._tornado_fdb.commit(tr)

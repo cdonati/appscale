@@ -36,14 +36,13 @@ retry some operations when they fail.
 """
 import logging
 import sys
+import uuid
 
 from tornado import gen
-
 from tornado.ioloop import IOLoop
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.dbconstants import (BadRequest, InternalError,
-                                            MAX_TX_DURATION)
+from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.garbage_collector import (
   GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
@@ -66,6 +65,8 @@ class FDBDatastore(object):
   # doesn't exist, it reports the version as "1".
   _ABSENT_VERSION = 1
 
+  _ROOT_DIR = ('appscale', 'datastore')
+
   def __init__(self):
     self._db = None
     self._directory_cache = None
@@ -75,11 +76,11 @@ class FDBDatastore(object):
 
   def start(self):
     self._db = fdb.open()
-    ds_dir = fdb.directory.create_or_open(self._db, ('appscale', 'datastore'))
+    ds_dir = fdb.directory.create_or_open(self._db, Directories.ROOT)
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
     gc_lock = PollingLock(
-      self._db, self._tornado_fdb, ds_dir.pack(('_gc_lock',)))
+      self._db, self._tornado_fdb, ds_dir.pack((GarbageCollector.LOCK_KEY,)))
     gc_lock.start()
 
     self._gc = GarbageCollector(
@@ -156,6 +157,16 @@ class FDBDatastore(object):
     for version in deletes:
       logger.debug('version: {}'.format(version))
 
+  # @gen.coroutine
+  # def setup_transaction(self, app_id, is_xg):
+  #   txid = uuid.uuid4()
+  #   tr = self._db.create_transaction()
+  #   tr[]
+  #   in_progress = self.transaction_manager.get_open_transactions(app_id)
+  #   yield self.datastore_batch.start_transaction(
+  #     app_id, txid, is_xg, in_progress)
+  #   raise gen.Return(txid)
+
   @gen.coroutine
   def _upsert(self, entity):
     last_element = entity.key().path().element(-1)
@@ -163,8 +174,8 @@ class FDBDatastore(object):
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
-    namespace = (entity.key().app(), entity.key().name_space())
-    data_dir = self._directory_cache.get(namespace + Directories.DATA)
+    data_dir = self._directory_cache.get(
+      (entity.key().app(), Directories.DATA, entity.key().name_space()))
     path = flat_path(entity.key())
 
     encoded_entity = entity.Encode()
@@ -190,7 +201,7 @@ class FDBDatastore(object):
     delete_old_version = old_version != self._ABSENT_VERSION
     versionstamp_future = None
     if delete_old_version:
-      self._gc.index_deleted_version(tr, namespace, path, old_version)
+      self._gc.index_deleted_version(tr, data_dir.pack(path + (old_version,)))
       versionstamp_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
