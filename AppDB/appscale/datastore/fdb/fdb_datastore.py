@@ -1,27 +1,48 @@
 """ A datastore implementation that uses FoundationDB.
 
 All datastore state is split between multiple FoundationDB directories. All of
-the state for a given project/namespace is stored in
-(appscale, datastore, <project-id>, <namespace>). Within
-each namespace directory, there is a directory for each of the following:
+the state for a given project is stored in (appscale, datastore, <project-id>).
+Within each project directory, there is a directory for each of the following:
 
-journal: This maps entity versions to FoundationDB versionstamps. This mapping
+data: encoded entity data
+garbage: used by the garbage collector to manage deleted data
+indexes: entity key references by property values
+transactions: transaction metadata
+versions: a mapping of fdb versionstamps to entity versions
+
+data: This maps entity keys to encoded entity data. The data is prefixed by
+a byte that indicates how it is encoded. Due to FDB's value size limit, data
+that exceeds the chunk size threshold is split into multiple key-values. The
+index value indicates the position of the chunk. Here is the template along
+with an example key-value. Items wrapped in "[]" represent multiple elements
+for brevity.
+
+  ([namespace_dir^1], [entity-path], <version>, <index>) -> <encoding><data>
+  ([namespace_dir^1], Guestbook, default, Greeting, 5, 1, 0) -> 0<protobuffer>
+
+garbage: See the GarbageCollector class for more details.
+
+indexes: This contains a directory for each index that the datastore needs in
+order to satisfy basic queries along with indexes that the project has defined
+for composite queries. Here is an example template:
+
+  ([index_dir^2], <property-value>, [entity-path], <entity-version>) -> ''
+
+transactions: This maps transaction handles to metadata that the datastore
+needs in order to handle operations for the transaction. Here are a few example
+entries:
+
+  ([transactions_dir], <
+
+This maps entity versions to FoundationDB versionstamps. This mapping
 is necessary because the API requires 64-bit values for entity versions, but
 this implementation requires 80-bit versionstamps for determining if a
 transaction can succeed. Here is the template along with an example key-value.
-Items wrapped in "[]" represent multiple elements for brevity.
+
 
   ([journal_dir], [entity-path], <entity-version>) -> <versionstamp>
   ([journal_dir], Guestbook, default, Greeting, 5, 1) -> <versionstamp>
 
-entities: This maps entity keys to encoded entity data. The data is prefixed by
-a byte that indicates how it is encoded. Due to FDB's value size limit, data
-that exceeds the chunk size threshold is split into multiple key-values. The
-index value indicates the position of the chunk. Here is the template along
-with an example key-value:
-
-  ([entities_dir], [entity-path], <version>, <index>) -> <encoding><data>
-  ([entities_dir], Guestbook, default, Greeting, 5, 1, 0) -> 0<protobuffer>
 
 indexes...
 
@@ -33,6 +54,10 @@ The first byte of an entity value indicates the type of object that is stored.
 
 TODO:
 retry some operations when they fail.
+^1: A directory located at (appscale, datastore, <section>, namespace)
+^2: The index's directory path. For example,
+    (appscale, datastore, indexes, <namespace>, <kind>, <property_name>,
+     <property_type>)
 """
 import logging
 import sys
