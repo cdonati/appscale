@@ -13,11 +13,10 @@ versions: a mapping of fdb versionstamps to entity versions
 data: This maps entity keys to encoded entity data. The data is prefixed by
 a byte that indicates how it is encoded. Due to FDB's value size limit, data
 that exceeds the chunk size threshold is split into multiple key-values. The
-index value indicates the position of the chunk. Here is the template along
-with an example key-value. Items wrapped in "[]" represent multiple elements
-for brevity.
+index value indicates the position of the chunk. Here is an example template
+along with an example key-value:
 
-  ([namespace_dir^1], [entity-path], <version>, <index>) -> <encoding><data>
+  ([namespace_dir^1], [entity-path]^2, <version>, <index>) -> <encoding><data>
   ([namespace_dir^1], Guestbook, default, Greeting, 5, 1, 0) -> 0<protobuffer>
 
 garbage: See the GarbageCollector class for more details.
@@ -26,36 +25,26 @@ indexes: This contains a directory for each index that the datastore needs in
 order to satisfy basic queries along with indexes that the project has defined
 for composite queries. Here is an example template:
 
-  ([index_dir^2], <property-value>, [entity-path], <entity-version>) -> ''
+  ([index_dir^3], <property-value>, [entity-path], <entity-version>) -> ''
 
 transactions: This maps transaction handles to metadata that the datastore
 needs in order to handle operations for the transaction. Here are a few example
 entries:
 
-  ([transactions_dir], <
+  ([transactions_dir], <handle-id>, versionstamp) -> <versionstamp>
+  ([transactions_dir], <handle-id>, lookup, <op-id>) -> <entity-key>
 
-This maps entity versions to FoundationDB versionstamps. This mapping
+versions: This maps entity versions to FoundationDB versionstamps. This mapping
 is necessary because the API requires 64-bit values for entity versions, but
 this implementation requires 80-bit versionstamps for determining if a
 transaction can succeed. Here is the template along with an example key-value.
 
-
-  ([journal_dir], [entity-path], <entity-version>) -> <versionstamp>
+  ([namespace_dir^1], [entity-path], <entity-version>) -> <versionstamp>
   ([journal_dir], Guestbook, default, Greeting, 5, 1) -> <versionstamp>
 
-
-indexes...
-
-When an entity is updated, non-ancestor indexes from older versions are erased
-immediately, but older entity versions are kept for at least the maximum
-transaction duration to allow a transaction to see a consistent snapshot.
-
-The first byte of an entity value indicates the type of object that is stored.
-
-TODO:
-retry some operations when they fail.
 ^1: A directory located at (appscale, datastore, <section>, namespace)
-^2: The index's directory path. For example,
+^2: Items wrapped in "[]" represent multiple elements for brevity.
+^3: The index's directory path. For example,
     (appscale, datastore, indexes, <namespace>, <kind>, <property_name>,
      <property_type>)
 """
@@ -71,7 +60,7 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.garbage_collector import (
   GarbageCollector, PollingLock)
 from appscale.datastore.fdb.utils import (
-  Directories, DirectoryCache, EntityTypes, flat_path, fdb,
+  DirectoryCache, EntityTypes, flat_path, fdb,
   next_entity_version, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
@@ -90,6 +79,8 @@ class FDBDatastore(object):
   # doesn't exist, it reports the version as "1".
   _ABSENT_VERSION = 1
 
+  _DATA_DIR = 'data'
+
   _ROOT_DIR = ('appscale', 'datastore')
 
   def __init__(self):
@@ -101,7 +92,7 @@ class FDBDatastore(object):
 
   def start(self):
     self._db = fdb.open()
-    ds_dir = fdb.directory.create_or_open(self._db, Directories.ROOT)
+    ds_dir = fdb.directory.create_or_open(self._db, self._ROOT_DIR)
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
     gc_lock = PollingLock(
@@ -199,8 +190,10 @@ class FDBDatastore(object):
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
-    data_dir = self._directory_cache.get(
-      (entity.key().app(), Directories.DATA, entity.key().name_space()))
+    project_id = entity.key().app()
+    namespace = entity.key().name_space()
+    data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
+                                             namespace))
     path = flat_path(entity.key())
 
     encoded_entity = entity.Encode()
@@ -211,7 +204,7 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
 
     old_entity, old_version = yield self._get_from_range(
-      tr, data_dir.range(path))
+      tr, data_ns_dir.range(path))
 
     # If the datastore chose an ID, don't overwrite existing data.
     if auto_id and old_version != self._ABSENT_VERSION:
@@ -220,19 +213,20 @@ class FDBDatastore(object):
 
     new_version = next_entity_version(old_version)
     for start, end in chunk_indexes:
-      chunk_key = data_dir.pack(path + (new_version, start))
+      chunk_key = data_ns_dir.pack(path + (new_version, start))
       tr[chunk_key] = encoded_value[start:end]
 
     delete_old_version = old_version != self._ABSENT_VERSION
     versionstamp_future = None
     if delete_old_version:
-      self._gc.index_deleted_version(tr, data_dir.pack(path + (old_version,)))
+      self._gc.index_deleted_version(tr, project_id, namespace, path,
+                                     old_version)
       versionstamp_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if delete_old_version:
-      self._gc.clear_later(namespace, path, old_version, versionstamp_future)
+      self._gc.clear_later(project_id, namespace, path, old_version, versionstamp_future)
 
     raise gen.Return((entity.key(), new_version))
 
