@@ -1,6 +1,7 @@
 import logging
 import random
 import time
+import uuid
 
 import fdb
 from fdb.directory_impl import DirectorySubspace
@@ -12,7 +13,8 @@ from appscale.datastore.dbconstants import BadRequest
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
 
-DATA_DIR = 'data'
+# The max number of bytes for each FDB value.
+CHUNK_SIZE = 10000
 
 MAX_FDB_TX_DURATION = 5
 
@@ -23,8 +25,9 @@ _MAX_SCATTERED_ID = _MAX_SEQUENTIAL_ID + 1 + _MAX_SCATTERED_COUNTER
 _SCATTER_SHIFT = 64 - _MAX_SEQUENTIAL_BIT + 1
 
 
-class EntityTypes(object):
+class EncodedTypes(object):
   ENTITY_V3 = '0'
+  KEY_V3 = '1'
 
 
 def ReverseBitsInt64(v):
@@ -263,3 +266,20 @@ def next_entity_version(old_version):
   # Since client timestamps are unreliable, ensure the new version is greater
   # than the old one.
   return max(int(time.time() * 1000 * 1000), old_version + 1)
+
+
+def new_txid():
+  return uuid.uuid4().int & (1 << 64) - 1
+
+
+def put_chunk(tr, chunk, subspace, chunk_size=CHUNK_SIZE, add_vs=False):
+  chunk_indexes = [(n, n + chunk_size)
+                   for n in xrange(0, len(chunk), chunk_size)]
+  for start, end in chunk_indexes:
+    value = chunk[start:end]
+    if add_vs:
+      key = subspace.pack((fdb.tuple.Versionstamp(), start))
+      tr.set_versionstamped_key(key, value)
+    else:
+      key = subspace.pack((start,))
+      tr[key] = value

@@ -1,6 +1,3 @@
-"""
-TODO: Retry some operations when they fail.
-"""
 from __future__ import division
 
 import logging
@@ -13,7 +10,7 @@ from tornado.locks import Event
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
 from appscale.datastore.fdb.utils import (
-  Directories, fdb, MAX_FDB_TX_DURATION, RangeIterator)
+  fdb, MAX_FDB_TX_DURATION, RangeIterator)
 
 logger = logging.getLogger(__name__)
 
