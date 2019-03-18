@@ -1,0 +1,9 @@
+versions: a mapping of fdb versionstamps to entity versions
+
+versions: This maps commit versionstamps to entity versions. This mapping
+is necessary because the API requires 64-bit values for entity versions, but
+this implementation requires 80-bit versionstamps for determining if a
+transaction can succeed. Here is the template along with an example key-value.
+
+  ([namespace_dir^1], [entity-path], <versionstamp>) -> <entity-version>
+  ([namespace_dir], Greeting, 476633..., <versionstamp>) -> 155284...

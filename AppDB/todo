@@ -1,0 +1,18 @@
+generate stats (atomic operations?)
+
+garbage: used by the garbage collector to manage deleted data
+garbage: See the GarbageCollector class for more details.
+
+---
+    self._gc = None
+---
+    gc_lock = PollingLock(
+      self._db, self._tornado_fdb, ds_dir.pack((GarbageCollector.LOCK_KEY,)))
+    gc_lock.start()
+
+    self._gc = GarbageCollector(
+      self._db, self._tornado_fdb, gc_lock, self._directory_cache)
+    self._gc.start()
+---
+
+

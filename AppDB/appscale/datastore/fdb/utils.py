@@ -1,5 +1,6 @@
 import logging
 import random
+import sys
 import time
 import uuid
 
@@ -8,7 +9,11 @@ from fdb.directory_impl import DirectorySubspace
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 
+from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest
+
+sys.path.append(APPSCALE_PYTHON_APPSERVER)
+from google.appengine.datastore import datastore_pb
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -272,7 +277,7 @@ def new_txid():
   return uuid.uuid4().int & (1 << 64) - 1
 
 
-def put_chunk(tr, chunk, subspace, chunk_size=CHUNK_SIZE, add_vs=False):
+def put_chunks(tr, chunk, subspace, chunk_size=CHUNK_SIZE, add_vs=False):
   chunk_indexes = [(n, n + chunk_size)
                    for n in xrange(0, len(chunk), chunk_size)]
   for start, end in chunk_indexes:
@@ -283,3 +288,26 @@ def put_chunk(tr, chunk, subspace, chunk_size=CHUNK_SIZE, add_vs=False):
     else:
       key = subspace.pack((start,))
       tr[key] = value
+
+
+def log_request(tr, tx_dir, request):
+  txid = request.transaction().handle()
+  if isinstance(request, datastore_pb.PutRequest):
+    value = fdb.tuple.pack(
+      (EncodedTypes.ENTITY_V3,) +
+      tuple(entity.Encode() for entity in request.entity_list()))
+    subspace = tx_dir.subspace((txid, 'puts'))
+  elif isinstance(request, datastore_pb.GetRequest):
+    value = fdb.tuple.pack(
+      (EncodedTypes.KEY_V3,) +
+      tuple(key.Encode() for key in request.key_list()))
+    subspace = tx_dir.subspace((txid, 'lookups'))
+  elif isinstance(request, datastore_pb.DeleteRequest):
+    value = fdb.tuple.pack(
+      (EncodedTypes.KEY_V3,) +
+      tuple(key.Encode() for key in request.key_list()))
+    subspace = tx_dir.subspace((txid, 'deletes'))
+  else:
+    raise BadRequest('Unexpected request type')
+
+  put_chunks(tr, value, subspace, add_vs=True)
