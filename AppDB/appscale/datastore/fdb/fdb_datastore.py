@@ -53,7 +53,7 @@ from appscale.datastore.fdb.utils import (
   next_entity_version, put_chunks, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import entity_pb
+from google.appengine.datastore import datastore_pb, entity_pb
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,29 @@ class FDBDatastore(object):
     raise gen.Return(txid)
 
   @gen.coroutine
+  def commit_transaction(self, project_id, encoded_request):
+    txid = datastore_pb.Transaction(encoded_request).handle()
+
+    try:
+      yield self.apply_txn_changes(app_id, txn_id)
+    except (dbconstants.TxTimeoutException, dbconstants.Timeout) as timeout:
+      raise gen.Return(('', datastore_pb.Error.TIMEOUT, str(timeout)))
+    except dbconstants.AppScaleDBConnectionError:
+      self.logger.exception('DB connection error during commit')
+      raise gen.Return(
+        ('', datastore_pb.Error.INTERNAL_ERROR,
+         'Datastore connection error on Commit request.'))
+    except dbconstants.ConcurrentModificationException as error:
+      raise gen.Return(
+        ('', datastore_pb.Error.CONCURRENT_TRANSACTION, str(error)))
+    except (dbconstants.TooManyGroupsException,
+            dbconstants.BadRequest) as error:
+      raise gen.Return(('', datastore_pb.Error.BAD_REQUEST, str(error)))
+
+    commitres_pb = datastore_pb.CommitResponse()
+    raise gen.Return((commitres_pb.Encode(), 0, ''))
+
+  @gen.coroutine
   def _upsert(self, tr, entity):
     last_element = entity.key().path().element(-1)
     auto_id = last_element.has_id() and last_element.id() == 0
@@ -191,9 +214,9 @@ class FDBDatastore(object):
 
     project_id = entity.key().app()
     namespace = entity.key().name_space()
+    path = flat_path(entity.key())
     data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
                                              namespace))
-    path = flat_path(entity.key())
 
     old_entity, old_version = yield self._get_from_range(
       tr, data_ns_dir.range(path))
@@ -204,18 +227,9 @@ class FDBDatastore(object):
       raise InternalError('The datastore chose an existing ID')
 
     new_version = next_entity_version(old_version)
-    subspace = data_ns_dir.pack(path + (new_version,))
-
     encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3,
                                    entity.Encode())
-    put_chunks(tr, encoded_value, subspace)
-
-    # Map commit versionstamp to entity version.
-    versions_dir = self._directory_cache.get((project_id, self._VERSIONS_DIR,
-                                              namespace))
-    key = versions_dir.pack_with_versionstamp(
-      path + (fdb.tuple.Versionstamp(),))
-    tr.set_versionstamped_key(key, fdb.tuple.pack((new_version,)))
+    put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
 
     raise gen.Return((entity.key(), old_version, new_version))
 
@@ -231,18 +245,7 @@ class FDBDatastore(object):
 
     # Ignore values written after the start of the transaction.
     if read_vs is not None:
-      versions_dir = self._directory_cache.get((project_id, self._VERSIONS_DIR,
-                                                namespace))
-      versions_range = versions_dir.range(path)
-      versions_range = slice(versions_range.start,
-                             versions_dir.pack(path + (read_vs,)))
-      kvs, count, more_results = yield self._tornado_fdb.get_range(
-        tr, versions_range, limit=1, reverse=True)
-      if not count:
-        raise gen.Return((None, self._ABSENT_VERSION))
-
-      version = fdb.tuple.unpack(kvs[0].value)[0]
-      data_range = data_ns_dir.range(path + (version,))
+      data_range = slice(data_range.start, data_ns_dir.pack(path + (read_vs,)))
 
     entity, version = yield self._get_from_range(tr, data_range)
     raise gen.Return((key, entity, version))
@@ -263,15 +266,8 @@ class FDBDatastore(object):
       raise gen.Return((old_version, old_version))
 
     new_version = next_entity_version(old_version)
-    chunk_key = data_ns_dir.pack(path + (new_version, 0))
-    tr[chunk_key] = ''
-
-    # Map commit versionstamp to entity version.
-    versions_dir = self._directory_cache.get((project_id, self._VERSIONS_DIR,
-                                              namespace))
-    key = versions_dir.pack_with_versionstamp(
-      path + (fdb.tuple.Versionstamp(),))
-    tr.set_versionstamped_key(key, fdb.tuple.pack((new_version,)))
+    encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3, '')
+    put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
 
     raise gen.Return((old_version, new_version))
 
@@ -290,12 +286,11 @@ class FDBDatastore(object):
     last_chunk = kvs[0]
     last_key_path = fdb.tuple.unpack(last_chunk.key)
     index = last_key_path[-1]
-    version = last_key_path[-2]
 
     # If the entity is split into chunks, fetch the rest of the chunks.
     start_key = fdb.tuple.pack(last_key_path[:-1])
     end_key = last_chunk.key
-    value = last_chunk.value
+    chunks = [last_chunk.value]
     iteration = 1
     while index > 0:
       remaining_range = slice(start_key, end_key)
@@ -304,16 +299,17 @@ class FDBDatastore(object):
       if not count:
         raise InternalError('Incomplete entity record')
 
-      value = ''.join([kv.value for kv in reversed(kvs)]) + value
+      chunks = [kv.value for kv in reversed(kvs)] + chunks
       end_key = kvs[-1].key
       iteration += 1
       index = fdb.tuple.unpack(end_key)[-1]
 
-    if not value:
+    version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
+    if not encoded_entity:
       raise gen.Return((entity, version))
 
-    if value[0] != EncodedTypes.ENTITY_V3:
+    if encoding != EncodedTypes.ENTITY_V3:
       raise InternalError('Unknown entity type')
 
-    entity = entity_pb.EntityProto(value[1:])
+    entity = entity_pb.EntityProto(encoded_entity)
     raise gen.Return((entity, version))

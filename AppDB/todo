@@ -1,3 +1,31 @@
+use metadata key to invalidate project_id and composite index defs
+add project_id validation to protobuf (and future) interfaces
+define indexes via API rather than shared zk state
+retry operations when they fail
+
+----
+add garbage collection:
+
+      if old_version != self._ABSENT_VERSION:
+        project_id = key.app()
+        namespace = key.name_space()
+        self._gc.index_deleted_version(tr, project_id, namespace, path,
+                                       old_version, op_id=index)
+
+versionstamp_future = tr.get_versionstamp()
+# yield self._tornado_fdb.commit(tr)
+self._gc.clear_later(project_id, namespace, path, old_version,
+                           versionstamp_future)
+----
+
+get rid of txid int handles (standardize on bytestring handles from public api)
+enforce 60-sec tx time
+split read keys in tx metadata if it exceeds 10k
+check for limits (max keys for get request, max entities in put, etc)
+check what the correct v3 response is when putting entities in a tx (include versions?)
+
+---
+
 generate stats (atomic operations?)
 
 garbage: used by the garbage collector to manage deleted data
@@ -15,4 +43,25 @@ garbage: See the GarbageCollector class for more details.
     self._gc.start()
 ---
 
+    # Map commit versionstamp to entity version.
+    versions_dir = self._directory_cache.get((project_id, self._VERSIONS_DIR,
+                                              namespace))
+    key = versions_dir.pack_with_versionstamp(
+      path + (fdb.tuple.Versionstamp(),))
+    tr.set_versionstamped_key(key, fdb.tuple.pack((new_version,)))
 
+---
+
+      versions_dir = self._directory_cache.get((project_id, self._VERSIONS_DIR,
+                                                namespace))
+      versions_range = versions_dir.range(path)
+      versions_range = slice(versions_range.start,
+                             versions_dir.pack(path + (read_vs,)))
+      kvs, count, more_results = yield self._tornado_fdb.get_range(
+        tr, versions_range, limit=1, reverse=True)
+      if not count:
+        raise gen.Return((None, self._ABSENT_VERSION))
+
+---
+
+rework directory cache. per-project?

@@ -277,7 +277,7 @@ def new_txid():
   return uuid.uuid4().int & (1 << 64) - 1
 
 
-def put_chunks(tr, chunk, subspace, chunk_size=CHUNK_SIZE, add_vs=False):
+def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
   chunk_indexes = [(n, n + chunk_size)
                    for n in xrange(0, len(chunk), chunk_size)]
   for start, end in chunk_indexes:
