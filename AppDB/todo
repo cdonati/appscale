@@ -85,3 +85,8 @@ enforce xg constraint
 ---
 
 test behavior of queries including meaning field
+
+---
+
+handle pointvalue, uservalue, referencevalue
+test decoding/encoding double (float)
