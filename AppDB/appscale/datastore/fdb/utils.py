@@ -283,7 +283,7 @@ def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
   for start, end in chunk_indexes:
     value = chunk[start:end]
     if add_vs:
-      key = subspace.pack((fdb.tuple.Versionstamp(), start))
+      key = subspace.pack_with_versionstamp((fdb.tuple.Versionstamp(), start))
       tr.set_versionstamped_key(key, value)
     else:
       key = subspace.pack((start,))
