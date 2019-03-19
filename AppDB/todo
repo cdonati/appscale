@@ -84,3 +84,4 @@ enforce xg constraint
         'Too many groups in transaction')
 ---
 
+test behavior of queries including meaning field

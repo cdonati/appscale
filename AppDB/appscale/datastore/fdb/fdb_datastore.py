@@ -35,8 +35,8 @@ entries:
 ^3: A FoundationDB-generated value specifying the commit versionstamp. It is
     used for enforcing consistency.
 ^4: The index's directory path. For example,
-    (appscale, datastore, indexes, <namespace>, <kind>, <property name>,
-     <property type>)
+    (appscale, datastore, <project>, indexes, <namespace>, <kind>,
+     <property name>, <property type>)
 ^5: A directory located at (appscale, datastore, <project>, transactions).
 ^6: Designates what version of the database read operations should see.
 """
