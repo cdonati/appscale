@@ -13,7 +13,7 @@ from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import datastore_pb
+from google.appengine.datastore import datastore_pb, entity_pb
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -308,6 +308,23 @@ def log_request(tr, tx_dir, request):
       tuple(key.Encode() for key in request.key_list()))
     subspace = tx_dir.subspace((txid, 'deletes'))
   else:
-    raise BadRequest('Unexpected request type')
+    raise BadRequest('Unexpected RPC type')
 
   put_chunks(tr, value, subspace, add_vs=True)
+
+
+def decode_chunks(chunks, rpc_type):
+  if rpc_type == 'puts':
+    expected_encoding = EncodedTypes.ENTITY_V3
+    pb_class = entity_pb.EntityProto
+  elif rpc_type in ('lookups', 'deletes'):
+    expected_encoding = EncodedTypes.KEY_V3
+    pb_class = entity_pb.Reference
+  else:
+    raise BadRequest('Unexpected RPC type')
+
+  elements = fdb.tuple.unpack(''.join(chunks))
+  if elements[0] != expected_encoding:
+    raise BadRequest('Unexpected encoding')
+
+  return [pb_class(encoded_value) for encoded_value in elements[1:]]
