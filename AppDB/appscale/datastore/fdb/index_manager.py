@@ -1,9 +1,14 @@
-from collections import namedtuple
-
 from appscale.datastore.fdb.utils import fdb, flat_path
 from appscale.datastore.dbconstants import BadRequest
 
 INDEX_DIR = 'indexes'
+
+class PropertyTypes(object):
+  INT_64 = 'int64'
+  BOOLEAN = 'boolean'
+  STRING = 'string'
+  DOUBLE = 'double'
+  REFERENCE = 'reference'
 
 
 class Index(object):
@@ -53,35 +58,44 @@ class SinglePropIndex(Index):
        prop_type))
     super(SinglePropIndex, self).__init__(directory)
 
+  @property
+  def type(self):
+    return self.directory.get_path()[-1]
+
   def encode(self, value, path, commit_vs=fdb.tuple.Versionstamp()):
-    return self.pack_method(commit_vs)((value,) + path + (commit_vs,))
-
-
-class PropTypes(object):
-  INT = '1'
-  BOOL = '2'
-  STRING = '3'
-  DOUBLE = '4'
+    if self.type == PropertyTypes.REFERENCE:
+      # The delimeter allows the decoder to differentiate between the property
+      # value and the entity path.
+      delimiter = '\x00'
+      return self.pack_method(commit_vs)(value + (delimiter,) + path +
+                                         (commit_vs,))
+    else:
+      return self.pack_method(commit_vs)((value,) + path + (commit_vs,))
 
 
 def unpack_value(value):
   if value.has_int64value():
-    return PropTypes.INT, value.int64value()
+    return PropertyTypes.INT_64, value.int64value()
   elif value.has_booleanvalue():
-    return PropTypes.BOOL, value.booleanvalue()
+    return PropertyTypes.BOOLEAN, value.booleanvalue()
   elif value.has_stringvalue():
-    return PropTypes.STRING, value.stringvalue()
+    return PropertyTypes.STRING, value.stringvalue()
   elif value.has_doublevalue():
-    return PropTypes.DOUBLE, value.doublevalue()
-  else:
-    raise BadRequest('Unknown PropertyValue type')
+    return PropertyTypes.DOUBLE, value.doublevalue()
+  elif value.has_referencevalue():
+    ref = value.referencevalue()
+    value_tuple = (ref.app(), ref.name_space()) + flat_path(ref)
+    return PropertyTypes.REFERENCE, value_tuple
+
+  raise BadRequest('Unknown PropertyValue type')
 
 
 class IndexManager(object):
   _INDEX_DIR = 'indexes'
 
-  def __init__(self, directory_cache):
+  def __init__(self, directory_cache, tornado_fdb):
     self._directory_cache = directory_cache
+    self._tornado_fdb = tornado_fdb
 
   def put_entries(self, tr, old_entity, old_vs, new_entity):
     project_id = new_entity.key().app()
@@ -110,3 +124,13 @@ class IndexManager(object):
         index = SinglePropIndex(project_id, namespace, kind, prop.name(),
                                 type_, self._directory_cache)
         tr.set_versionstamped_key(index.encode(value, path), '')
+
+  def kindless_query(self, query):
+    project_id = query.app()
+    namespace = query.name_space()
+    index = KindlessIndex(project_id, namespace, self._directory_cache)
+    iterator =
+      iterator = index.iterator()
+
+    if iterator is None:
+      raise BadRequest('Query not supported')

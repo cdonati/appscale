@@ -91,3 +91,6 @@ test behavior of queries including meaning field
 handle pointvalue, uservalue, referencevalue
 test decoding/encoding double (float)
 scattered property
+projection queries
+test encoding referencevalue as single prop index entry (does gae allow it?)
+test delete response (pretty sure popluated version field is the new empty version?)

@@ -197,7 +197,7 @@ class TornadoFDB(object):
 
 
 class RangeIterator(object):
-  def __init__(self, tornado_fdb, tr, key_slice,
+  def __init__(self, tornado_fdb, tr, key_slice, limit=0,
                streaming_mode=fdb.StreamingMode.iterator, reverse=False,
                snapshot=False):
     self._tornado_fdb = tornado_fdb
@@ -232,6 +232,64 @@ class RangeIterator(object):
     raise gen.Return(self._cache.pop(0))
 
 
+class RangeIterator(object):
+  def __init__(self, tr, tornado_fdb, begin, end, limit=0, reverse=False,
+               streaming_mode=fdb.StreamingMode.iterator, snapshot=False):
+    self._tr = tr
+    self._tornado_fdb = tornado_fdb
+
+    self._bsel = begin
+    self._esel = end
+
+    self._limit = limit
+    self._fetched = 0
+    self._iteration = 1
+    self._reverse = reverse
+    self._mode = streaming_mode
+    self._snapshot = snapshot
+
+    self._future = self._tornado_fdb.get_range(
+      self._tr, slice(self._bsel, self._esel), self._limit, self._mode,
+      self._iteration, self._reverse, self._snapshot)
+    self._cache = []
+    self._index = 0
+    self._done = False
+
+  @gen.coroutine
+  def next(self):
+    remainder = self._limit
+
+    if self._done and not self._cache:
+      return
+
+    if not self._cache:
+      if self._future is not None:
+        kvs, count, more = yield self._future
+        self._index = 0
+        self._future = None
+
+        if not count:
+          return
+
+      result = kvs[self._index]
+      self._index += 1
+
+      if self._index == count:
+        if not more or limit == count:
+          done = True
+        else:
+          self._iteration += 1
+          if limit > 0:
+            limit = limit - count
+          if self._reverse:
+            esel = KeySelector.first_greater_or_equal(kvs[-1].key)
+          else:
+            bsel = KeySelector.first_greater_than(kvs[-1].key)
+          future = self._tr._get_range(bsel, esel, limit, mode, self._iteration, self._reverse)
+
+      yield result
+
+
 def subdirs_subspace(directory):
   """ Returns the subspace that the directory layer uses to keep track of
       child directories.
@@ -255,7 +313,12 @@ def kv_to_dir(parent, kv):
 
 def flat_path(key):
   path = []
-  for element in key.path().element_list():
+  if isinstance(key, entity_pb.PropertyValue_ReferenceValue):
+    element_list = key.pathelement_list()
+  else:
+    element_list = key.path().element_list()
+
+  for element in element_list:
     path.append(element.type())
     if element.has_id():
       path.append(element.id())

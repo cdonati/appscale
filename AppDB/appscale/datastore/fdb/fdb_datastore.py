@@ -52,6 +52,7 @@ from appscale.datastore.dbconstants import (
 from appscale.datastore.fdb.utils import (
   decode_chunks, DirectoryCache, EncodedTypes, flat_path, fdb, log_request,
   new_txid, next_entity_version, put_chunks, ScatteredAllocator, TornadoFDB)
+from appscale.datastore.fdb.index_manager import IndexManager
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -77,6 +78,7 @@ class FDBDatastore(object):
   def __init__(self):
     self._db = None
     self._directory_cache = None
+    self._index_manager = None
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
 
@@ -85,6 +87,7 @@ class FDBDatastore(object):
     ds_dir = fdb.directory.create_or_open(self._db, self._ROOT_DIR)
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
+    self._index_manager = IndexManager(self._directory_cache)
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
@@ -167,6 +170,47 @@ class FDBDatastore(object):
       logger.debug('new_version: {}'.format(new_version))
 
   @gen.coroutine
+  def _dynamic_run_query(self, query, query_result):
+    if query.has_kind() and not query.filter_list():
+      results = yield self.
+      index = KindIndex(project_id, namespace, query.kind(),
+                        self._directory_cache)
+      iterator = index.iterator()
+
+    if iterator is None:
+      raise BadRequest('Query not supported')
+
+    result = yield self.__get_query_results(query)
+    last_entity = None
+    count = 0
+    offset = query.offset()
+    if result:
+      query_result.set_skipped_results(len(result) - offset)
+      # Last entity is used for the cursor. It needs to be set before
+      # applying the offset.
+      last_entity = result[-1]
+      count = len(result)
+      result = result[offset:]
+      if query.has_limit():
+        result = result[:query.limit()]
+
+    cur = UnprocessedQueryCursor(query, result, last_entity)
+    cur.PopulateQueryResult(count, query.offset(), query_result)
+
+    # If we have less than the amount of entities we request there are no
+    # more results for this query.
+    if count < self.get_limit(query):
+      query_result.set_more_results(False)
+
+    # If there were no results then we copy the last cursor so future queries
+    # can start off from the same place.
+    if query.has_compiled_cursor() and not query_result.has_compiled_cursor():
+      query_result.mutable_compiled_cursor().CopyFrom(query.compiled_cursor())
+    elif query.has_compile() and not query_result.has_compiled_cursor():
+      query_result.mutable_compiled_cursor().\
+        CopyFrom(datastore_pb.CompiledCursor())
+
+  @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
     txid = new_txid()
     tx_dir = self._directory_cache.get((project_id, self._TX_DIR))
@@ -222,9 +266,9 @@ class FDBDatastore(object):
     for mutation in mutations:
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
-      entity, old_version = yield futures[key.Encode()][1:3]
+      old_entity, old_version, old_vs = yield futures[key.Encode()][1:]
       new_version = next_entity_version(old_version)
-      encoded_entity = entity.Encode() if op == 'put' else ''
+      encoded_entity = mutation.Encode() if op == 'put' else ''
       namespace = key.name_space()
       path = flat_path(key)
       data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
@@ -232,6 +276,8 @@ class FDBDatastore(object):
       encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3,
                                      encoded_entity)
       put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
+      if op == 'put'
+      self._index_manager.put_entries(tr, old_entity, old_vs, entity)
 
     yield self._tornado_fdb.commit(tr)
 
@@ -248,8 +294,8 @@ class FDBDatastore(object):
     data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
                                              namespace))
 
-    old_entity, old_version = yield self._get_from_range(
-      tr, data_ns_dir.range(path))[:2]
+    old_entity, old_version, old_vs = yield self._get_from_range(
+      tr, data_ns_dir.range(path))
 
     # If the datastore chose an ID, don't overwrite existing data.
     if auto_id and old_version != self._ABSENT_VERSION:
@@ -260,6 +306,7 @@ class FDBDatastore(object):
     encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3,
                                    entity.Encode())
     put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
+    self._index_manager.put_entries(tr, old_entity, old_vs, entity)
 
     raise gen.Return((entity.key(), old_version, new_version))
 
@@ -293,8 +340,8 @@ class FDBDatastore(object):
     data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
                                              namespace))
 
-    old_entity, old_version = yield self._get_from_range(
-      tr, data_ns_dir.range(path))[:2]
+    old_entity, old_version, old_vs = yield self._get_from_range(
+      tr, data_ns_dir.range(path))
 
     if old_entity is None:
       raise gen.Return((old_version, old_version))
@@ -302,8 +349,16 @@ class FDBDatastore(object):
     new_version = next_entity_version(old_version)
     encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3, '')
     put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
+    self._index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
     raise gen.Return((old_version, new_version))
+
+  def put_data(self, tr, project_id, namespace, path, version, encoded_entity):
+    data_ns_dir = self._directory_cache.get(
+      (project_id, self._DATA_DIR, namespace))
+    encoded_value = fdb.tuple.pack(version, EncodedTypes.ENTITY_V3,
+                                   encoded_entity)
+    put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
 
   @gen.coroutine
   def _get_from_range(self, tr, data_range, vs_only=False):
@@ -416,22 +471,3 @@ class FDBDatastore(object):
       raise BadRequest('Transaction not found')
 
     raise gen.Return((read_vs, lookups, mutations))
-
-  @gen.coroutine
-  def _current_vs(self, tr, key):
-    versionstamp = 0
-    project_id = key.app()
-    namespace = key.name_space()
-    data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
-                                             namespace))
-    path = flat_path(key)
-    data_range = data_ns_dir.range(path)
-
-    kvs, count, more_results = yield self._tornado_fdb.get_range(
-      tr, data_range, limit=1, reverse=True)
-
-    if not count:
-      raise gen.Return(versionstamp)
-
-    versionstamp = fdb.tuple.unpack(kvs[0].key)[-2]
-    raise gen.Return(versionstamp)
