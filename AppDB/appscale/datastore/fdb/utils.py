@@ -197,97 +197,68 @@ class TornadoFDB(object):
 
 
 class RangeIterator(object):
-  def __init__(self, tornado_fdb, tr, key_slice, limit=0,
-               streaming_mode=fdb.StreamingMode.iterator, reverse=False,
-               snapshot=False):
-    self._tornado_fdb = tornado_fdb
-    self._tr = tr
-    self._key_slice = key_slice
-    self._streaming_mode = streaming_mode
-    self._reverse = reverse
-    self._snapshot = snapshot
-
-    self._iteration = 1
-    self._cache = []
-    self._exhausted = False
-
-  @gen.coroutine
-  def next(self):
-    if self._exhausted and not self._cache:
-      return
-
-    if not self._cache:
-      kvs, count, more_results = yield self._tornado_fdb.get_range(
-        self._tr, self._key_slice, 0, self._streaming_mode, self._iteration,
-        self._reverse, self._snapshot)
-      self._iteration += 1
-      if not more_results:
-        self._exhausted = True
-
-      if not count:
-        return
-
-      self._cache.extend(kvs)
-
-    raise gen.Return(self._cache.pop(0))
-
-
-class RangeIterator(object):
-  def __init__(self, tr, tornado_fdb, begin, end, limit=0, reverse=False,
+  def __init__(self, tr, tornado_fdb, key_slice, limit=0, reverse=False,
                streaming_mode=fdb.StreamingMode.iterator, snapshot=False):
     self._tr = tr
     self._tornado_fdb = tornado_fdb
 
-    self._bsel = begin
-    self._esel = end
-
     self._limit = limit
-    self._fetched = 0
-    self._iteration = 1
     self._reverse = reverse
     self._mode = streaming_mode
     self._snapshot = snapshot
 
-    self._future = self._tornado_fdb.get_range(
-      self._tr, slice(self._bsel, self._esel), self._limit, self._mode,
-      self._iteration, self._reverse, self._snapshot)
+    self._bsel = key_slice.start
+    self._esel = key_slice.stop
+    self._fetched = 0
+    self._iteration = 1
     self._cache = []
     self._index = 0
     self._done = False
 
+  @property
+  def cache_exhausted(self):
+    return self._index == len(self._cache)
+
+  @gen.coroutine
+  def next_page(self):
+    if self._done:
+      raise gen.Return(([], not self._done))
+
+    tmp_limit = 0
+    if self._limit > 0:
+      tmp_limit = self._limit - self._fetched
+
+    kvs, count, more = yield self._tornado_fdb.get_range(
+      self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
+      self._iteration, self._reverse, self._snapshot)
+    self._fetched += count
+
+    if more or self._fetched < self._limit:
+      self._iteration += 1
+      if self._reverse:
+        self._esel = fdb.KeySelector.first_greater_or_equal(kvs[-1].key)
+      else:
+        self._bsel = fdb.KeySelector.first_greater_than(kvs[-1].key)
+    else:
+      self._done = True
+
+    raise gen.Return((kvs, not self._done))
+
   @gen.coroutine
   def next(self):
-    remainder = self._limit
-
-    if self._done and not self._cache:
+    if self._done and self.cache_exhausted:
       return
 
+    if self.cache_exhausted:
+      self._cache = yield self.next_page()[0]
+      self._index = 0
+
     if not self._cache:
-      if self._future is not None:
-        kvs, count, more = yield self._future
-        self._index = 0
-        self._future = None
+      return
 
-        if not count:
-          return
-
-      result = kvs[self._index]
-      self._index += 1
-
-      if self._index == count:
-        if not more or limit == count:
-          done = True
-        else:
-          self._iteration += 1
-          if limit > 0:
-            limit = limit - count
-          if self._reverse:
-            esel = KeySelector.first_greater_or_equal(kvs[-1].key)
-          else:
-            bsel = KeySelector.first_greater_than(kvs[-1].key)
-          future = self._tr._get_range(bsel, esel, limit, mode, self._iteration, self._reverse)
-
-      yield result
+    result = self._cache[self._index]
+    self._index += 1
+    raise gen.Return(result)
 
 
 def subdirs_subspace(directory):
@@ -328,6 +299,26 @@ def flat_path(key):
       raise BadRequest('All path elements must either have a name or ID')
 
   return tuple(path)
+
+
+def decode_path(flattened_path):
+  if len(flattened_path) % 2 != 0:
+    raise BadRequest('Invalid path')
+
+  path = entity_pb.Path()
+  index = 0
+  while index < len(flattened_path):
+    element = path.add_element()
+    element.set_type(flattened_path[index])
+    id_or_name = flattened_path[index + 1]
+    if isinstance(id_or_name, int):
+      element.set_id(id_or_name)
+    else:
+      element.set_name(id_or_name)
+
+    index += 2
+
+  return path
 
 
 def next_entity_version(old_version):

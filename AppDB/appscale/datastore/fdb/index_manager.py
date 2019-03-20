@@ -1,5 +1,14 @@
-from appscale.datastore.fdb.utils import fdb, flat_path
+import sys
+
+from tornado import gen
+
+from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
+from appscale.datastore.fdb.utils import (
+  decode_path, fdb, flat_path, RangeIterator)
 from appscale.datastore.dbconstants import BadRequest
+
+sys.path.append(APPSCALE_PYTHON_APPSERVER)
+from google.appengine.datastore import entity_pb
 
 INDEX_DIR = 'indexes'
 
@@ -93,6 +102,8 @@ def unpack_value(value):
 class IndexManager(object):
   _INDEX_DIR = 'indexes'
 
+  _MAX_RESULTS = 300
+
   def __init__(self, directory_cache, tornado_fdb):
     self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
@@ -125,12 +136,63 @@ class IndexManager(object):
                                 type_, self._directory_cache)
         tr.set_versionstamped_key(index.encode(value, path), '')
 
-  def kindless_query(self, query):
+  def get_reverse(self, query, expected_prop):
+    if query.order_list():
+      if query.order_size() > 1 or query.order(0).property() != expected_prop:
+        raise BadRequest('Invalid order info')
+
+      if query.order(0).direction() == query.order(0).DESCENDING:
+        return True
+
+    return False
+
+  def rpc_limit(self, query):
+    check_more_results = False
+    limit = None
+    if query.has_limit():
+      limit = query.limit()
+
+    if query.has_count() and (limit is None or limit > query.count()):
+      check_more_results = True
+      limit = query.count()
+
+    if limit is None or limit > self._MAX_RESULTS:
+      check_more_results = True
+      limit = self._MAX_RESULTS
+
+    if query.has_offset():
+      limit += query.offset()
+
+    return limit, check_more_results
+
+  @gen.coroutine
+  def kindless_query(self, tr, query):
     project_id = query.app()
     namespace = query.name_space()
     index = KindlessIndex(project_id, namespace, self._directory_cache)
-    iterator =
-      iterator = index.iterator()
+    reverse = self.get_reverse(query, '__key__')
+    rpc_limit, check_more_results = self.rpc_limit(query)
+    fetch_limit = rpc_limit
+    if check_more_results:
+      fetch_limit += 1
+
+    more_results = False
+    iterator = RangeIterator(tr, self._tornado_fdb, index.directory.range(),
+                             fetch_limit, reverse, snapshot=True)
+    if query.property_name_list():
+      if query.property_name(0) != '__key__' or query.property_name_size() > 1:
+        raise BadRequest('Invalid property name list')
+
+      results = []
+      while True:
+        kvs, more_iterator_results = yield iterator.next_page()
+        for kv in kvs:
+          results.append(index.directory.unpack(kv.key)[:-1])
+
+        if not more_iterator_results:
+          break
+
+      for page, more_results in
 
     if iterator is None:
       raise BadRequest('Query not supported')

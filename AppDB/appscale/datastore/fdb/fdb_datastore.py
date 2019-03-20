@@ -267,17 +267,12 @@ class FDBDatastore(object):
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
       old_entity, old_version, old_vs = yield futures[key.Encode()][1:]
+
       new_version = next_entity_version(old_version)
       encoded_entity = mutation.Encode() if op == 'put' else ''
-      namespace = key.name_space()
-      path = flat_path(key)
-      data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
-                                               namespace))
-      encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3,
-                                     encoded_entity)
-      put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
-      if op == 'put'
-      self._index_manager.put_entries(tr, old_entity, old_vs, entity)
+      self.put_data(tr, key, new_version, encoded_entity)
+      new_entity = mutation if op == 'put' else None
+      self._index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 
     yield self._tornado_fdb.commit(tr)
 
@@ -303,9 +298,7 @@ class FDBDatastore(object):
       raise InternalError('The datastore chose an existing ID')
 
     new_version = next_entity_version(old_version)
-    encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3,
-                                   entity.Encode())
-    put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
+    self.put_data(tr, entity.key(), new_version, entity.Encode())
     self._index_manager.put_entries(tr, old_entity, old_vs, entity)
 
     raise gen.Return((entity.key(), old_version, new_version))
@@ -347,15 +340,15 @@ class FDBDatastore(object):
       raise gen.Return((old_version, old_version))
 
     new_version = next_entity_version(old_version)
-    encoded_value = fdb.tuple.pack(new_version, EncodedTypes.ENTITY_V3, '')
-    put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
+    self.put_data(tr, key, new_version, '')
     self._index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
     raise gen.Return((old_version, new_version))
 
-  def put_data(self, tr, project_id, namespace, path, version, encoded_entity):
+  def put_data(self, tr, key, version, encoded_entity):
     data_ns_dir = self._directory_cache.get(
-      (project_id, self._DATA_DIR, namespace))
+      (key.app(), self._DATA_DIR, key.name_space()))
+    path = flat_path(key)
     encoded_value = fdb.tuple.pack(version, EncodedTypes.ENTITY_V3,
                                    encoded_entity)
     put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
