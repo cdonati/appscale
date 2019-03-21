@@ -118,7 +118,7 @@ def print_single_prop_indexes(tr, index_dir):
     pretty_ns = '""'
 
   print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
-  headers = ['Kind', 'Property', 'Property', 'Value', 'Path', 'Versionstamp']
+  headers = ['Kind', 'Property', 'Type', 'Value', 'Path', 'Versionstamp']
   table = []
   for kind in index_dir.list(tr):
     kind_dir = index_dir.open(tr, (kind,))

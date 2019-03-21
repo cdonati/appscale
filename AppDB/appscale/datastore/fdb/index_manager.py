@@ -46,6 +46,17 @@ class IndexEntry(object):
     path.MergeFrom(decode_path(self.path))
     return key
 
+  @property
+  def group(self):
+    group = entity_pb.Path()
+    element = group.add_element()
+    element.set_type(self.path[0])
+    if isinstance(self.path[1], int):
+      element.set_id(self.path[1])
+    else:
+      element.set_name(self.path[1])
+
+    return group
 
 class KeyEntry(IndexEntry):
   def __init__(self, project_id, namespace, path, commit_vs):
@@ -55,6 +66,7 @@ class KeyEntry(IndexEntry):
     entity = entity_pb.EntityProto()
     entity.set_kind(self.path[-2])
     entity.mutable_key().MergeFrom(self.key)
+    entity.mutable_entity_group().MergeFrom(self.group)
     return entity
 
 
