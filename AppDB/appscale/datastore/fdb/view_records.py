@@ -4,7 +4,7 @@ fdb.api_version(600)
 
 db = fdb.open()
 
-ds_dir = db.directory.open(db, ('appscale', 'datastore'))
+ds_dir = fdb.directory.open(db, ('appscale', 'datastore'))
 
 def main():
   for project in ds_dir.list():
