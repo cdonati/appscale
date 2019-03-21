@@ -64,20 +64,27 @@ class KeyEntry(IndexEntry):
 
   def result(self):
     entity = entity_pb.EntityProto()
-    entity.set_kind(self.path[-2])
     entity.mutable_key().MergeFrom(self.key)
     entity.mutable_entity_group().MergeFrom(self.group)
     return entity
 
 
 class PropertyEntry(IndexEntry):
-  def __init__(self, project_id, namespace, path, value, commit_vs):
+  __SLOTS__ = ['prop_name', 'value']
+
+  def __init__(self, project_id, namespace, path, prop_name, value, commit_vs):
     super(PropertyEntry, self).__init__(project_id, namespace, path, commit_vs)
+    self.prop_name = prop_name
+    self.value = value
 
   def result(self):
     entity = entity_pb.EntityProto()
-    entity.set_kind(self.path[-2])
     entity.mutable_key().MergeFrom(self.key)
+    entity.mutable_entity_group().MergeFrom(self.group)
+    prop = entity.add_property()
+    prop.set_name(self.prop_name)
+    prop.set_meaning(entity_pb.Property.INDEX_VALUE)
+    prop.mutable_value().MergeFrom(self.value)
     return entity
 
 
@@ -165,6 +172,10 @@ class SinglePropIndex(Index):
     super(SinglePropIndex, self).__init__(directory)
 
   @property
+  def prop_name(self):
+    return self.directory.get_path()[2]
+
+  @property
   def type(self):
     return self.directory.get_path()[-1]
 
@@ -197,8 +208,8 @@ class SinglePropIndex(Index):
     else:
       raise InternalError('Unknown PropertyValue type')
 
-    return PropertyEntry(self.project_id, self.namespace, path, value,
-                         commit_vs=parts[-1])
+    return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
+                         value, commit_vs=parts[-1])
 
 
 class IndexManager(object):
