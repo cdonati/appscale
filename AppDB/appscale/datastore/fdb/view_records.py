@@ -25,8 +25,8 @@ def main():
     print(project_id)
     project_dir = ds_dir.open(tr, (project_id,))
     for section_id in project_dir.list(tr):
-      print('--' + section_id)
-      section_dir = ds_dir.open(tr, (project_id,))
+      print('-- ' + section_id)
+      section_dir = project_dir.open(tr, (section_id,))
       if section_id == 'data':
         print_data(tr, section_dir)
 
