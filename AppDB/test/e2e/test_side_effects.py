@@ -48,8 +48,12 @@ class TestBasicOperations(AsyncTestCase):
   @gen_test
   def test_query(self):
     query = Query(_app=PROJECT_ID, keys_only=True)
-    key = 
+    key = Key.from_path('Greeting', 5692531021916715, _app=PROJECT_ID)
+    key = Key.from_path('Greeting2', 'tes', _app=PROJECT_ID)
+    query['__key__ >='] = key
+    query['__key__ <'] = key
     results = yield self.datastore.run_query(query)
+
     print('keys:')
     for result in results:
       print(result.key().to_path())
