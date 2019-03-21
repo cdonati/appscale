@@ -121,7 +121,7 @@ def print_indexes(tr, indexes_dir):
         print_kindless_index(tr, index_dir)
 
       if index_type == 'kind':
-        print_kind_index(tr, index_dir)
+        print_kind_indexes(tr, index_dir)
 
 
 def main():
