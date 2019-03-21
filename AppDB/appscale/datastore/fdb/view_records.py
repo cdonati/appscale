@@ -58,8 +58,6 @@ def print_data(tr, data_dir):
       entity_version = value_parts[0]
       entity_chunk = value_parts[2]
       index = key_parts[-1]
-      print('index: {}'.format(index))
-      print('tmp_chunks: {}'.format(tmp_chunks))
       if index != 0:
         tmp_chunks.append(entity_chunk)
         continue
@@ -74,14 +72,40 @@ def print_data(tr, data_dir):
       entity = format_entity(''.join(tmp_chunks))
       table.append([path, versionstamp, entity_version, entity])
 
-    print('table: {}'.format(table))
-    print(tabulate.tabulate(table, headers=headers))
+    print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
 def print_indexes(tr, indexes_dir):
   namespaces = indexes_dir.list(tr)
   for namespace in namespaces:
-    print('---- namespace: "{}"'.format(namespace))
+    namespace_dir = indexes_dir.open(tr, (namespace,))
+    project_id, section_id, pretty_ns = namespace_dir.get_path()[2:]
+    if pretty_ns == '':
+      pretty_ns = '""'
+
+    print('/'.join([project_id, section_id, pretty_ns]) + ':')
+    headers = ['Path', 'Versionstamp', 'Entity Version', 'Entity']
+    table = []
+
+    for kv in tr[namespace_dir.range()]:
+      print(kv)
+      # key_parts = namespace_dir.unpack(kv.key)
+      # value_parts = fdb.tuple.unpack(kv.value)
+      #
+      # path = format_path(key_parts[:-2])
+      # versionstamp = struct.unpack('>Q', key_parts[-2].tr_version[:8])[0]
+      # entity_version = value_parts[0]
+      # entity_chunk = value_parts[2]
+      # index = key_parts[-1]
+      # if index != 0:
+      #   tmp_chunks.append(entity_chunk)
+      #   continue
+      # else:
+      #   if tmp_chunks:
+      #     entity = format_entity(''.join(tmp_chunks))
+      #     table.append([path, versionstamp, entity_version, entity])
+      #
+      #   tmp_chunks = [entity_chunk]
 
 
 def main():
