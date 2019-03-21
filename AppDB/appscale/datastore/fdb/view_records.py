@@ -7,5 +7,5 @@ db = fdb.open()
 ds_dir = fdb.directory.open(db, ('appscale', 'datastore'))
 
 def main():
-  for project in ds_dir.list():
+  for project in ds_dir.list(db):
     print(project)
