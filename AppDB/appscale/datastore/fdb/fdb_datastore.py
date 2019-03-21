@@ -212,6 +212,7 @@ class FDBDatastore(object):
     else:
       results = [result.Encode() for result in results]
 
+    logger.debug('results: {}'.format(results))
     query_result.result_list().extend(results)
     if query.compile():
       compiled_cursor = query_result.mutable_compiled_cursor()
