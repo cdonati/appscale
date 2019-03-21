@@ -11,6 +11,9 @@ def print_data(tr, data_dir):
   namespaces = data_dir.list(tr)
   for namespace in namespaces:
     print('---- namespace: "{}"'.format(namespace))
+    namespace_dir = data_dir.open(tr, (namespace,))
+    for kv in tr[namespace_dir.range()]:
+      print(kv)
 
 
 def print_indexes(tr, indexes_dir):
