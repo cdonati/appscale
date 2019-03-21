@@ -55,13 +55,13 @@ def print_data(tr, data_dir):
       else:
         if tmp_chunks:
           encoded_entity = ''.join(tmp_chunks)
-          table.append([path, versionstamp, entity_version, encoded_entity])
+          table.append([path, versionstamp, entity_version, repr(encoded_entity)])
 
         tmp_chunks = [entity_chunk]
 
     if tmp_chunks:
       encoded_entity = ''.join(tmp_chunks)
-      table.append([path, versionstamp, entity_version, encoded_entity])
+      table.append([path, versionstamp, entity_version, repr(encoded_entity)])
 
     print('table: {}'.format(table))
     print(tabulate.tabulate(table, headers=headers))
