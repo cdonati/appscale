@@ -1,4 +1,5 @@
 import fdb
+import struct
 
 fdb.api_version(600)
 
@@ -14,8 +15,11 @@ def print_data(tr, data_dir):
     print('/'.join(namespace_dir.get_path()) + ':')
     for kv in tr[namespace_dir.range()]:
       key_parts = namespace_dir.unpack(kv.key)
+      path = key_parts[:-2]
+      versionstamp = struct.unpack('>Q', key_parts[-2].tr_version[:8])[0]
+      index = key_parts[-1]
       value_parts = fdb.tuple.unpack(kv.value)
-      print('{}: {}'.format(key_parts, value_parts))
+      print('{} {} {}: {}'.format(path, versionstamp, index, value_parts))
 
 
 def print_indexes(tr, indexes_dir):
