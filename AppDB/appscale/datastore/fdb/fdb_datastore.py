@@ -373,8 +373,8 @@ class FDBDatastore(object):
     data_ns_dir = self._directory_cache.get(
       (key.app(), self._DATA_DIR, key.name_space()))
     path = flat_path(key)
-    encoded_value = fdb.tuple.pack(version, EncodedTypes.ENTITY_V3,
-                                   encoded_entity)
+    encoded_value = fdb.tuple.pack((version, EncodedTypes.ENTITY_V3,
+                                    encoded_entity))
     put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
 
   @gen.coroutine
