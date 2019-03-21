@@ -124,7 +124,7 @@ def print_single_prop_indexes(tr, index_dir):
     kind_dir = index_dir.open(tr, (kind,))
     for prop_name in kind_dir.list(tr):
       prop_name_dir = kind_dir.open(tr, (prop_name,))
-      for prop_type in prop_name_dir.list():
+      for prop_type in prop_name_dir.list(tr):
         index = prop_name_dir.open(tr, (prop_type,))
         for kv in tr[index.range()]:
           key_parts = index.unpack(kv.key)
