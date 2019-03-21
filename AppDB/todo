@@ -94,3 +94,4 @@ scattered property
 projection queries
 test encoding referencevalue as single prop index entry (does gae allow it?)
 test delete response (pretty sure popluated version field is the new empty version?)
+improve merge join query performance

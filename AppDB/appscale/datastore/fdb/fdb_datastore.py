@@ -51,8 +51,10 @@ from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
 from appscale.datastore.fdb.utils import (
   decode_chunks, DirectoryCache, EncodedTypes, flat_path, fdb, log_request,
-  new_txid, next_entity_version, put_chunks, ScatteredAllocator, TornadoFDB)
+  new_txid, next_entity_version, put_chunks, RangeIterator, ScatteredAllocator,
+  TornadoFDB)
 from appscale.datastore.fdb.index_manager import IndexManager
+from appscale.datastore.utils import UnprocessedQueryCursor
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -171,44 +173,60 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def _dynamic_run_query(self, query, query_result):
-    if query.has_kind() and not query.filter_list():
-      results = yield self.
-      index = KindIndex(project_id, namespace, query.kind(),
-                        self._directory_cache)
-      iterator = index.iterator()
+    fetch_data = self._index_manager.fetch_data(query)
+    rpc_limit, check_more_results = self._index_manager.rpc_limit(query)
 
-    if iterator is None:
-      raise BadRequest('Query not supported')
+    tr = self._db.create_transaction()
+    iterator = self._index_manager.get_iterator(tr, query)
 
-    result = yield self.__get_query_results(query)
-    last_entity = None
-    count = 0
-    offset = query.offset()
-    if result:
-      query_result.set_skipped_results(len(result) - offset)
-      # Last entity is used for the cursor. It needs to be set before
-      # applying the offset.
-      last_entity = result[-1]
-      count = len(result)
-      result = result[offset:]
-      if query.has_limit():
-        result = result[:query.limit()]
+    results = []
+    data_futures = []
+    entries_fetched = 0
+    skipped_results = 0
+    cursor = None
+    while True:
+      remainder = rpc_limit - entries_fetched
+      iter_offset = max(query.offset() - entries_fetched, 0)
+      entries, more_iterator_results = yield iterator.next_page()
+      entries_fetched += len(entries)
+      if not entries:
+        break
 
-    cur = UnprocessedQueryCursor(query, result, last_entity)
-    cur.PopulateQueryResult(count, query.offset(), query_result)
+      skipped_results += min(entries_fetched, iter_offset)
+      suitable_entries = entries[iter_offset:remainder]
+      cursor = entries[:remainder][-1]
+      if fetch_data:
+        data_futures.extend([self._get_encoded(tr, entry)
+                             for entry in suitable_entries])
+      else:
+        results.extend([entry.result() for entry in suitable_entries])
 
-    # If we have less than the amount of entities we request there are no
-    # more results for this query.
-    if count < self.get_limit(query):
+      if not more_iterator_results:
+        break
+
+    if fetch_data:
+      results = yield data_futures
+    else:
+      results = [result.Encode() for result in results]
+
+    query_result.result_list().extend(results)
+    if query.compile():
+      compiled_cursor = query_result.mutable_compiled_cursor()
+      position = compiled_cursor.add_position()
+      position.mutable_key().MergeFrom(cursor.result().key())
+      for prop in cursor.result().property_list():
+        index_value = position.add_indexvalue()
+        index_value.set_property(prop.name())
+        index_value.mutable_value().MergeFrom(prop.value())
+        position.set_start_inclusive(False)
+
+    if check_more_results and entries_fetched > rpc_limit:
+      query_result.set_more_results(True)
+    else:
       query_result.set_more_results(False)
 
-    # If there were no results then we copy the last cursor so future queries
-    # can start off from the same place.
-    if query.has_compiled_cursor() and not query_result.has_compiled_cursor():
-      query_result.mutable_compiled_cursor().CopyFrom(query.compiled_cursor())
-    elif query.has_compile() and not query_result.has_compiled_cursor():
-      query_result.mutable_compiled_cursor().\
-        CopyFrom(datastore_pb.CompiledCursor())
+    if skipped_results:
+      query_result.set_skipped_results(skipped_results)
 
   @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
@@ -400,6 +418,28 @@ class FDBDatastore(object):
 
     entity = entity_pb.EntityProto(encoded_entity)
     raise gen.Return((entity, version, commit_vs))
+
+  @gen.coroutine
+  def _get_encoded(self, tr, entry):
+    data_ns_dir = self._directory_cache.get((entry.project_id, self._DATA_DIR,
+                                             entry.namespace))
+    data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
+    iterator = RangeIterator(
+      tr, self._tornado_fdb, data_range,
+      streaming_mode=fdb.StreamingMode.want_all, snapshot=True)
+
+    chunks = []
+    while True:
+      kvs, more_results = yield iterator.next_page()
+      chunks.extend([kv.value for kv in kvs])
+      if not more_results:
+        break
+
+    version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
+    if encoding != EncodedTypes.ENTITY_V3:
+      raise InternalError('Unknown entity type')
+
+    raise gen.Return((version, encoded_entity))
 
   @gen.coroutine
   def _get_tx_metadata(self, tr, tx_dir, txid):

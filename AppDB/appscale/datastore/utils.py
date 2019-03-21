@@ -157,16 +157,13 @@ class UnprocessedQueryCursor(appscale_stub_util.QueryCursor):
       results = []
     super(UnprocessedQueryCursor, self).__init__(query, results, last_entity)
 
-  def PopulateQueryResult(self, count, offset, result):
+  def PopulateQueryResult(self, result):
     """ Populates a QueryResult object with results the QueryCursor has been
     storing.
 
     Args:
-      count: The number of results requested in the query.
-      offset: The number of results to skip.
       result: A QueryResult object to populate.
     """
-    result.set_skipped_results(min(count, offset))
     result_list = result.result_list()
     if self.__binary_results:
       if self.__query.keys_only():
@@ -180,7 +177,6 @@ class UnprocessedQueryCursor(appscale_stub_util.QueryCursor):
     else:
       result_list = []
     result.set_keys_only(self.__query.keys_only())
-    result.set_more_results(offset < count)
     if self.__binary_results or self.__last_ent:
       self._EncodeCompiledCursor(result.mutable_compiled_cursor())
 

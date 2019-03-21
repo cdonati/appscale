@@ -301,11 +301,15 @@ def flat_path(key):
   return tuple(path)
 
 
-def decode_path(flattened_path):
+def decode_path(flattened_path, reference_value=False):
   if len(flattened_path) % 2 != 0:
     raise BadRequest('Invalid path')
 
-  path = entity_pb.Path()
+  if reference_value:
+    path = entity_pb.PropertyValue_ReferenceValue()
+  else:
+    path = entity_pb.Path()
+
   index = 0
   while index < len(flattened_path):
     element = path.add_element()
