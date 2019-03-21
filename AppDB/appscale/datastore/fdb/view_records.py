@@ -59,6 +59,7 @@ def print_data(tr, data_dir):
       encoded_entity = ''.join(tmp_chunks)
       table.append([path, versionstamp, entity_version, encoded_entity])
 
+    print('table: {}'.format(table))
     print(tabulate.tabulate(table, headers=headers))
 
 
