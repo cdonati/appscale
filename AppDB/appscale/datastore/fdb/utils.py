@@ -232,9 +232,10 @@ class RangeIterator(object):
       self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
       self._iteration, self._reverse, self._snapshot)
     logger.debug('kvs: {}'.format(kvs))
+    logger.debug('more: {}'.format(more))
     self._fetched += count
 
-    if more or self._fetched < self._limit:
+    if more and self._fetched < self._limit:
       self._iteration += 1
       if self._reverse:
         self._esel = fdb.KeySelector.first_greater_or_equal(kvs[-1].key)
