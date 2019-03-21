@@ -54,7 +54,6 @@ from appscale.datastore.fdb.utils import (
   new_txid, next_entity_version, put_chunks, RangeIterator, ScatteredAllocator,
   TornadoFDB)
 from appscale.datastore.fdb.index_manager import IndexManager
-from appscale.datastore.utils import UnprocessedQueryCursor
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb

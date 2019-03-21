@@ -137,7 +137,7 @@ class SinglePropIndex(Index):
 
   def __init__(self, project_id, namespace, kind, prop_name, value,
                directory_cache):
-    valid_types = [value for key, value in PropertyTypes.__dict__.items()
+    valid_types = [val for key, val in PropertyTypes.__dict__.items()
                    if key.startswith('_')]
     prop_type = None
     for valid_type in valid_types:
