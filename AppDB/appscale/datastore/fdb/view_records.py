@@ -3,6 +3,12 @@ import struct
 import sys
 import tabulate
 
+from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
+
+sys.path.append(APPSCALE_PYTHON_APPSERVER)
+from google.appengine.api import datastore
+from google.appengine.datastore import entity_pb
+
 fdb.api_version(600)
 
 db = fdb.open()
@@ -20,6 +26,11 @@ def format_path(path):
     index += 2
 
   return '|'.join(elements)
+
+
+def format_entity(encoded_entity):
+  entity_proto = entity_pb.EntityProto(encoded_entity)
+  return datastore.Entity.FromPb(entity_proto)
 
 
 def print_data(tr, data_dir):
@@ -54,14 +65,14 @@ def print_data(tr, data_dir):
         continue
       else:
         if tmp_chunks:
-          encoded_entity = ''.join(tmp_chunks)
-          table.append([path, versionstamp, entity_version, repr(encoded_entity)])
+          entity = format_entity(''.join(tmp_chunks))
+          table.append([path, versionstamp, entity_version, entity])
 
         tmp_chunks = [entity_chunk]
 
     if tmp_chunks:
-      encoded_entity = ''.join(tmp_chunks)
-      table.append([path, versionstamp, entity_version, repr(encoded_entity)])
+      entity = format_entity(''.join(tmp_chunks))
+      table.append([path, versionstamp, entity_version, entity])
 
     print('table: {}'.format(table))
     print(tabulate.tabulate(table, headers=headers))
