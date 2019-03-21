@@ -56,7 +56,8 @@ def print_data(tr, data_dir):
         if tmp_chunks:
           encoded_entity = ''.join(tmp_chunks)
           table.append([path, versionstamp, entity_version, encoded_entity])
-          tmp_chunks = [entity_chunk]
+
+        tmp_chunks = [entity_chunk]
 
     if tmp_chunks:
       encoded_entity = ''.join(tmp_chunks)
