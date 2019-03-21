@@ -9,7 +9,7 @@ from appscale.datastore.fdb.utils import (
 from appscale.datastore.dbconstants import BadRequest, InternalError
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import entity_pb
+from google.appengine.datastore import datastore_pb, entity_pb
 
 logger = logging.getLogger(__name__)
 
@@ -318,24 +318,40 @@ class IndexManager(object):
 
     return False
 
-  def flat_filters(self, query):
-    filters = []
-    for prop_filter in query.filter_list():
-      if prop_filter.property_size() != 1:
-        raise BadRequest('Invalid filter list')
+  def group_filters(self, query):
+    filter_props = []
+    for query_filter in query.filter_list():
+      if query_filter.property_size() != 1:
+        raise BadRequest('Each filter must have exactly one property')
 
-      prop_name = prop_filter.na
-      value = prop_filter.property(0).value()
+      prop = query_filter.property(0)
+      filter_info = (query_filter.op(), prop.value())
+      if prop.name() == filter_props[-1][0]:
+        filter_props[-1][1].append(filter_info)
+      else:
+        filter_props.append((prop.name(), [filter_info]))
+
+    for name, filters in filter_props[:-1]:
+      if name == '__key__':
+        raise BadRequest('Only the last filter property can be on __key__')
+
+      if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
+        raise BadRequest('All but the last property must be equality filters')
 
   def get_iterator(self, tr, query):
+    filter_props = self.group_filters(query)
     if not query.has_kind():
       index = KindlessIndex(query.app(), query.name_space(),
                             self._directory_cache)
       reverse = self.get_reverse(query, '__key__')
-    elif not query.filter_list():
+    elif all([name == '__key__' for name, _ in filter_props]):
       index = KindIndex(query.app(), query.name_space(), query.kind(),
                         self._directory_cache)
       reverse = self.get_reverse(query, '__key__')
+    elif sum([name != '__key__' for name, _ in filter_props]) == 1:
+      prop_name, filters = filter_props[0]
+      directory_cache):
+      index = SinglePropIndex(query.app(), query.name_space(), query.kind(), )
     else:
       raise BadRequest('Query is not supported')
 
