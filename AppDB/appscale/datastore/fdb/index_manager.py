@@ -139,6 +139,7 @@ class SinglePropIndex(Index):
                directory_cache):
     valid_types = [val for key, val in PropertyTypes.__dict__.items()
                    if key.startswith('_')]
+    logger.debug('valid_types: {}'.format(valid_types))
     prop_type = None
     for valid_type in valid_types:
       if getattr(value, 'has_{}value'.format(valid_type))():
