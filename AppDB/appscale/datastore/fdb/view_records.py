@@ -47,8 +47,10 @@ def print_data(tr, data_dir):
       entity_version = value_parts[0]
       entity_chunk = value_parts[2]
       index = key_parts[-1]
+      print('index: {}'.format(index))
       if index != 0:
         tmp_chunks.append(entity_chunk)
+        continue
       else:
         if tmp_chunks:
           encoded_entity = ''.join(tmp_chunks)
