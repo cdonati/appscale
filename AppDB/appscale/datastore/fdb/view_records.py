@@ -81,29 +81,16 @@ def print_kindless_index(tr, index_dir):
     pretty_ns = '""'
 
   print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
-  headers = ['Path', 'Versionstamp', 'Entity Version', 'Entity']
+  headers = ['Path', 'Versionstamp']
   table = []
 
-  # key_parts = namespace_dir.unpack(kv.key)
-  # value_parts = fdb.tuple.unpack(kv.value)
-  #
-  # path = format_path(key_parts[:-2])
-  # versionstamp = struct.unpack('>Q', key_parts[-2].tr_version[:8])[0]
-  # entity_version = value_parts[0]
-  # entity_chunk = value_parts[2]
-  # index = key_parts[-1]
-  # if index != 0:
-  #   tmp_chunks.append(entity_chunk)
-  #   continue
-  # else:
-  #   if tmp_chunks:
-  #     entity = format_entity(''.join(tmp_chunks))
-  #     table.append([path, versionstamp, entity_version, entity])
-  #
-  #   tmp_chunks = [entity_chunk]
-
   for kv in tr[index_dir.range()]:
-    print(kv)
+    key_parts = index_dir.unpack(kv.key)
+    path = format_path(key_parts[:-1])
+    versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
+    table.append([path, versionstamp])
+
+  print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
 def print_indexes(tr, indexes_dir):
