@@ -174,6 +174,8 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def _dynamic_run_query(self, query, query_result):
+    logger.debug('query: {}'.format(query))
+
     fetch_data = self._index_manager.fetch_data(query)
     rpc_limit, check_more_results = self._index_manager.rpc_limit(query)
 
@@ -229,6 +231,8 @@ class FDBDatastore(object):
     if skipped_results:
       query_result.set_skipped_results(skipped_results)
 
+    logger.debug('query_result: {}'.format(query_result))
+
   @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
     txid = new_txid()
@@ -244,6 +248,7 @@ class FDBDatastore(object):
     tr[tx_dir.pack((txid, 'xg'))] = '1' if is_xg else '0'
     yield self._tornado_fdb.commit(tr)
 
+    logger.debug('created txid: {}'.format(txid))
     raise gen.Return(txid)
 
   @gen.coroutine
