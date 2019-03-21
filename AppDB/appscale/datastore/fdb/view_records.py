@@ -93,6 +93,24 @@ def print_kindless_index(tr, index_dir):
   print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
+def print_kind_indexes(tr, index_dir):
+  project_id, section_id, pretty_ns, index_type = index_dir.get_path()[2:]
+  if pretty_ns == '':
+    pretty_ns = '""'
+
+  print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
+  headers = ['Kind', 'Path', 'Versionstamp']
+  table = []
+  for kind in index_dir.list(tr):
+    for kv in tr[index_dir.range()]:
+      key_parts = index_dir.unpack(kv.key)
+      path = format_path(key_parts[:-1])
+      versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
+      table.append([kind, path, versionstamp])
+
+  print(tabulate.tabulate(table, headers=headers) + '\n')
+
+
 def print_indexes(tr, indexes_dir):
   namespaces = indexes_dir.list(tr)
   for namespace in namespaces:
@@ -101,6 +119,9 @@ def print_indexes(tr, indexes_dir):
       index_dir = namespace_dir.open(tr, (index_type,))
       if index_type == 'kindless':
         print_kindless_index(tr, index_dir)
+
+      if index_type == 'kind':
+        print_kind_index(tr, index_dir)
 
 
 def main():
