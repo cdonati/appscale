@@ -48,6 +48,7 @@ def print_data(tr, data_dir):
       entity_chunk = value_parts[2]
       index = key_parts[-1]
       print('index: {}'.format(index))
+      print('tmp_chunks: {}'.format(tmp_chunks))
       if index != 0:
         tmp_chunks.append(entity_chunk)
         continue
