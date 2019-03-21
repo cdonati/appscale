@@ -208,7 +208,8 @@ class FDBDatastore(object):
         break
 
     if fetch_data:
-      results = yield data_futures
+      entity_results = yield data_futures
+      results = [encoded_entity for version, encoded_entity in entity_results]
     else:
       results = [result.Encode() for result in results]
 
@@ -231,6 +232,9 @@ class FDBDatastore(object):
 
     if skipped_results:
       query_result.set_skipped_results(skipped_results)
+
+    if query.keys_only():
+      query_result.set_keys_only(True)
 
     logger.debug('query_result: {}'.format(query_result))
 
