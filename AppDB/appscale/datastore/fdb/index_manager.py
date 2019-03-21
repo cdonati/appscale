@@ -1,3 +1,4 @@
+import logging
 import sys
 
 from tornado import gen
@@ -9,6 +10,8 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
+
+logger = logging.getLogger(__name__)
 
 INDEX_DIR = 'indexes'
 
@@ -282,4 +285,5 @@ class IndexManager(object):
     kv_iterator = RangeIterator(tr, self._tornado_fdb, index.directory.range(),
                                 fetch_limit, reverse, snapshot=True)
     iterator = IndexIterator(index, kv_iterator)
+    logger.debug('using index: {}'.format(index))
     return iterator
