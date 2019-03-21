@@ -112,6 +112,30 @@ def print_kind_indexes(tr, index_dir):
   print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
+def print_single_prop_indexes(tr, index_dir):
+  project_id, section_id, pretty_ns, index_type = index_dir.get_path()[2:]
+  if pretty_ns == '':
+    pretty_ns = '""'
+
+  print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
+  headers = ['Kind', 'Property', 'Property', 'Value', 'Path', 'Versionstamp']
+  table = []
+  for kind in index_dir.list(tr):
+    kind_dir = index_dir.open(tr, (kind,))
+    for prop_name in kind_dir.list(tr):
+      prop_name_dir = kind_dir.open(tr, (prop_name,))
+      for prop_type in prop_name_dir.list():
+        index = prop_name_dir.open(tr, (prop_type,))
+        for kv in tr[index.range()]:
+          key_parts = index.unpack(kv.key)
+          value = key_parts[0]
+          path = format_path(key_parts[1:-1])
+          versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
+          table.append([kind, prop_name, prop_type, value, path, versionstamp])
+
+  print(tabulate.tabulate(table, headers=headers) + '\n')
+
+
 def print_indexes(tr, indexes_dir):
   namespaces = indexes_dir.list(tr)
   for namespace in namespaces:
@@ -123,6 +147,9 @@ def print_indexes(tr, indexes_dir):
 
       if index_type == 'kind':
         print_kind_indexes(tr, index_dir)
+
+      if index_type == 'single-property':
+        print_single_prop_indexes(tr, index_dir)
 
 
 def main():
