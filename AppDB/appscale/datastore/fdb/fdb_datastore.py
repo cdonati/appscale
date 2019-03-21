@@ -206,7 +206,8 @@ class FDBDatastore(object):
       if not more_iterator_results:
         break
 
-    logger.debug('results: {}'.format(results))
+    for result in results:
+      logger.debug('result: {}'.format(result))
 
     if fetch_data:
       entity_results = yield data_futures
