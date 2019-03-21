@@ -375,7 +375,7 @@ class FDBDatastore(object):
     path = flat_path(key)
     encoded_value = fdb.tuple.pack((version, EncodedTypes.ENTITY_V3,
                                     encoded_entity))
-    put_chunks(tr, encoded_value, data_ns_dir.pack(path), add_vs=True)
+    put_chunks(tr, encoded_value, data_ns_dir.subspace(path), add_vs=True)
 
   @gen.coroutine
   def _get_from_range(self, tr, data_range, vs_only=False):
