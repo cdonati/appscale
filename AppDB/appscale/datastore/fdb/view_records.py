@@ -35,6 +35,9 @@ def print_data(tr, data_dir):
     table = []
 
     tmp_chunks = []
+    path = None
+    versionstamp = None
+    entity_version = None
     for kv in tr[namespace_dir.range()]:
       key_parts = namespace_dir.unpack(kv.key)
       value_parts = fdb.tuple.unpack(kv.value)
@@ -52,12 +55,11 @@ def print_data(tr, data_dir):
           table.append([path, versionstamp, entity_version, encoded_entity])
           tmp_chunks = [entity_chunk]
 
-      if tmp_chunks:
-          encoded_entity = ''.join(tmp_chunks)
-          table.append([path, versionstamp, entity_version, encoded_entity])
-          tmp_chunks = [entity_chunk]
+    if tmp_chunks:
+      encoded_entity = ''.join(tmp_chunks)
+      table.append([path, versionstamp, entity_version, encoded_entity])
 
-      print(tabulate.tabulate(table, headers=headers))
+    print(tabulate.tabulate(table, headers=headers))
 
 
 def print_indexes(tr, indexes_dir):
