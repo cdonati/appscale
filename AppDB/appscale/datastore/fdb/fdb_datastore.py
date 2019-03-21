@@ -89,7 +89,8 @@ class FDBDatastore(object):
     ds_dir = fdb.directory.create_or_open(self._db, self._ROOT_DIR)
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
-    self._index_manager = IndexManager(self._directory_cache)
+    self._index_manager = IndexManager(self._directory_cache,
+                                       self._tornado_fdb)
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
