@@ -104,7 +104,7 @@ def print_kind_indexes(tr, index_dir):
   for kind in index_dir.list(tr):
     kind_index = index_dir.open(tr, (kind,))
     for kv in tr[kind_index.range()]:
-      key_parts = index_dir.unpack(kv.key)
+      key_parts = kind_index.unpack(kv.key)
       path = format_path(key_parts[:-1])
       versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
       table.append([kind, path, versionstamp])
