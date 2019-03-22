@@ -21,7 +21,7 @@ indexes: This contains a directory for each index that the datastore needs in
 order to satisfy basic queries along with indexes that the project has defined
 for composite queries. Here is an example template:
 
-  ([index dir^4], <property value>, [entity path], <commit versionstamp>) -> ''
+  ([index dir^4], <type>, <value>, [path], <commit versionstamp>) -> ''
 
 transactions: This maps transaction handles to metadata that the datastore
 needs in order to handle operations for the transaction. Here are a few example
@@ -36,7 +36,7 @@ entries:
     used for enforcing consistency.
 ^4: The index's directory path. For example,
     (appscale, datastore, <project>, indexes, <namespace>, single-property,
-     <kind>, <property name>, <property type>)
+     <kind>, <property name>)
 ^5: A directory located at (appscale, datastore, <project>, transactions).
 ^6: Designates what version of the database read operations should see.
 """

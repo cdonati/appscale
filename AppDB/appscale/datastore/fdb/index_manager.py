@@ -16,26 +16,59 @@ logger = logging.getLogger(__name__)
 INDEX_DIR = 'indexes'
 
 
-class PropertyTypes(object):
-  INT_64 = 'int64'
-  BOOLEAN = 'boolean'
-  STRING = 'string'
-  DOUBLE = 'double'
-  REFERENCE = 'reference'
+class ValueTypes(object):
+  INT64 = '1'
+  BOOLEAN = '2'
+  STRING = '3'
+  DOUBLE = '4'
+  # POINT = '5'
+  # USER = '6'
+  REFERENCE = '7'
 
 
-SCALAR_TYPES = (PropertyTypes.INT_64, PropertyTypes.BOOLEAN,
-                PropertyTypes.STRING, PropertyTypes.DOUBLE)
+SCALAR_TYPES = (ValueTypes.INT64, ValueTypes.BOOLEAN, ValueTypes.STRING,
+                ValueTypes.DOUBLE)
 
 
-def prop_type(value):
-  valid_types = [val for key, val in PropertyTypes.__dict__.items()
-                 if not key.startswith('_')]
-  for valid_type in valid_types:
-    if getattr(value, 'has_{}value'.format(valid_type))():
-      return valid_type
+def get_type(value):
+  valid_types = [name.lower() for name, value in ValueTypes.__dict__.items()
+                 if not name.startswith('_')]
+  for name, encoded_value in valid_types:
+    if getattr(value, 'has_{}value'.format(name))():
+      return name, encoded_value
 
   raise BadRequest('Unknown PropertyValue type')
+
+
+def get_type_name(encoded_type):
+  return next(key for key, val in ValueTypes.__dict__.items()
+              if val == encoded_type).lower()
+
+
+def group_filters(query):
+  filter_props = []
+  for query_filter in query.filter_list():
+    if query_filter.property_size() != 1:
+      raise BadRequest('Each filter must have exactly one property')
+
+    prop = query_filter.property(0)
+    filter_info = (query_filter.op(), prop.value())
+    if filter_props and prop.name() == filter_props[-1][0]:
+      filter_props[-1][1].append(filter_info)
+    else:
+      filter_props.append((prop.name(), [filter_info]))
+
+  for name, filters in filter_props[:-1]:
+    if name == '__key__':
+      raise BadRequest('Only the last filter property can be on __key__')
+
+    if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
+      raise BadRequest('All but the last property must be equality filters')
+
+  if len(filter_props[-1][1]) > 2:
+    raise BadRequest('A property can only have up to two filters')
+
+  return filter_props
 
 
 class IndexEntry(object):
@@ -67,6 +100,7 @@ class IndexEntry(object):
       element.set_name(self.path[1])
 
     return group
+
 
 class KeyEntry(IndexEntry):
   def __init__(self, project_id, namespace, path, commit_vs):
@@ -130,7 +164,18 @@ class Index(object):
       return self.directory.pack_with_versionstamp
 
 
-class KeyIndex(Index):
+class KindlessIndex(Index):
+  DIR_NAME = 'kindless'
+
+  def __init__(self, project_id, namespace, directory_cache):
+    directory = directory_cache.get(
+      (project_id, INDEX_DIR, namespace, self.DIR_NAME))
+    super(KindlessIndex, self).__init__(directory)
+
+  def __repr__(self):
+    dir_repr = '/'.join([self.project_id, repr(self.namespace)])
+    return 'KindlessIndex({})'.format(dir_repr)
+
   def encode(self, path, include_vs=True, commit_vs=fdb.tuple.Versionstamp()):
     if not include_vs:
       return self.directory.pack((path,))
@@ -143,20 +188,7 @@ class KeyIndex(Index):
                     commit_vs=parts[-1])
 
 
-class KindlessIndex(KeyIndex):
-  DIR_NAME = 'kindless'
-
-  def __init__(self, project_id, namespace, directory_cache):
-    directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, self.DIR_NAME))
-    super(KindlessIndex, self).__init__(directory)
-
-  def __repr__(self):
-    path = '/'.join([self.project_id, repr(self.namespace)])
-    return 'KindlessIndex({})'.format(path)
-
-
-class KindIndex(KeyIndex):
+class KindIndex(Index):
   DIR_NAME = 'kind'
 
   def __init__(self, project_id, namespace, kind, directory_cache):
@@ -169,77 +201,90 @@ class KindIndex(KeyIndex):
     return self.directory.get_path()[-1]
 
   def __repr__(self):
-    path = '/'.join([self.project_id, repr(self.namespace), self.kind])
-    return 'KindIndex({})'.format(path)
+    dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind])
+    return 'KindIndex({})'.format(dir_repr)
+
+  def encode(self, path, include_vs=True, commit_vs=fdb.tuple.Versionstamp()):
+    kindless_path = path[:-2] + path[-1:]
+    if not include_vs:
+      return self.directory.pack((kindless_path,))
+
+    return self.pack_method(commit_vs)(kindless_path + (commit_vs,))
+
+  def decode(self, kv):
+    parts = self.directory.unpack(kv.key)
+    kindless_path = parts[:-1]
+    path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
+    return KeyEntry(self.project_id, self.namespace, path=path,
+                    commit_vs=parts[-1])
 
 
 class SinglePropIndex(Index):
   DIR_NAME = 'single-property'
 
   # Allows the decoder to differentiate between the property value and the path
-  # when the value has more than one element.
+  # when the value has a variable number of elements.
   _DELIMITER = '\x00'
 
-  def __init__(self, project_id, namespace, kind, prop_name, value,
-               directory_cache):
+  def __init__(self, project_id, namespace, kind, prop_name, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, self.DIR_NAME, kind, prop_name,
-       prop_type(value)))
+      (project_id, INDEX_DIR, namespace, self.DIR_NAME, kind, prop_name))
     super(SinglePropIndex, self).__init__(directory)
 
   @property
   def kind(self):
-    return self.directory.get_path()[-3]
-
-  @property
-  def prop_name(self):
     return self.directory.get_path()[-2]
 
   @property
-  def type(self):
+  def prop_name(self):
     return self.directory.get_path()[-1]
 
   def encode(self, value, path, include_vs=True,
              commit_vs=fdb.tuple.Versionstamp()):
-    if self.type in SCALAR_TYPES:
-      encoded_value = getattr(value, '{}value'.format(self.type))()
-      prefix = (encoded_value,)
-    elif self.type == PropertyTypes.REFERENCE:
+    type_name, encoded_type = get_type(value)
+    if encoded_type in SCALAR_TYPES:
+      encoded_value = getattr(value, '{}value'.format(type_name))()
+      prefix = (encoded_type, encoded_value)
+    elif encoded_type == ValueTypes.REFERENCE:
       encoded_value = (value.app(), value.name_space()) + flat_path(value)
-      prefix = encoded_value + (self._DELIMITER,)
+      prefix = (encoded_type,) + encoded_value + (self._DELIMITER,)
     else:
       raise BadRequest('Unknown PropertyValue type')
 
+    kindless_path = path[:-2] + path[-1:]
     if not include_vs:
-      return self.directory.pack(prefix + path)
+      return self.directory.pack(prefix + kindless_path)
 
-    return self.pack_method(commit_vs)(prefix + path + (commit_vs,))
+    return self.pack_method(commit_vs)(prefix + kindless_path + (commit_vs,))
 
   def decode(self, kv):
     parts = self.directory.unpack(kv.key)
+    encoded_type = parts[0]
+    type_name = get_type_name(encoded_type)
     value = entity_pb.PropertyValue()
-    if self.type == PropertyTypes.REFERENCE:
+    if encoded_type == ValueTypes.REFERENCE:
       delimiter_index = parts.index(self._DELIMITER)
-      value_parts = parts[:delimiter_index]
+      value_parts = parts[1:delimiter_index]
       reference_val = value.mutable_referencevalue()
       reference_val.set_app(value_parts[0])
       reference_val.set_name_space(value_parts[1])
       reference_val.MergeFrom(
         decode_path(value_parts[2:], reference_value=True))
-      path = parts[slice(delimiter_index + 1, -1)]
-    elif self.type in SCALAR_TYPES:
-      getattr(value, 'set_{}value'.format(self.type))(parts[0])
-      path = parts[1:-1]
+      kindless_path = parts[slice(delimiter_index + 1, -1)]
+    elif encoded_type in SCALAR_TYPES:
+      getattr(value, 'set_{}value'.format(type_name))(parts[1])
+      kindless_path = parts[1:-1]
     else:
       raise InternalError('Unknown PropertyValue type')
 
+    path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs=parts[-1])
 
   def __repr__(self):
-    path = '/'.join([self.project_id, repr(self.namespace), self.kind,
-                     self.prop_name, self.type])
-    return 'SinglePropIndex({})'.format(path)
+    dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind,
+                         self.prop_name])
+    return 'SinglePropIndex({})'.format(dir_repr)
 
 
 class IndexManager(object):
@@ -318,25 +363,7 @@ class IndexManager(object):
 
     return False
 
-  def group_filters(self, query):
-    filter_props = []
-    for query_filter in query.filter_list():
-      if query_filter.property_size() != 1:
-        raise BadRequest('Each filter must have exactly one property')
 
-      prop = query_filter.property(0)
-      filter_info = (query_filter.op(), prop.value())
-      if prop.name() == filter_props[-1][0]:
-        filter_props[-1][1].append(filter_info)
-      else:
-        filter_props.append((prop.name(), [filter_info]))
-
-    for name, filters in filter_props[:-1]:
-      if name == '__key__':
-        raise BadRequest('Only the last filter property can be on __key__')
-
-      if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
-        raise BadRequest('All but the last property must be equality filters')
 
   def get_iterator(self, tr, query):
     filter_props = self.group_filters(query)
@@ -350,8 +377,7 @@ class IndexManager(object):
       reverse = self.get_reverse(query, '__key__')
     elif sum([name != '__key__' for name, _ in filter_props]) == 1:
       prop_name, filters = filter_props[0]
-      directory_cache):
-      index = SinglePropIndex(query.app(), query.name_space(), query.kind(), )
+      index = SinglePropIndex(query.app(), query.name_space(), query.kind(), prop_name, )
     else:
       raise BadRequest('Query is not supported')
 
