@@ -36,6 +36,7 @@ STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
 def get_type(value):
+  logger.debug('get_type value: {}'.format(value))
   readable_types = [
     (name.lower(), value) for name, value in V3Types.__dict__.items()
     if not name.startswith('_') and name != 'NULL']
@@ -296,6 +297,7 @@ class SinglePropIndex(Index):
     return 'SinglePropIndex({})'.format(dir_repr)
 
   def encode_value(self, value):
+    logger.debug('encoding value: {}'.format(value))
     type_name, encoded_type = get_type(value)
     if encoded_type == V3Types.NULL:
       return (encoded_type,)
