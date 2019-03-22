@@ -36,9 +36,10 @@ STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
 def get_type(value):
-  valid_types = [name.lower() for name, value in V3Types.__dict__.items()
-                 if not name.startswith('_') and name != 'NULL']
-  for type_name, encoded_type in valid_types:
+  readable_types = [
+    (name.lower(), value) for name, value in V3Types.__dict__.items()
+    if not name.startswith('_') and name != 'NULL']
+  for type_name, encoded_type in readable_types:
     if getattr(value, 'has_{}value'.format(type_name))():
       return type_name, encoded_type
 
