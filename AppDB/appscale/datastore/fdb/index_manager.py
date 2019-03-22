@@ -408,6 +408,7 @@ class IndexManager(object):
       tr.set_versionstamped_key(kindless_index.encode(path), '')
       tr.set_versionstamped_key(kind_index.encode(path), '')
       for prop in new_entity.property_list():
+        logger.debug('prop for new_entity: {}'.format(prop))
         index = SinglePropIndex(project_id, namespace, kind, prop.name(),
                                 self._directory_cache)
         tr.set_versionstamped_key(index.encode(prop.value(), path), '')
