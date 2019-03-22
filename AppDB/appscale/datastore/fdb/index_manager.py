@@ -239,23 +239,51 @@ class SinglePropIndex(Index):
   def prop_name(self):
     return self.directory.get_path()[-1]
 
-  def encode(self, value, path, include_vs=True,
-             commit_vs=fdb.tuple.Versionstamp()):
+  def encode_value(self, value):
     type_name, encoded_type = get_type(value)
     if encoded_type in SCALAR_TYPES:
       encoded_value = getattr(value, '{}value'.format(type_name))()
-      prefix = (encoded_type, encoded_value)
+      return (encoded_type, encoded_value)
     elif encoded_type == ValueTypes.REFERENCE:
       encoded_value = (value.app(), value.name_space()) + flat_path(value)
-      prefix = (encoded_type,) + encoded_value + (self._DELIMITER,)
+      return (encoded_type,) + encoded_value + (self._DELIMITER,)
     else:
       raise BadRequest('Unknown PropertyValue type')
 
+  def encode(self, value, path, commit_vs=fdb.tuple.Versionstamp(),
+             omit_vs=False):
+    encoded_value = self.encode_value(value)
     kindless_path = path[:-2] + path[-1:]
-    if not include_vs:
-      return self.directory.pack(prefix + kindless_path)
+    if omit_vs:
+      return self.directory.pack(encoded_value + kindless_path)
 
-    return self.pack_method(commit_vs)(prefix + kindless_path + (commit_vs,))
+    return self.pack_method(commit_vs)(encoded_value + kindless_path +
+                                       (commit_vs,))
+
+  def apply_filters(self, filter_props):
+    subspace = self.directory
+    start = None
+    end = None
+    for prop_name, filters in filter_props:
+      if prop_name == self.prop_name:
+        for op, value in filters:
+          encoded_value = self.encode_value(value)
+          if op == datastore_pb.Query_Filter.EQUAL:
+            subspace = self.directory.subspace(encoded_value)
+          elif op == datastore_pb.Query_Filter.LESS_THAN:
+            end = fdb.KeySelector.last_less_than, encoded_value
+          elif op == datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:
+            end = fdb.KeySelector.last_less_or_equal, encoded_value
+          elif op == datastore_pb.Query_Filter.GREATER_THAN:
+            start = fdb.KeySelector.first_greater_than, encoded_value
+          elif op == datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL:
+            start = fdb.KeySelector.first_greater_than, encoded_value
+          else:
+            raise BadRequest('Unrecognized filter operation')
+
+      for op, value in filters:
+        if op == datastore_pb.Query_Filter.EQUAL:
+          subspace =
 
   def decode(self, kv):
     parts = self.directory.unpack(kv.key)
@@ -311,7 +339,7 @@ class IndexManager(object):
       del tr[kind_index.encode(path, old_vs)]
       for prop in old_entity.property_list():
         index = SinglePropIndex(project_id, namespace, kind, prop.name(),
-                                prop.value(), self._directory_cache)
+                                self._directory_cache)
         del tr[index.encode(prop.value(), path, old_vs)]
 
     if new_entity is not None:
@@ -319,18 +347,20 @@ class IndexManager(object):
       tr.set_versionstamped_key(kind_index.encode(path), '')
       for prop in new_entity.property_list():
         index = SinglePropIndex(project_id, namespace, kind, prop.name(),
-                                prop.value(), self._directory_cache)
+                                self._directory_cache)
         tr.set_versionstamped_key(index.encode(prop.value(), path), '')
 
-  def get_reverse(self, query, expected_prop):
-    if query.order_list():
-      if query.order_size() > 1 or query.order(0).property() != expected_prop:
-        raise BadRequest('Invalid order info')
+  def get_reverse(self, query):
+    if not query.order_list():
+      return False
 
-      if query.order(0).direction() == query.order(0).DESCENDING:
-        return True
+    if query.order_size() > 1:
+      raise BadRequest('Only one order can be specified')
 
-    return False
+    if query.order(0).property() != query.filter(-1).property().name():
+      raise BadRequest('Only the last filter property can be ordered')
+
+    return query.order(0).direction() == query.order(0).DESCENDING
 
   def rpc_limit(self, query):
     check_more_results = False
@@ -363,25 +393,28 @@ class IndexManager(object):
 
     return False
 
-
-
   def get_iterator(self, tr, query):
-    filter_props = self.group_filters(query)
+    filter_props = group_filters(query)
     if not query.has_kind():
       index = KindlessIndex(query.app(), query.name_space(),
                             self._directory_cache)
-      reverse = self.get_reverse(query, '__key__')
     elif all([name == '__key__' for name, _ in filter_props]):
       index = KindIndex(query.app(), query.name_space(), query.kind(),
                         self._directory_cache)
-      reverse = self.get_reverse(query, '__key__')
     elif sum([name != '__key__' for name, _ in filter_props]) == 1:
       prop_name, filters = filter_props[0]
-      index = SinglePropIndex(query.app(), query.name_space(), query.kind(), prop_name, )
+      index = SinglePropIndex(query.app(), query.name_space(), query.kind(),
+                              prop_name, self._directory_cache)
     else:
       raise BadRequest('Query is not supported')
 
-    query_range = index.directory.range()
+    reverse = self.get_reverse(query)
+    subspace = index.directory
+    for prop_name, filters in filter_props:
+      for op, value in filters:
+        if op == datastore_pb.Query_Filter.EQUAL:
+          subspace =
+      subspace = index.apply_filter
     for prop_filter in query.filter_list():
       if prop_filter.property_size() != 1:
         raise BadRequest('Invalid filter list')
