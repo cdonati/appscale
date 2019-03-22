@@ -31,34 +31,34 @@ class TestBasicOperations(AsyncTestCase):
     # for entity in results:
     #   yield self.datastore.delete([entity.key()])
 
-  # @gen_test
-  # def test_put(self):
-  #   # entity = Entity('Greeting', name='test', _app=PROJECT_ID)
-  #   # entity = Entity('Greeting', _app=PROJECT_ID)
-  #   # entity = Entity('Greeting', name='long', _app=PROJECT_ID)
-  #   # parent_key = Key.from_path('Guestbook', '1', _app=PROJECT_ID)
-  #   # entity = Entity('Greeting', parent=parent_key, name='test',
-  #   #                 _app=PROJECT_ID)
-  #   entity = Entity('Greeting', name='prop_test', _app=PROJECT_ID)
-  #   entity['content'] = 'hi'
-  #   entity['value'] = 5
-  #   # entity['content'] = 'a' * 10000
-  #   yield self.datastore.put(entity)
-
   @gen_test
-  def test_query(self):
-    query = Query(_app=PROJECT_ID, keys_only=True)
-    key = Key.from_path('Greeting', 5692531021916715, _app=PROJECT_ID)
-    key = Key.from_path('Greeting2', 'tes', _app=PROJECT_ID)
-    query['__key__ >='] = key
-    query['__key__ <'] = key
-    results = yield self.datastore.run_query(query)
+  def test_put(self):
+    # entity = Entity('Greeting', name='test', _app=PROJECT_ID)
+    # entity = Entity('Greeting', _app=PROJECT_ID)
+    # entity = Entity('Greeting', name='long', _app=PROJECT_ID)
+    # parent_key = Key.from_path('Guestbook', '1', _app=PROJECT_ID)
+    # entity = Entity('Greeting', parent=parent_key, name='test',
+    #                 _app=PROJECT_ID)
+    entity = Entity('Greeting', name='1', _app=PROJECT_ID)
+    entity['content'] = 'hi'
+    entity['value'] = 5
+    # entity['content'] = 'a' * 10000
+    yield self.datastore.put(entity)
 
-    print('keys:')
-    for result in results:
-      print(result.key().to_path())
-
-    print('results: {}'.format(results))
+  # @gen_test
+  # def test_query(self):
+  #   query = Query(_app=PROJECT_ID, keys_only=True)
+  #   key = Key.from_path('Greeting', 5692531021916715, _app=PROJECT_ID)
+  #   key = Key.from_path('Greeting2', 'tes', _app=PROJECT_ID)
+  #   query['__key__ >='] = key
+  #   query['__key__ <'] = key
+  #   results = yield self.datastore.run_query(query)
+  #
+  #   print('keys:')
+  #   for result in results:
+  #     print(result.key().to_path())
+  #
+  #   print('results: {}'.format(results))
 
   # @gen_test
   # def test_get(self):

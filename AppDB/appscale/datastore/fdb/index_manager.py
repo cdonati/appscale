@@ -212,10 +212,11 @@ class Index(object):
 class KindlessIndex(Index):
   DIR_NAME = 'kindless'
 
-  def __init__(self, project_id, namespace, directory_cache):
+  @classmethod
+  def from_cache(cls, project_id, namespace, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, self.DIR_NAME))
-    super(KindlessIndex, self).__init__(directory)
+      (project_id, INDEX_DIR, namespace, cls.DIR_NAME))
+    return cls(directory)
 
   def __repr__(self):
     dir_repr = '/'.join([self.project_id, repr(self.namespace)])
@@ -239,10 +240,11 @@ class KindlessIndex(Index):
 class KindIndex(Index):
   DIR_NAME = 'kind'
 
-  def __init__(self, project_id, namespace, kind, directory_cache):
+  @classmethod
+  def from_cache(cls, project_id, namespace, kind, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, self.DIR_NAME, kind))
-    super(KindIndex, self).__init__(directory)
+      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, kind))
+    return cls(directory)
 
   @property
   def kind(self):
@@ -277,10 +279,11 @@ class SinglePropIndex(Index):
   # when the value has a variable number of elements.
   _DELIMITER = '\x00'
 
-  def __init__(self, project_id, namespace, kind, prop_name, directory_cache):
+  @classmethod
+  def from_cache(cls, project_id, namespace, kind, prop_name, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, self.DIR_NAME, kind, prop_name))
-    super(SinglePropIndex, self).__init__(directory)
+      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, kind, prop_name))
+    return cls(directory)
 
   @property
   def kind(self):
@@ -392,24 +395,25 @@ class IndexManager(object):
     path = flat_path(new_entity.key())
     kind = path[-2]
 
-    kindless_index = KindlessIndex(project_id, namespace,
-                                   self._directory_cache)
-    kind_index = KindIndex(project_id, namespace, kind, self._directory_cache)
+    kindless_index = KindlessIndex.from_cache(
+      project_id, namespace, self._directory_cache)
+    kind_index = KindIndex.from_cache(
+      project_id, namespace, kind, self._directory_cache)
 
     if old_entity is not None:
       del tr[kindless_index.encode(path, old_vs)]
       del tr[kind_index.encode(path, old_vs)]
       for prop in old_entity.property_list():
-        index = SinglePropIndex(project_id, namespace, kind, prop.name(),
-                                self._directory_cache)
+        index = SinglePropIndex.from_cache(
+          project_id, namespace, kind, prop.name(), self._directory_cache)
         del tr[index.encode(prop.value(), path, old_vs)]
 
     if new_entity is not None:
       tr.set_versionstamped_key(kindless_index.encode(path), '')
       tr.set_versionstamped_key(kind_index.encode(path), '')
       for prop in new_entity.property_list():
-        index = SinglePropIndex(project_id, namespace, kind, prop.name(),
-                                self._directory_cache)
+        index = SinglePropIndex.from_cache(
+          project_id, namespace, kind, prop.name(), self._directory_cache)
         tr.set_versionstamped_key(index.encode(prop.value(), path), '')
 
   def get_reverse(self, query):
@@ -458,15 +462,16 @@ class IndexManager(object):
   def get_iterator(self, tr, query):
     filter_props = group_filters(query)
     if not query.has_kind():
-      index = KindlessIndex(query.app(), query.name_space(),
-                            self._directory_cache)
+      index = KindlessIndex.from_cache(
+        query.app(), query.name_space(), self._directory_cache)
     elif all([name == '__key__' for name, _ in filter_props]):
-      index = KindIndex(query.app(), query.name_space(), query.kind(),
-                        self._directory_cache)
+      index = KindIndex.from_cache(
+        query.app(), query.name_space(), query.kind(), self._directory_cache)
     elif sum([name != '__key__' for name, _ in filter_props]) == 1:
       prop_name, filters = filter_props[0]
-      index = SinglePropIndex(query.app(), query.name_space(), query.kind(),
-                              prop_name, self._directory_cache)
+      index = SinglePropIndex.from_cache(
+        query.app(), query.name_space(), query.kind(), prop_name,
+        self._directory_cache)
     else:
       raise BadRequest('Query is not supported')
 

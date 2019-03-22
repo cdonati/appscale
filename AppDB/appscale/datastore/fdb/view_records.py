@@ -4,6 +4,8 @@ import sys
 import tabulate
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
+from appscale.datastore.fdb.index_manager import (
+  KindIndex, KindlessIndex, SinglePropIndex)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api import datastore
@@ -14,6 +16,10 @@ fdb.api_version(600)
 db = fdb.open()
 
 ds_dir = fdb.directory.open(db, ('appscale', 'datastore'))
+
+
+def format_versionstamp(versionstamp)
+  return struct.unpack('>Q', versionstamp.tr_version[:8])[0]
 
 
 def format_path(path):
@@ -75,63 +81,46 @@ def print_data(tr, data_dir):
     print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
-def print_kindless_index(tr, index_dir):
-  project_id, section_id, pretty_ns, index_type = index_dir.get_path()[2:]
-  if pretty_ns == '':
-    pretty_ns = '""'
-
-  print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
+def print_kindless_index(tr, index):
+  print(str(index) + ':')
   headers = ['Path', 'Versionstamp']
   table = []
 
-  for kv in tr[index_dir.range()]:
-    key_parts = index_dir.unpack(kv.key)
-    path = format_path(key_parts[:-1])
-    versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
-    table.append([path, versionstamp])
+  for kv in tr[index.directory.range()]:
+    entry = index.decode(kv)
+    table.append([format_path(entry.path),
+                  format_versionstamp(entry.versionstamp)])
 
   print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
 def print_kind_indexes(tr, index_dir):
-  project_id, section_id, pretty_ns, index_type = index_dir.get_path()[2:]
-  if pretty_ns == '':
-    pretty_ns = '""'
-
-  print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
-  headers = ['Kind', 'Path', 'Versionstamp']
-  table = []
   for kind in index_dir.list(tr):
-    kind_index = index_dir.open(tr, (kind,))
-    for kv in tr[kind_index.range()]:
-      key_parts = kind_index.unpack(kv.key)
-      path = format_path(key_parts[:-1])
-      versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
-      table.append([kind, path, versionstamp])
+    index = KindIndex(index_dir.open(tr, (kind,)))
+    print(str(index) + ':')
 
-  print(tabulate.tabulate(table, headers=headers) + '\n')
+    headers = ['Path', 'Versionstamp']
+    table = []
+    for kv in tr[index.directory.range()]:
+      entry = index.decode(kv)
+      table.append([format_path(entry.path),
+                    format_versionstamp(entry.commit_vs)])
+
+    print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
 def print_single_prop_indexes(tr, index_dir):
-  project_id, section_id, pretty_ns, index_type = index_dir.get_path()[2:]
-  if pretty_ns == '':
-    pretty_ns = '""'
-
-  print('/'.join([project_id, section_id, pretty_ns, index_type]) + ':')
-  headers = ['Kind', 'Property', 'Type', 'Value', 'Path', 'Versionstamp']
-  table = []
   for kind in index_dir.list(tr):
     kind_dir = index_dir.open(tr, (kind,))
     for prop_name in kind_dir.list(tr):
-      prop_name_dir = kind_dir.open(tr, (prop_name,))
-      for prop_type in prop_name_dir.list(tr):
-        index = prop_name_dir.open(tr, (prop_type,))
-        for kv in tr[index.range()]:
-          key_parts = index.unpack(kv.key)
-          value = key_parts[0]
-          path = format_path(key_parts[1:-1])
-          versionstamp = struct.unpack('>Q', key_parts[-1].tr_version[:8])[0]
-          table.append([kind, prop_name, prop_type, value, path, versionstamp])
+      index = SinglePropIndex(kind_dir.open(tr, (prop_name,)))
+      print(str(index) + ':')
+
+      headers = ['Value', 'Path', 'Versionstamp']
+      table = []
+      for kv in tr[index.directory.range()]:
+        entry = index.decode(kv)
+        table.append([kind, prop_name, prop_type, value, path, versionstamp])
 
   print(tabulate.tabulate(table, headers=headers) + '\n')
 
@@ -143,7 +132,8 @@ def print_indexes(tr, indexes_dir):
     for index_type in namespace_dir.list(tr):
       index_dir = namespace_dir.open(tr, (index_type,))
       if index_type == 'kindless':
-        print_kindless_index(tr, index_dir)
+        index = KindlessIndex(index_dir)
+        print_kindless_index(tr, index)
 
       if index_type == 'kind':
         print_kind_indexes(tr, index_dir)
