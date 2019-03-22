@@ -10,38 +10,43 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
+from google.appengine.datastore.datastore_pb import Query_Filter
 
 logger = logging.getLogger(__name__)
 
 INDEX_DIR = 'indexes'
 
 
-class ValueTypes(object):
+class V3Types(object):
+  NULL = '0'
   INT64 = '1'
   BOOLEAN = '2'
   STRING = '3'
   DOUBLE = '4'
-  # POINT = '5'
-  # USER = '6'
+  POINT = '5'
+  USER = '6'
   REFERENCE = '7'
 
 
-SCALAR_TYPES = (ValueTypes.INT64, ValueTypes.BOOLEAN, ValueTypes.STRING,
-                ValueTypes.DOUBLE)
+COMPOUND_TYPES = (V3Types.POINT, V3Types.USER, V3Types.REFERENCE)
+
+
+START_FILTERS = (Query_Filter.GREATER_THAN_OR_EQUAL, Query_Filter.GREATER_THAN)
+STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
 def get_type(value):
-  valid_types = [name.lower() for name, value in ValueTypes.__dict__.items()
-                 if not name.startswith('_')]
-  for name, encoded_value in valid_types:
-    if getattr(value, 'has_{}value'.format(name))():
-      return name, encoded_value
+  valid_types = [name.lower() for name, value in V3Types.__dict__.items()
+                 if not name.startswith('_') and name != 'NULL']
+  for type_name, encoded_type in valid_types:
+    if getattr(value, 'has_{}value'.format(type_name))():
+      return type_name, encoded_type
 
-  raise BadRequest('Unknown PropertyValue type')
+  return None, V3Types.NULL
 
 
 def get_type_name(encoded_type):
-  return next(key for key, val in ValueTypes.__dict__.items()
+  return next(key for key, val in V3Types.__dict__.items()
               if val == encoded_type).lower()
 
 
@@ -69,6 +74,18 @@ def group_filters(query):
     raise BadRequest('A property can only have up to two filters')
 
   return filter_props
+
+
+def key_selector(op):
+  """ Like Python's slice notation, FDB range queries include the start and
+      exclude the stop. Therefore, the stop selector must point to the first
+      key that will be excluded from the results. """
+  if op in (Query_Filter.GREATER_THAN_OR_EQUAL, Query_Filter.LESS_THAN):
+    return fdb.KeySelector.first_greater_or_equal
+  elif op in (Query_Filter.GREATER_THAN, Query_Filter.LESS_THAN_OR_EQUAL):
+    return fdb.KeySelector.first_greater_than
+  else:
+    raise BadRequest('Unsupported filter operator')
 
 
 class IndexEntry(object):
@@ -163,6 +180,33 @@ class Index(object):
     else:
       return self.directory.pack_with_versionstamp
 
+  def encode_path(self, path):
+    raise NotImplementedError()
+
+  def get_slice(self, filter_props):
+    subspace = self.directory
+    start = None
+    stop = None
+    for prop_name, filters in filter_props:
+      if prop_name != '__key__':
+        raise BadRequest('Unexpected filter: {}'.format(prop_name))
+
+      if len(filters) == 1 and filters[0][0] == Query_Filter.EQUAL:
+        subspace = subspace.subspace(self.encode_path(filters[0][1]))
+        continue
+
+      for op, value in filters:
+        if op in START_FILTERS:
+          start = key_selector(op)(subspace.pack(self.encode_path(value)))
+        elif op in STOP_FILTERS:
+          stop = key_selector(op)(subspace.pack(self.encode_path(value)))
+        else:
+          raise BadRequest('Unexpected filter operation: {}'.format(op))
+
+    start = start or subspace.range().start
+    stop = stop or subspace.range().stop
+    return slice(start, stop)
+
 
 class KindlessIndex(Index):
   DIR_NAME = 'kindless'
@@ -176,10 +220,13 @@ class KindlessIndex(Index):
     dir_repr = '/'.join([self.project_id, repr(self.namespace)])
     return 'KindlessIndex({})'.format(dir_repr)
 
-  def encode(self, path, include_vs=True, commit_vs=fdb.tuple.Versionstamp()):
-    if not include_vs:
-      return self.directory.pack((path,))
+  def encode_path(self, path):
+    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
+      path = flat_path(path)
 
+    return path
+
+  def encode(self, path, commit_vs=fdb.tuple.Versionstamp()):
     return self.pack_method(commit_vs)(path + (commit_vs,))
 
   def decode(self, kv):
@@ -204,12 +251,15 @@ class KindIndex(Index):
     dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind])
     return 'KindIndex({})'.format(dir_repr)
 
-  def encode(self, path, include_vs=True, commit_vs=fdb.tuple.Versionstamp()):
-    kindless_path = path[:-2] + path[-1:]
-    if not include_vs:
-      return self.directory.pack((kindless_path,))
+  def encode_path(self, path):
+    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
+      path = flat_path(path)
 
-    return self.pack_method(commit_vs)(kindless_path + (commit_vs,))
+    kindless_path = path[:-2] + path[-1:]
+    return kindless_path
+
+  def encode(self, path, commit_vs=fdb.tuple.Versionstamp()):
+    return self.pack_method(commit_vs)(self.encode_path(path) + (commit_vs,))
 
   def decode(self, kv):
     parts = self.directory.unpack(kv.key)
@@ -239,58 +289,45 @@ class SinglePropIndex(Index):
   def prop_name(self):
     return self.directory.get_path()[-1]
 
+  def __repr__(self):
+    dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind,
+                         self.prop_name])
+    return 'SinglePropIndex({})'.format(dir_repr)
+
   def encode_value(self, value):
     type_name, encoded_type = get_type(value)
-    if encoded_type in SCALAR_TYPES:
+    if encoded_type == V3Types.NULL:
+      return (encoded_type,)
+
+    if encoded_type not in COMPOUND_TYPES:
       encoded_value = getattr(value, '{}value'.format(type_name))()
-      return (encoded_type, encoded_value)
-    elif encoded_type == ValueTypes.REFERENCE:
+      return encoded_type, encoded_value
+
+    if encoded_type == V3Types.REFERENCE:
       encoded_value = (value.app(), value.name_space()) + flat_path(value)
       return (encoded_type,) + encoded_value + (self._DELIMITER,)
-    else:
-      raise BadRequest('Unknown PropertyValue type')
 
-  def encode(self, value, path, commit_vs=fdb.tuple.Versionstamp(),
-             omit_vs=False):
-    encoded_value = self.encode_value(value)
+    raise BadRequest('{} is not a supported value'.format(type_name))
+
+  def encode_path(self, path):
+    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
+      path = flat_path(path)
+
     kindless_path = path[:-2] + path[-1:]
-    if omit_vs:
-      return self.directory.pack(encoded_value + kindless_path)
+    return kindless_path
 
-    return self.pack_method(commit_vs)(encoded_value + kindless_path +
-                                       (commit_vs,))
-
-  def apply_filters(self, filter_props):
-    subspace = self.directory
-    start = None
-    end = None
-    for prop_name, filters in filter_props:
-      if prop_name == self.prop_name:
-        for op, value in filters:
-          encoded_value = self.encode_value(value)
-          if op == datastore_pb.Query_Filter.EQUAL:
-            subspace = self.directory.subspace(encoded_value)
-          elif op == datastore_pb.Query_Filter.LESS_THAN:
-            end = fdb.KeySelector.last_less_than, encoded_value
-          elif op == datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:
-            end = fdb.KeySelector.last_less_or_equal, encoded_value
-          elif op == datastore_pb.Query_Filter.GREATER_THAN:
-            start = fdb.KeySelector.first_greater_than, encoded_value
-          elif op == datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL:
-            start = fdb.KeySelector.first_greater_than, encoded_value
-          else:
-            raise BadRequest('Unrecognized filter operation')
-
-      for op, value in filters:
-        if op == datastore_pb.Query_Filter.EQUAL:
-          subspace =
+  def encode(self, value, path, commit_vs=fdb.tuple.Versionstamp()):
+    return self.pack_method(commit_vs)(
+      self.encode_value(value) + self.encode_path(path) + (commit_vs,))
 
   def decode(self, kv):
+    value = entity_pb.PropertyValue()
     parts = self.directory.unpack(kv.key)
     encoded_type = parts[0]
-    type_name = get_type_name(encoded_type)
-    value = entity_pb.PropertyValue()
-    if encoded_type == ValueTypes.REFERENCE:
+    if encoded_type == V3Types.NULL:
+      return value
+
+    if encoded_type == V3Types.REFERENCE:
       delimiter_index = parts.index(self._DELIMITER)
       value_parts = parts[1:delimiter_index]
       reference_val = value.mutable_referencevalue()
@@ -299,7 +336,8 @@ class SinglePropIndex(Index):
       reference_val.MergeFrom(
         decode_path(value_parts[2:], reference_value=True))
       kindless_path = parts[slice(delimiter_index + 1, -1)]
-    elif encoded_type in SCALAR_TYPES:
+    elif encoded_type not in COMPOUND_TYPES:
+      type_name = get_type_name(encoded_type)
       getattr(value, 'set_{}value'.format(type_name))(parts[1])
       kindless_path = parts[1:-1]
     else:
@@ -309,10 +347,33 @@ class SinglePropIndex(Index):
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs=parts[-1])
 
-  def __repr__(self):
-    dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind,
-                         self.prop_name])
-    return 'SinglePropIndex({})'.format(dir_repr)
+  def get_slice(self, filter_props):
+    subspace = self.directory
+    start = None
+    stop = None
+    for prop_name, filters in filter_props:
+      if prop_name == self.prop_name:
+        encoder = self.encode_value
+      elif prop_name == '__key__':
+        encoder = self.encode_path
+      else:
+        raise BadRequest('Unexpected filter: {}'.format(prop_name))
+
+      if len(filters) == 1 and filters[0][0] == Query_Filter.EQUAL:
+        subspace = subspace.subspace(encoder(filters[0][1]))
+        continue
+
+      for op, value in filters:
+        if op in START_FILTERS:
+          start = key_selector(op)(subspace.pack(encoder(value)))
+        elif op in STOP_FILTERS:
+          stop = key_selector(op)(subspace.pack(encoder(value)))
+        else:
+          raise BadRequest('Unexpected filter operation: {}'.format(op))
+
+    start = start or subspace.range().start
+    stop = stop or subspace.range().stop
+    return slice(start, stop)
 
 
 class IndexManager(object):
@@ -409,33 +470,13 @@ class IndexManager(object):
       raise BadRequest('Query is not supported')
 
     reverse = self.get_reverse(query)
-    subspace = index.directory
-    for prop_name, filters in filter_props:
-      for op, value in filters:
-        if op == datastore_pb.Query_Filter.EQUAL:
-          subspace =
-      subspace = index.apply_filter
-    for prop_filter in query.filter_list():
-      if prop_filter.property_size() != 1:
-        raise BadRequest('Invalid filter list')
-
-      value = prop_filter.property(0).value()
-
-    if isinstance(index, KeyIndex):
-      range_ = index.directory.range()
-      for filter_ in query.filter_list():
-        if filter_.property_size() != 1 or filter_.property(0) != '__key__':
-          raise BadRequest('Invalid filter list')
-
-        path = flat_path(filter_.property(0).value().referencevalue())
-
-
+    desired_slice = index.get_slice(filter_props)
     rpc_limit, check_more_results = self.rpc_limit(query)
     fetch_limit = rpc_limit
     if check_more_results:
       fetch_limit += 1
 
-    kv_iterator = RangeIterator(tr, self._tornado_fdb, index.directory.range(),
+    kv_iterator = RangeIterator(tr, self._tornado_fdb, desired_slice,
                                 fetch_limit, reverse, snapshot=True)
     iterator = IndexIterator(index, kv_iterator)
     logger.debug('using index: {}'.format(index))

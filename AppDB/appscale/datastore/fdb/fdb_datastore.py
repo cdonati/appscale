@@ -226,10 +226,8 @@ class FDBDatastore(object):
         index_value.mutable_value().MergeFrom(prop.value())
         position.set_start_inclusive(False)
 
-    if check_more_results and entries_fetched > rpc_limit:
-      query_result.set_more_results(True)
-    else:
-      query_result.set_more_results(False)
+    more_results = check_more_results and entries_fetched > rpc_limit
+    query_result.set_more_results(more_results)
 
     if skipped_results:
       query_result.set_skipped_results(skipped_results)
