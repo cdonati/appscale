@@ -36,9 +36,8 @@ STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
 def get_type(value):
-  logger.debug('get_type value: {}'.format(value))
   readable_types = [
-    (name.lower(), value) for name, value in V3Types.__dict__.items()
+    (name.lower(), encoded) for name, encoded in V3Types.__dict__.items()
     if not name.startswith('_') and name != 'NULL']
   for type_name, encoded_type in readable_types:
     if getattr(value, 'has_{}value'.format(type_name))():
@@ -297,7 +296,6 @@ class SinglePropIndex(Index):
     return 'SinglePropIndex({})'.format(dir_repr)
 
   def encode_value(self, value):
-    logger.debug('encoding value: {}'.format(value))
     type_name, encoded_type = get_type(value)
     if encoded_type == V3Types.NULL:
       return (encoded_type,)
@@ -410,7 +408,6 @@ class IndexManager(object):
       tr.set_versionstamped_key(kindless_index.encode(path), '')
       tr.set_versionstamped_key(kind_index.encode(path), '')
       for prop in new_entity.property_list():
-        logger.debug('prop for new_entity: {}'.format(prop))
         index = SinglePropIndex(project_id, namespace, kind, prop.name(),
                                 self._directory_cache)
         tr.set_versionstamped_key(index.encode(prop.value(), path), '')
