@@ -5,7 +5,7 @@ import tabulate
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.fdb.index_manager import (
-  KindIndex, KindlessIndex, SinglePropIndex)
+  get_type, KindIndex, KindlessIndex, SinglePropIndex)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api import datastore
@@ -37,6 +37,11 @@ def format_path(path):
 def format_entity(encoded_entity):
   entity_proto = entity_pb.EntityProto(encoded_entity)
   return datastore.Entity.FromPb(entity_proto)
+
+
+def format_value(value):
+  type_name, encoded_type = get_type(value)[0]
+  return repr(getattr(value, '{}value'.format(type_name))()
 
 
 def print_data(tr, data_dir):
@@ -71,7 +76,7 @@ def print_data(tr, data_dir):
 
         tmp_chunks = [entity_chunk]
         path = format_path(key_parts[:-2])
-        versionstamp = struct.unpack('>Q', key_parts[-2].tr_version[:8])[0]
+        versionstamp = format_versionstamp(key_parts[-2])
         entity_version = value_parts[0]
 
     if tmp_chunks:
@@ -120,9 +125,11 @@ def print_single_prop_indexes(tr, index_dir):
       table = []
       for kv in tr[index.directory.range()]:
         entry = index.decode(kv)
-        table.append([kind, prop_name, prop_type, value, path, versionstamp])
+        table.append([format_value(entry.value),
+                      format_path(entry.path),
+                      format_versionstamp(entry.versionstamp)])
 
-  print(tabulate.tabulate(table, headers=headers) + '\n')
+      print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
 def print_indexes(tr, indexes_dir):
