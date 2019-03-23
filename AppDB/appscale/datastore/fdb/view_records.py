@@ -152,6 +152,7 @@ def print_indexes(tr, indexes_dir):
 
 
 def main():
+  logging.basicConfig()
   logging.getLogger('appscale').setLevel(logging.DEBUG)
   tr = db.create_transaction()
   for project_id in ds_dir.list(tr):
