@@ -18,7 +18,7 @@ db = fdb.open()
 ds_dir = fdb.directory.open(db, ('appscale', 'datastore'))
 
 
-def format_versionstamp(versionstamp)
+def format_versionstamp(versionstamp):
   return struct.unpack('>Q', versionstamp.tr_version[:8])[0]
 
 
