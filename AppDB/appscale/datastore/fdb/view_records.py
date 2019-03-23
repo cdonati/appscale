@@ -40,7 +40,7 @@ def format_entity(encoded_entity):
 
 
 def format_value(value):
-  type_name, encoded_type = get_type(value)[0]
+  type_name, encoded_type = get_type(value)
   return repr(getattr(value, '{}value'.format(type_name))())
 
 
