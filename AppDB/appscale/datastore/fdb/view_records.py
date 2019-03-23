@@ -1,4 +1,5 @@
 import fdb
+import logging
 import struct
 import sys
 import tabulate
@@ -151,6 +152,7 @@ def print_indexes(tr, indexes_dir):
 
 
 def main():
+  logging.getLogger('appscale').setLevel(logging.DEBUG)
   tr = db.create_transaction()
   for project_id in ds_dir.list(tr):
     project_dir = ds_dir.open(tr, (project_id,))

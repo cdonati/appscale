@@ -348,6 +348,7 @@ class SinglePropIndex(Index):
       raise InternalError('Unknown PropertyValue type')
 
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
+    logger.debug('path*: {}'.format(path))
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs=parts[-1])
 
