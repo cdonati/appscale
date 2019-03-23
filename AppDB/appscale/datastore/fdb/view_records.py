@@ -94,7 +94,7 @@ def print_kindless_index(tr, index):
   for kv in tr[index.directory.range()]:
     entry = index.decode(kv)
     table.append([format_path(entry.path),
-                  format_versionstamp(entry.versionstamp)])
+                  format_versionstamp(entry.commit_vs)])
 
   print(tabulate.tabulate(table, headers=headers) + '\n')
 
@@ -127,7 +127,7 @@ def print_single_prop_indexes(tr, index_dir):
         entry = index.decode(kv)
         table.append([format_value(entry.value),
                       format_path(entry.path),
-                      format_versionstamp(entry.versionstamp)])
+                      format_versionstamp(entry.commit_vs)])
 
       print(tabulate.tabulate(table, headers=headers) + '\n')
 
