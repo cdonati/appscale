@@ -23,6 +23,7 @@ def format_versionstamp(versionstamp):
 
 
 def format_path(path):
+  print('path: {}'.format(path))
   index = 0
   elements = []
   while index < len(path):
