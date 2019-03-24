@@ -307,6 +307,12 @@ class SinglePropIndex(Index):
       encoded_value = getattr(value, '{}value'.format(type_name))()
       return encoded_type, encoded_value
 
+    if encoded_type == V3Types.POINT:
+      return encoded_type, (value.x(), value.y())
+
+    if encoded_type == V3Types.USER:
+      return encoded_type, (value.email(), value.auth_domain())
+
     if encoded_type == V3Types.REFERENCE:
       encoded_value = (value.app(), value.name_space()) + flat_path(value)
       return (encoded_type,) + encoded_value + (self._DELIMITER,)
@@ -330,6 +336,21 @@ class SinglePropIndex(Index):
     if encoded_type == V3Types.NULL:
       return value, unpacked_key[1:]
 
+    if encoded_type not in COMPOUND_TYPES:
+      type_name = get_type_name(encoded_type)
+      getattr(value, 'set_{}value'.format(type_name))(unpacked_key[1])
+      return value, unpacked_key[2:]
+
+    if encoded_type == V3Types.POINT:
+      point_val = value.mutable_pointvalue()
+      point_val.set_x(unpacked_key[1])
+      point_val.set_y(unpacked_key[2])
+
+    if encoded_type == V3Types.USER:
+      user_val = value.mutable_uservalue()
+      user_val.set_email(unpacked_key[1])
+      user_val.set_email(unpacked_key[2])
+
     if encoded_type == V3Types.REFERENCE:
       delimiter_index = unpacked_key.index(self._DELIMITER)
       value_parts = unpacked_key[1:delimiter_index]
@@ -339,11 +360,6 @@ class SinglePropIndex(Index):
       reference_val.MergeFrom(
         decode_path(value_parts[2:], reference_value=True))
       return value, unpacked_key[slice(delimiter_index + 1, None)]
-
-    if encoded_type not in COMPOUND_TYPES:
-      type_name = get_type_name(encoded_type)
-      getattr(value, 'set_{}value'.format(type_name))(unpacked_key[1])
-      return value, unpacked_key[2:]
 
     raise InternalError('Unsupported PropertyValue type')
 
