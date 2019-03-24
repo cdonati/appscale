@@ -345,11 +345,13 @@ class SinglePropIndex(Index):
       point_val = value.mutable_pointvalue()
       point_val.set_x(unpacked_key[1])
       point_val.set_y(unpacked_key[2])
+      return value, unpacked_key[3:]
 
     if encoded_type == V3Types.USER:
       user_val = value.mutable_uservalue()
       user_val.set_email(unpacked_key[1])
       user_val.set_email(unpacked_key[2])
+      return value, unpacked_key[3:]
 
     if encoded_type == V3Types.REFERENCE:
       delimiter_index = unpacked_key.index(self._DELIMITER)
