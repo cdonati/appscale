@@ -324,33 +324,38 @@ class SinglePropIndex(Index):
     return self.pack_method(commit_vs)(
       self.encode_value(value) + self.encode_path(path) + (commit_vs,))
 
-  def decode(self, kv):
+  def pop_value(self, unpacked_key):
     value = entity_pb.PropertyValue()
-    parts = self.directory.unpack(kv.key)
-    encoded_type = parts[0]
+    encoded_type = unpacked_key[0]
     if encoded_type == V3Types.NULL:
-      return value
+      return value, unpacked_key[1:]
 
     if encoded_type == V3Types.REFERENCE:
-      delimiter_index = parts.index(self._DELIMITER)
-      value_parts = parts[1:delimiter_index]
+      delimiter_index = unpacked_key.index(self._DELIMITER)
+      value_parts = unpacked_key[1:delimiter_index]
       reference_val = value.mutable_referencevalue()
       reference_val.set_app(value_parts[0])
       reference_val.set_name_space(value_parts[1])
       reference_val.MergeFrom(
         decode_path(value_parts[2:], reference_value=True))
-      kindless_path = parts[slice(delimiter_index + 1, -1)]
-    elif encoded_type not in COMPOUND_TYPES:
-      type_name = get_type_name(encoded_type)
-      getattr(value, 'set_{}value'.format(type_name))(parts[1])
-      kindless_path = parts[1:-1]
-    else:
-      raise InternalError('Unknown PropertyValue type')
+      return value, unpacked_key[slice(delimiter_index + 1, None)]
 
+    if encoded_type not in COMPOUND_TYPES:
+      type_name = get_type_name(encoded_type)
+      getattr(value, 'set_{}value'.format(type_name))(unpacked_key[1])
+      return value, unpacked_key[1:]
+
+    raise InternalError('Unsupported PropertyValue type')
+
+  def decode(self, kv):
+    unpacked_key = self.directory.unpack(kv.key)
+    logger.debug('unpacked key*: {}'.format(kv))
+    value, remainder = self.pop_value(unpacked_key)
+    kindless_path = remainder[:-1]
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
     logger.debug('path*: {}'.format(path))
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
-                         value, commit_vs=parts[-1])
+                         value, commit_vs=remainder[-1])
 
   def get_slice(self, filter_props):
     subspace = self.directory
