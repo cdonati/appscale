@@ -343,17 +343,15 @@ class SinglePropIndex(Index):
     if encoded_type not in COMPOUND_TYPES:
       type_name = get_type_name(encoded_type)
       getattr(value, 'set_{}value'.format(type_name))(unpacked_key[1])
-      return value, unpacked_key[1:]
+      return value, unpacked_key[2:]
 
     raise InternalError('Unsupported PropertyValue type')
 
   def decode(self, kv):
     unpacked_key = self.directory.unpack(kv.key)
-    logger.debug('unpacked key*: {}'.format(unpacked_key))
     value, remainder = self.pop_value(unpacked_key)
     kindless_path = remainder[:-1]
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
-    logger.debug('path*: {}'.format(path))
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs=remainder[-1])
 
