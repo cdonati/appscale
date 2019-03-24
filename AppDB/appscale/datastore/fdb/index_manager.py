@@ -349,7 +349,7 @@ class SinglePropIndex(Index):
 
   def decode(self, kv):
     unpacked_key = self.directory.unpack(kv.key)
-    logger.debug('unpacked key*: {}'.format(kv))
+    logger.debug('unpacked key*: {}'.format(unpacked_key))
     value, remainder = self.pop_value(unpacked_key)
     kindless_path = remainder[:-1]
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
