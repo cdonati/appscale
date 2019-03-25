@@ -228,13 +228,9 @@ class RangeIterator(object):
     if self._limit > 0:
       tmp_limit = self._limit - self._fetched
 
-    logger.info('bsel: {}'.format(repr(self._bsel.key)))
-    logger.info('esel: {}'.format(repr(self._esel.key)))
     kvs, count, more = yield self._tornado_fdb.get_range(
       self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
       self._iteration, self._reverse, self._snapshot)
-    logger.debug('kvs: {}'.format(kvs))
-    logger.debug('more: {}'.format(more))
     self._fetched += count
 
     if more and self._fetched < self._limit:
