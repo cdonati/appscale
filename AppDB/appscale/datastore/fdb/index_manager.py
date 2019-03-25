@@ -189,6 +189,7 @@ class Index(object):
     start = None
     stop = None
     for prop_name, filters in filter_props:
+      logger.debug('prop_name: {}'.format(prop_name))
       if prop_name != '__key__':
         raise BadRequest('Unexpected filter: {}'.format(prop_name))
 
@@ -197,6 +198,8 @@ class Index(object):
         continue
 
       for op, value in filters:
+        logger.debug('op: {}'.format(op))
+        logger.debug('value: {}'.format(value))
         if op in START_FILTERS:
           start = key_selector(op)(subspace.pack(self.encode_path(value)))
         elif op in STOP_FILTERS:
