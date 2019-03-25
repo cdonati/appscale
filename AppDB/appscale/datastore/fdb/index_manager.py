@@ -513,8 +513,8 @@ class IndexManager(object):
     if check_more_results:
       fetch_limit += 1
 
-    logger.info('desired_start: {}'.format(desired_slice.start))
-    logger.info('desired_stop: {}'.format(desired_slice.stop))
+    logger.info('desired_start: {}'.format(repr(desired_slice.start.key)))
+    logger.info('desired_stop: {}'.format(repr(desired_slice.stop.key)))
     kv_iterator = RangeIterator(tr, self._tornado_fdb, desired_slice,
                                 fetch_limit, reverse, snapshot=True)
     iterator = IndexIterator(index, kv_iterator)
