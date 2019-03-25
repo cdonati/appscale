@@ -440,6 +440,9 @@ class FDBDatastore(object):
     data_ns_dir = self._directory_cache.get((entry.project_id, self._DATA_DIR,
                                              entry.namespace))
     data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
+    logger.debug('entry path: {}'.format(entry.path))
+    logger.debug('commit vs: {}'.format(entry.commit_vs))
+    logger.debug('data_range: {}'.format(data_range))
     iterator = RangeIterator(
       tr, self._tornado_fdb, data_range,
       streaming_mode=fdb.StreamingMode.want_all, snapshot=True)
