@@ -125,6 +125,13 @@ class IndexEntry(object):
     entity.mutable_entity_group()
     return entity
 
+  def cursor_result(self):
+    compiled_cursor = datastore_pb.CompiledCursor()
+    position = compiled_cursor.add_position()
+    position.mutable_key().MergeFrom(self.key)
+    position.set_start_inclusive(False)
+    return compiled_cursor
+
 
 class PropertyEntry(IndexEntry):
   __SLOTS__ = ['prop_name', 'value']
@@ -144,6 +151,16 @@ class PropertyEntry(IndexEntry):
     prop.set_multiple(False)
     prop.mutable_value().MergeFrom(self.value)
     return entity
+
+  def cursor_result(self):
+    compiled_cursor = datastore_pb.CompiledCursor()
+    position = compiled_cursor.add_position()
+    position.mutable_key().MergeFrom(self.key)
+    position.set_start_inclusive(False)
+    index_value = position.add_indexvalue()
+    index_value.set_property(self.prop_name)
+    index_value.mutable_value().MergeFrom(self.value)
+    return compiled_cursor
 
 
 class IndexIterator(object):

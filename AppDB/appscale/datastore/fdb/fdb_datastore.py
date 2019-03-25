@@ -210,7 +210,7 @@ class FDBDatastore(object):
           results.append(entry.key_result())
           unique_keys.add(entry.path)
       else:
-        results.extend([entry.result() for entry in suitable_entries])
+        results.extend([entry.prop_result() for entry in suitable_entries])
 
       if not more_iterator_results:
         break
@@ -226,14 +226,7 @@ class FDBDatastore(object):
 
     query_result.result_list().extend(results)
     if query.compile() and cursor is not None:
-      compiled_cursor = query_result.mutable_compiled_cursor()
-      position = compiled_cursor.add_position()
-      position.mutable_key().MergeFrom(cursor.result().key())
-      for prop in cursor.result().property_list():
-        index_value = position.add_indexvalue()
-        index_value.set_property(prop.name())
-        index_value.mutable_value().MergeFrom(prop.value())
-        position.set_start_inclusive(False)
+      query_result.mutable_compiled_cursor().MergeFrom(cursor.cursor_result())
 
     more_results = check_more_results and entries_fetched > rpc_limit
     query_result.set_more_results(more_results)
