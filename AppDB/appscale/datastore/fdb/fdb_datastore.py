@@ -216,7 +216,7 @@ class FDBDatastore(object):
       results = [result.Encode() for result in results]
 
     query_result.result_list().extend(results)
-    if query.compile():
+    if query.compile() and cursor is not None:
       compiled_cursor = query_result.mutable_compiled_cursor()
       position = compiled_cursor.add_position()
       position.mutable_key().MergeFrom(cursor.result().key())
