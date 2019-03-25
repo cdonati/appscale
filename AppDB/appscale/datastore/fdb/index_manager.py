@@ -223,7 +223,9 @@ class KindlessIndex(Index):
     return 'KindlessIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
+    logger.debug('path: {}'.format(path))
     if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
+      logger.debug('converting ref value')
       path = flat_path(path)
 
     return path
