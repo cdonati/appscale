@@ -447,6 +447,7 @@ class FDBDatastore(object):
     chunks = []
     while True:
       kvs, more_results = yield iterator.next_page()
+      logger.debug('kvs: {}'.format(kvs))
       chunks.extend([kv.value for kv in kvs])
       if not more_results:
         break
