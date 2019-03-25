@@ -51,21 +51,6 @@ def get_type_name(encoded_type):
               if val == encoded_type).lower()
 
 
-def fullname(o):
-  # o.__module__ + "." + o.__class__.__qualname__ is an example in
-  # this context of H.L. Mencken's "neat, plausible, and wrong."
-  # Python makes no guarantees as to whether the __module__ special
-  # attribute is defined, so we take a more circumspect approach.
-  # Alas, the module name is explicitly excluded from __qualname__
-  # in Python 3.
-
-  module = o.__class__.__module__
-  if module is None or module == str.__class__.__module__:
-    return o.__class__.__name__  # Avoid reporting __builtin__
-  else:
-    return module + '.' + o.__class__.__name__
-
-
 def group_filters(query):
   filter_props = []
   for query_filter in query.filter_list():
@@ -238,10 +223,10 @@ class KindlessIndex(Index):
     return 'KindlessIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
-    logger.debug('path: {}'.format(path))
-    logger.debug('path type: {}'.format(fullname(path)))
+    if isinstance(path, entity_pb.PropertyValue):
+      path = flat_path(path.referencevalue())
+
     if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
-      logger.debug('converting ref value')
       path = flat_path(path)
 
     return path
@@ -273,6 +258,9 @@ class KindIndex(Index):
     return 'KindIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
+    if isinstance(path, entity_pb.PropertyValue):
+      path = flat_path(path.referencevalue())
+
     if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
       path = flat_path(path)
 
@@ -338,6 +326,9 @@ class SinglePropIndex(Index):
     raise BadRequest('{} is not a supported value'.format(type_name))
 
   def encode_path(self, path):
+    if isinstance(path, entity_pb.PropertyValue):
+      path = flat_path(path.referencevalue())
+
     if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
       path = flat_path(path)
 
