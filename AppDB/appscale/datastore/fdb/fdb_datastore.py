@@ -180,6 +180,10 @@ class FDBDatastore(object):
 
     tr = self._db.create_transaction()
     iterator = self._index_manager.get_iterator(tr, query)
+    for prop_name in query.property_name_list():
+      if prop_name not in iterator.index.properties:
+        raise BadRequest('Projections on {} are not '
+                         'supported'.format(prop_name))
 
     data_futures = [] if fetch_data else None
     unique_keys = set() if query.keys_only() else None

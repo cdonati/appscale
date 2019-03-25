@@ -165,13 +165,13 @@ class PropertyEntry(IndexEntry):
 
 class IndexIterator(object):
   def __init__(self, index, kv_iterator):
+    self.index = index
     self._kv_iterator = kv_iterator
-    self._index = index
 
   @gen.coroutine
   def next_page(self):
     kvs, more_results = yield self._kv_iterator.next_page()
-    raise gen.Return(([self._index.decode(kv) for kv in kvs], more_results))
+    raise gen.Return(([self.index.decode(kv) for kv in kvs], more_results))
 
 
 class Index(object):
@@ -188,6 +188,10 @@ class Index(object):
   def namespace(self):
     return self.directory.get_path()[4]
 
+  @property
+  def properties(self):
+    return []
+
   def pack_method(self, versionstamp):
     if versionstamp.is_complete():
       return self.directory.pack
@@ -202,7 +206,6 @@ class Index(object):
     start = None
     stop = None
     for prop_name, filters in filter_props:
-      logger.debug('prop_name: {}'.format(prop_name))
       if prop_name != '__key__':
         raise BadRequest('Unexpected filter: {}'.format(prop_name))
 
@@ -211,8 +214,6 @@ class Index(object):
         continue
 
       for op, value in filters:
-        logger.debug('op: {}'.format(op))
-        logger.debug('value: {}'.format(value))
         if op in START_FILTERS:
           start = key_selector(op)(subspace.pack(self.encode_path(value)))
         elif op in STOP_FILTERS:
@@ -314,6 +315,10 @@ class SinglePropIndex(Index):
   @property
   def prop_name(self):
     return self.directory.get_path()[-1]
+
+  @property
+  def properties(self):
+    return [self.prop_name]
 
   def __repr__(self):
     dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind,
@@ -503,9 +508,6 @@ class IndexManager(object):
 
     if not query.property_name_list():
       return True
-
-    if query.property_name(0) != '__key__' or query.property_name_size() > 1:
-      raise BadRequest('Invalid property name list')
 
     return False
 
