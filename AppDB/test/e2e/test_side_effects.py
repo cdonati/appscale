@@ -8,7 +8,7 @@ from .client import Datastore
 APPSCALE_PYTHON_APPSERVER = os.path.realpath(
   os.path.join(os.path.abspath(__file__), '..', '..', '..', '..', 'AppServer'))
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.api.datastore import Entity, Key, Query
+from google.appengine.api.datastore import Entity, Key, Query, datastore_types
 
 PROJECT_ID = 'guestbook'
 
@@ -39,9 +39,9 @@ class TestBasicOperations(AsyncTestCase):
     # parent_key = Key.from_path('Guestbook', '1', _app=PROJECT_ID)
     # entity = Entity('Greeting', parent=parent_key, name='test',
     #                 _app=PROJECT_ID)
-    entity = Entity('Greeting', name='1', _app=PROJECT_ID)
+    entity = Entity('Greeting', name='5', _app=PROJECT_ID)
     entity['content'] = 'hi'
-    entity['value'] = 5
+    entity['value'] = 8
     # entity['content'] = 'a' * 10000
     yield self.datastore.put(entity)
 
