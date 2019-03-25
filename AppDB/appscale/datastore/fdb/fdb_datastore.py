@@ -439,6 +439,9 @@ class FDBDatastore(object):
   def _get_encoded(self, tr, entry):
     data_ns_dir = self._directory_cache.get((entry.project_id, self._DATA_DIR,
                                              entry.namespace))
+    logger.debug('project_id: {}'.format(entry.project_id))
+    logger.debug('ns: {}'.format(entry.namespace))
+    logger.debug('data_ns_dir: {}'.format(data_ns_dir))
     data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
     logger.debug('entry path: {}'.format(entry.path))
     logger.debug('commit vs: {}'.format(entry.commit_vs))
