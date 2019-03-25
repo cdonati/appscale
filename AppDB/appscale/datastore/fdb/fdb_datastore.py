@@ -175,14 +175,16 @@ class FDBDatastore(object):
   def _dynamic_run_query(self, query, query_result):
     logger.debug('query: {}'.format(query))
 
-    fetch_data = self._index_manager.fetch_data(query)
+    fetch_data = self._index_manager.include_data(query)
     rpc_limit, check_more_results = self._index_manager.rpc_limit(query)
 
     tr = self._db.create_transaction()
     iterator = self._index_manager.get_iterator(tr, query)
 
+    data_futures = [] if fetch_data else None
+    unique_keys = set() if query.keys_only() else None
+
     results = []
-    data_futures = []
     entries_fetched = 0
     skipped_results = 0
     cursor = None
@@ -200,6 +202,13 @@ class FDBDatastore(object):
       if fetch_data:
         data_futures.extend([self._get_encoded(tr, entry)
                              for entry in suitable_entries])
+      elif query.keys_only():
+        for entry in suitable_entries:
+          if entry.path in unique_keys:
+            continue
+
+          results.append(entry.key_result())
+          unique_keys.add(entry.path)
       else:
         results.extend([entry.result() for entry in suitable_entries])
 

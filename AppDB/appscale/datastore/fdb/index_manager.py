@@ -119,15 +119,10 @@ class IndexEntry(object):
 
     return group
 
-
-class KeyEntry(IndexEntry):
-  def __init__(self, project_id, namespace, path, commit_vs):
-    super(KeyEntry, self).__init__(project_id, namespace, path, commit_vs)
-
-  def result(self):
+  def key_result(self):
     entity = entity_pb.EntityProto()
     entity.mutable_key().MergeFrom(self.key)
-    entity.mutable_entity_group().MergeFrom(self.group)
+    entity.mutable_entity_group()
     return entity
 
 
@@ -139,13 +134,14 @@ class PropertyEntry(IndexEntry):
     self.prop_name = prop_name
     self.value = value
 
-  def result(self):
+  def prop_result(self):
     entity = entity_pb.EntityProto()
     entity.mutable_key().MergeFrom(self.key)
     entity.mutable_entity_group().MergeFrom(self.group)
     prop = entity.add_property()
     prop.set_name(self.prop_name)
     prop.set_meaning(entity_pb.Property.INDEX_VALUE)
+    prop.set_multiple(False)
     prop.mutable_value().MergeFrom(self.value)
     return entity
 
@@ -239,8 +235,8 @@ class KindlessIndex(Index):
 
   def decode(self, kv):
     parts = self.directory.unpack(kv.key)
-    return KeyEntry(self.project_id, self.namespace, path=parts[:-1],
-                    commit_vs=parts[-1])
+    return IndexEntry(self.project_id, self.namespace, path=parts[:-1],
+                      commit_vs=parts[-1])
 
 
 class KindIndex(Index):
@@ -277,8 +273,8 @@ class KindIndex(Index):
     parts = self.directory.unpack(kv.key)
     kindless_path = parts[:-1]
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
-    return KeyEntry(self.project_id, self.namespace, path=path,
-                    commit_vs=parts[-1])
+    return IndexEntry(self.project_id, self.namespace, path=path,
+                      commit_vs=parts[-1])
 
 
 class SinglePropIndex(Index):
@@ -481,7 +477,10 @@ class IndexManager(object):
 
     return limit, check_more_results
 
-  def fetch_data(self, query):
+  def include_data(self, query):
+    if query.keys_only() and query.property_name_list():
+      raise BadRequest('A keys-only query cannot include a property name list')
+
     if query.keys_only():
       return False
 
