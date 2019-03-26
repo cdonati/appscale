@@ -5,7 +5,7 @@ import time
 import uuid
 
 import fdb
-from fdb.directory_impl import DirectorySubspace
+import six
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 
@@ -18,9 +18,6 @@ from google.appengine.datastore import datastore_pb, entity_pb
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
 
-# The max number of bytes for each FDB value.
-CHUNK_SIZE = 10000
-
 MAX_FDB_TX_DURATION = 5
 
 _MAX_SEQUENTIAL_BIT = 52
@@ -29,10 +26,17 @@ _MAX_SCATTERED_COUNTER = (1 << (_MAX_SEQUENTIAL_BIT - 1)) - 1
 _MAX_SCATTERED_ID = _MAX_SEQUENTIAL_ID + 1 + _MAX_SCATTERED_COUNTER
 _SCATTER_SHIFT = 64 - _MAX_SEQUENTIAL_BIT + 1
 
+# The Cloud Datastore API uses microseconds as version IDs. When the entity
+# doesn't exist, it reports the version as "1".
+ABSENT_VERSION = 1
+
+# The max number of bytes for each FDB value.
+CHUNK_SIZE = 10000
+
 
 class EncodedTypes(object):
-  ENTITY_V3 = '0'
-  KEY_V3 = '1'
+  ENTITY_V3 = b'0'
+  KEY_V3 = b'1'
 
 
 def ReverseBitsInt64(v):
@@ -173,19 +177,6 @@ class TornadoFDB(object):
     get_future.on_ready(callback)
     return tornado_future
 
-  @gen.coroutine
-  def list_subdirectories(self, tr, directory):
-    subdirectories = []
-    more_results = True
-    iteration = 1
-    while more_results:
-      kvs, count, more_results = yield self.get_range(
-        tr, subdirs_subspace(directory).range(), iteration=iteration)
-      subdirectories.extend([kv_to_dir(directory, kv) for kv in kvs])
-      iteration += 1
-
-    raise gen.Return(subdirectories)
-
   def _handle_fdb_result(self, fdb_future, tornado_future):
     try:
       result = fdb_future.wait()
@@ -261,27 +252,6 @@ class RangeIterator(object):
     raise gen.Return(result)
 
 
-def subdirs_subspace(directory):
-  """ Returns the subspace that the directory layer uses to keep track of
-      child directories.
-
-  Args:
-    directory: The parent DirectorySubspace object.
-
-  Returns:
-    A Subspace.
-  """
-  dir_layer = directory._directory_layer
-  parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
-  return parent_subspace.subspace((dir_layer.SUBDIRS,))
-
-
-def kv_to_dir(parent, kv):
-  name = subdirs_subspace(parent).unpack(kv.key)[0]
-  path = parent.get_path() + (name,)
-  return DirectorySubspace(path, kv.value)
-
-
 def flat_path(key):
   path = []
   if isinstance(key, entity_pb.PropertyValue_ReferenceValue):
@@ -290,11 +260,11 @@ def flat_path(key):
     element_list = key.path().element_list()
 
   for element in element_list:
-    path.append(element.type())
+    path.append(six.text_type(element.type()))
     if element.has_id():
       path.append(element.id())
     elif element.has_name():
-      path.append(element.name())
+      path.append(six.text_type(element.name()))
     else:
       raise BadRequest('All path elements must either have a name or ID')
 
@@ -331,8 +301,7 @@ def next_entity_version(old_version):
   return max(int(time.time() * 1000 * 1000), old_version + 1)
 
 
-def new_txid():
-  return uuid.uuid4().int & (1 << 64) - 1
+
 
 
 def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
@@ -346,43 +315,3 @@ def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
     else:
       key = subspace.pack((start,))
       tr[key] = value
-
-
-def log_request(tr, tx_dir, request):
-  txid = request.transaction().handle()
-  if isinstance(request, datastore_pb.PutRequest):
-    value = fdb.tuple.pack(
-      (EncodedTypes.ENTITY_V3,) +
-      tuple(entity.Encode() for entity in request.entity_list()))
-    subspace = tx_dir.subspace((txid, 'puts'))
-  elif isinstance(request, datastore_pb.GetRequest):
-    value = fdb.tuple.pack(
-      (EncodedTypes.KEY_V3,) +
-      tuple(key.Encode() for key in request.key_list()))
-    subspace = tx_dir.subspace((txid, 'lookups'))
-  elif isinstance(request, datastore_pb.DeleteRequest):
-    value = fdb.tuple.pack(
-      (EncodedTypes.KEY_V3,) +
-      tuple(key.Encode() for key in request.key_list()))
-    subspace = tx_dir.subspace((txid, 'deletes'))
-  else:
-    raise BadRequest('Unexpected RPC type')
-
-  put_chunks(tr, value, subspace, add_vs=True)
-
-
-def decode_chunks(chunks, rpc_type):
-  if rpc_type == 'puts':
-    expected_encoding = EncodedTypes.ENTITY_V3
-    pb_class = entity_pb.EntityProto
-  elif rpc_type in ('lookups', 'deletes'):
-    expected_encoding = EncodedTypes.KEY_V3
-    pb_class = entity_pb.Reference
-  else:
-    raise BadRequest('Unexpected RPC type')
-
-  elements = fdb.tuple.unpack(''.join(chunks))
-  if elements[0] != expected_encoding:
-    raise BadRequest('Unexpected encoding')
-
-  return [pb_class(encoded_value) for encoded_value in elements[1:]]

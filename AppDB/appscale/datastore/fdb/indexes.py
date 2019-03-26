@@ -1,6 +1,15 @@
+"""
+indexes: This contains a directory for each index that the datastore needs in
+order to satisfy basic queries along with indexes that the project has defined
+for composite queries. Here is an example template:
+
+  ([index dir^4], <type>, <value>, [path], <commit versionstamp>) -> ''
+"""
+
 import logging
 import sys
 
+import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
@@ -14,18 +23,20 @@ from google.appengine.datastore.datastore_pb import Query_Filter
 
 logger = logging.getLogger(__name__)
 
-INDEX_DIR = 'indexes'
+INDEX_DIR = u'indexes'
+
+KEY_PROP = u'__key__'
 
 
 class V3Types(object):
-  NULL = '0'
-  INT64 = '1'
-  BOOLEAN = '2'
-  STRING = '3'
-  DOUBLE = '4'
-  POINT = '5'
-  USER = '6'
-  REFERENCE = '7'
+  NULL = b'0'
+  INT64 = b'1'
+  BOOLEAN = b'2'
+  STRING = b'3'
+  DOUBLE = b'4'
+  POINT = b'5'
+  USER = b'6'
+  REFERENCE = b'7'
 
 
 COMPOUND_TYPES = (V3Types.POINT, V3Types.USER, V3Types.REFERENCE)
@@ -58,14 +69,15 @@ def group_filters(query):
       raise BadRequest('Each filter must have exactly one property')
 
     prop = query_filter.property(0)
+    prop_name = six.text_type(prop.name())
     filter_info = (query_filter.op(), prop.value())
-    if filter_props and prop.name() == filter_props[-1][0]:
+    if filter_props and prop_name == filter_props[-1][0]:
       filter_props[-1][1].append(filter_info)
     else:
-      filter_props.append((prop.name(), [filter_info]))
+      filter_props.append((prop_name, [filter_info]))
 
   for name, filters in filter_props[:-1]:
-    if name == '__key__':
+    if name == KEY_PROP:
       raise BadRequest('Only the last filter property can be on __key__')
 
     if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
@@ -206,7 +218,7 @@ class Index(object):
     start = None
     stop = None
     for prop_name, filters in filter_props:
-      if prop_name != '__key__':
+      if prop_name != KEY_PROP:
         raise BadRequest('Unexpected filter: {}'.format(prop_name))
 
       if len(filters) == 1 and filters[0][0] == Query_Filter.EQUAL:
@@ -227,7 +239,7 @@ class Index(object):
 
 
 class KindlessIndex(Index):
-  DIR_NAME = 'kindless'
+  DIR_NAME = u'kindless'
 
   @classmethod
   def from_cache(cls, project_id, namespace, directory_cache):
@@ -237,7 +249,7 @@ class KindlessIndex(Index):
 
   def __repr__(self):
     dir_repr = '/'.join([self.project_id, repr(self.namespace)])
-    return 'KindlessIndex({})'.format(dir_repr)
+    return u'KindlessIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
     if isinstance(path, entity_pb.PropertyValue):
@@ -258,7 +270,7 @@ class KindlessIndex(Index):
 
 
 class KindIndex(Index):
-  DIR_NAME = 'kind'
+  DIR_NAME = u'kind'
 
   @classmethod
   def from_cache(cls, project_id, namespace, kind, directory_cache):
@@ -272,7 +284,7 @@ class KindIndex(Index):
 
   def __repr__(self):
     dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind])
-    return 'KindIndex({})'.format(dir_repr)
+    return u'KindIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
     if isinstance(path, entity_pb.PropertyValue):
@@ -296,7 +308,7 @@ class KindIndex(Index):
 
 
 class SinglePropIndex(Index):
-  DIR_NAME = 'single-property'
+  DIR_NAME = u'single-property'
 
   # Allows the decoder to differentiate between the property value and the path
   # when the value has a variable number of elements.
@@ -323,7 +335,7 @@ class SinglePropIndex(Index):
   def __repr__(self):
     dir_repr = '/'.join([self.project_id, repr(self.namespace), self.kind,
                          self.prop_name])
-    return 'SinglePropIndex({})'.format(dir_repr)
+    return u'SinglePropIndex({})'.format(dir_repr)
 
   def encode_value(self, value):
     type_name, encoded_type = get_type(value)
@@ -332,16 +344,22 @@ class SinglePropIndex(Index):
 
     if encoded_type not in COMPOUND_TYPES:
       encoded_value = getattr(value, '{}value'.format(type_name))()
+      if encoded_type == V3Types.STRING:
+        encoded_value = six.text_type(encoded_value)
+
       return encoded_type, encoded_value
 
     if encoded_type == V3Types.POINT:
       return encoded_type, (value.x(), value.y())
 
     if encoded_type == V3Types.USER:
-      return encoded_type, (value.email(), value.auth_domain())
+      return encoded_type, (six.text_type(value.email()),
+                            six.text_type(value.auth_domain()))
 
     if encoded_type == V3Types.REFERENCE:
-      encoded_value = (value.app(), value.name_space()) + flat_path(value)
+      project_id = six.text_type(value.app())
+      namespace = six.text_type(value.name_space())
+      encoded_value = (project_id, namespace) + flat_path(value)
       return (encoded_type,) + encoded_value + (self._DELIMITER,)
 
     raise BadRequest('{} is not a supported value'.format(type_name))
@@ -410,7 +428,7 @@ class SinglePropIndex(Index):
     for prop_name, filters in filter_props:
       if prop_name == self.prop_name:
         encoder = self.encode_value
-      elif prop_name == '__key__':
+      elif prop_name == KEY_PROP:
         encoder = self.encode_path
       else:
         raise BadRequest('Unexpected filter: {}'.format(prop_name))
@@ -433,8 +451,6 @@ class SinglePropIndex(Index):
 
 
 class IndexManager(object):
-  _INDEX_DIR = 'indexes'
-
   _MAX_RESULTS = 300
 
   def __init__(self, directory_cache, tornado_fdb):
@@ -442,8 +458,8 @@ class IndexManager(object):
     self._tornado_fdb = tornado_fdb
 
   def put_entries(self, tr, old_entity, old_vs, new_entity):
-    project_id = new_entity.key().app()
-    namespace = new_entity.key().name_space()
+    project_id = six.text_type(new_entity.key().app())
+    namespace = six.text_type(new_entity.key().name_space())
     path = flat_path(new_entity.key())
     kind = path[-2]
 
@@ -456,16 +472,18 @@ class IndexManager(object):
       del tr[kindless_index.encode(path, old_vs)]
       del tr[kind_index.encode(path, old_vs)]
       for prop in old_entity.property_list():
+        prop_name = six.text_type(prop.name())
         index = SinglePropIndex.from_cache(
-          project_id, namespace, kind, prop.name(), self._directory_cache)
+          project_id, namespace, kind, prop_name, self._directory_cache)
         del tr[index.encode(prop.value(), path, old_vs)]
 
     if new_entity is not None:
       tr.set_versionstamped_key(kindless_index.encode(path), '')
       tr.set_versionstamped_key(kind_index.encode(path), '')
       for prop in new_entity.property_list():
+        prop_name = six.text_type(prop.name())
         index = SinglePropIndex.from_cache(
-          project_id, namespace, kind, prop.name(), self._directory_cache)
+          project_id, namespace, kind, prop_name, self._directory_cache)
         tr.set_versionstamped_key(index.encode(prop.value(), path), '')
 
   def get_reverse(self, query):
@@ -512,17 +530,20 @@ class IndexManager(object):
     return False
 
   def get_iterator(self, tr, query):
+    project_id = six.text_type(query.app())
+    namespace = six.text_type(query.name_space())
     filter_props = group_filters(query)
     if not query.has_kind():
       index = KindlessIndex.from_cache(
-        query.app(), query.name_space(), self._directory_cache)
-    elif all([name == '__key__' for name, _ in filter_props]):
+        project_id, namespace, self._directory_cache)
+    elif all([name == KEY_PROP for name, _ in filter_props]):
       index = KindIndex.from_cache(
-        query.app(), query.name_space(), query.kind(), self._directory_cache)
-    elif sum([name != '__key__' for name, _ in filter_props]) == 1:
+        project_id, namespace, six.text_type(query.kind()),
+        self._directory_cache)
+    elif sum([name != KEY_PROP for name, _ in filter_props]) == 1:
       prop_name, filters = filter_props[0]
       index = SinglePropIndex.from_cache(
-        query.app(), query.name_space(), query.kind(), prop_name,
+        project_id, namespace, six.text_type(query.kind()), prop_name,
         self._directory_cache)
     else:
       raise BadRequest('Query is not supported')

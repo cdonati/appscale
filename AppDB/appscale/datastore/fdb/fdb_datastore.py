@@ -8,28 +8,6 @@ data: encoded entity data
 indexes: entity key references by property values
 transactions: transaction metadata
 
-data: This maps entity keys to encoded entity data. The data is a tuple that
-specifies the version and the encoding. Due to FDB's value size limit, data
-that exceeds the chunk size threshold is split into multiple key-values. The
-index value indicates the position of the chunk. Here is an example template
-along with an example key-value:
-
-  ([directory^1], [path]^2, <vs^3>, <index>) -> (<version>, <encoding>, <data>)
-  ([directory], Greeting, 476633..., <vs>, 0) -> (0, 155284..., <protobuffer>)
-
-indexes: This contains a directory for each index that the datastore needs in
-order to satisfy basic queries along with indexes that the project has defined
-for composite queries. Here is an example template:
-
-  ([index dir^4], <type>, <value>, [path], <commit versionstamp>) -> ''
-
-transactions: This maps transaction handles to metadata that the datastore
-needs in order to handle operations for the transaction. Here are a few example
-entries:
-
-  ([directory^5], <handle id>, read_vs) -> <read versionstamp^6>
-  ([directory], <handle>, lookups, <rpc versionstamp>) -> (<encoding>, <key>)
-
 ^1: A directory located at (appscale, datastore, <project>, data, <namespace>).
 ^2: Items wrapped in "[]" represent multiple elements for brevity.
 ^3: A FoundationDB-generated value specifying the commit versionstamp. It is
@@ -43,17 +21,19 @@ entries:
 import logging
 import sys
 
+import six
 from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
+from appscale.datastore.fdb.data import DataManager
+from appscale.datastore.fdb.indexes import IndexManager
+from appscale.datastore.fdb.transactions import TransactionManager
 from appscale.datastore.fdb.utils import (
-  decode_chunks, DirectoryCache, EncodedTypes, flat_path, fdb, log_request,
-  new_txid, next_entity_version, put_chunks, RangeIterator, ScatteredAllocator,
-  TornadoFDB)
-from appscale.datastore.fdb.index_manager import IndexManager
+  ABSENT_VERSION, DirectoryCache, flat_path, fdb, new_txid,
+  next_entity_version, RangeIterator, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -64,36 +44,32 @@ logger = logging.getLogger(__name__)
 class FDBDatastore(object):
   """ A datastore implementation that uses FoundationDB. """
 
-  # The Cloud Datastore API uses microseconds as version IDs. When the entity
-  # doesn't exist, it reports the version as "1".
-  _ABSENT_VERSION = 1
-
-  _DATA_DIR = 'data'
-
-  _ROOT_DIR = ('appscale', 'datastore')
-
-  _TX_DIR = 'transactions'
-
-  _VERSIONS_DIR = 'versions'
+  _ROOT_DIR = (u'appscale', u'datastore')
 
   def __init__(self):
+    self._data_manager = None
     self._db = None
     self._directory_cache = None
     self._index_manager = None
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
+    self._tx_manager = None
 
   def start(self):
     self._db = fdb.open()
     ds_dir = fdb.directory.create_or_open(self._db, self._ROOT_DIR)
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
+    self._data_manager = DataManager(self._directory_cache, self._tornado_fdb)
     self._index_manager = IndexManager(self._directory_cache,
                                        self._tornado_fdb)
+    self._tx_manager = TransactionManager(self._directory_cache,
+                                          self._tornado_fdb)
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
     logger.debug('put_request:\n{}'.format(put_request))
+    project_id = six.text_type(project_id)
 
     if put_request.auto_id_policy() != put_request.CURRENT:
       raise BadRequest('Sequential allocator is not implemented')
@@ -101,8 +77,7 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
 
     if put_request.has_transaction():
-      tx_dir = self._directory_cache.get((project_id, self._TX_DIR))
-      log_request(tr, tx_dir, put_request)
+      self._tx_manager.log_rpc(tr, project_id, put_request)
       writes = [(entity.key(), None, None)
                 for entity in put_request.entity_list()]
     else:
@@ -124,26 +99,26 @@ class FDBDatastore(object):
   @gen.coroutine
   def dynamic_get(self, project_id, get_request, get_response):
     logger.debug('get_request:\n{}'.format(get_request))
-
+    project_id = six.text_type(project_id)
     tr = self._db.create_transaction()
 
     read_vs = None
     if get_request.has_transaction():
-      tx_dir = self._directory_cache.get((project_id, self._TX_DIR))
-      vs_key = tx_dir.pack((get_request.transaction().handle(), 'read_vs'))
-      read_vs = yield self._tornado_fdb.get(tr, vs_key)
-      log_request(tr, tx_dir, get_request)
+      read_vs = yield self._tx_manager.get_read_vs(
+        tr, project_id, get_request.transaction().handle())
+      self._tx_manager.log_rpc(tr, project_id, get_request)
 
     futures = []
     for key in get_request.key_list():
-      futures.append(self._get(tr, key, read_vs))
+      futures.append(self._data_manager.get_latest(tr, key, read_vs))
 
     results = yield futures
-    for key, entity, version, _ in results:
+    for key, encoded_entity, version, _ in results:
       response_entity = get_response.add_entity()
       response_entity.mutable_key().CopyFrom(key)
       response_entity.set_version(version)
-      if entity is not None:
+      if encoded_entity:
+        entity = entity_pb.EntityProto(encoded_entity)
         response_entity.mutable_entity().CopyFrom(entity)
 
     logger.debug('get_response:\n{}'.format(get_response))
@@ -151,12 +126,11 @@ class FDBDatastore(object):
   @gen.coroutine
   def dynamic_delete(self, project_id, delete_request):
     logger.debug('delete_request:\n{}'.format(delete_request))
-
+    project_id = six.text_type(project_id)
     tr = self._db.create_transaction()
 
     if delete_request.has_transaction():
-      tx_dir = self._directory_cache.get((project_id, self._TX_DIR))
-      log_request(tr, tx_dir, delete_request)
+      self._tx_manager.log_rpc(tr, project_id, delete_request)
       deletes = [(key, None, None) for key in delete_request.key_list()]
     else:
       futures = []
@@ -181,6 +155,7 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
     iterator = self._index_manager.get_iterator(tr, query)
     for prop_name in query.property_name_list():
+      prop_name = six.text_type(prop_name)
       if prop_name not in iterator.index.properties:
         raise BadRequest('Projections on {} are not '
                          'supported'.format(prop_name))
@@ -219,9 +194,6 @@ class FDBDatastore(object):
       if not more_iterator_results:
         break
 
-    for result in results:
-      logger.debug('result: {}'.format(result))
-
     if fetch_data:
       entity_results = yield data_futures
       results = [encoded_entity for version, encoded_entity in entity_results]
@@ -245,28 +217,19 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
-    txid = new_txid()
-    tx_dir = self._directory_cache.get((project_id, self._TX_DIR))
-
+    project_id = six.text_type(project_id)
     tr = self._db.create_transaction()
-    read_vs_key = tx_dir.pack((txid, 'read_vs'))
-    read_vs = yield self._tornado_fdb.get(tr, read_vs_key)
-    if read_vs.present():
-      raise InternalError('The datastore chose an existing txid')
-
-    tr.set_versionstamped_value(read_vs_key, '\xff' * 14)
-    tr[tx_dir.pack((txid, 'xg'))] = '1' if is_xg else '0'
+    txid = yield self._tx_manager.create(tr, project_id, is_xg)
     yield self._tornado_fdb.commit(tr)
-
     logger.debug('created txid: {}'.format(txid))
     raise gen.Return(txid)
 
   @gen.coroutine
   def apply_txn_changes(self, project_id, txid):
+    project_id = six.text_type(project_id)
     tr = self._db.create_transaction()
-    tx_dir = self._directory_cache.get((project_id, self._TX_DIR))
-    read_vs, max_groups, lookups, mutations = yield self._get_tx_metadata(
-      tr, tx_dir, txid)
+    read_vs, xg, lookups, mutations = yield self._tx_manager.get_metadata(
+      tr, project_id, txid)
 
     # Index keys that require a full lookup rather than a versionstamp.
     require_data = set()
@@ -279,8 +242,10 @@ class FDBDatastore(object):
     futures = {}
     for key in lookups:
       encoded_key = key.Encode()
-      futures[encoded_key] = self._get(
-        tr, key, vs_only=(encoded_key in require_data))
+      if encoded_key in require_data:
+        futures[encoded_key] = self._data_manager.get(tr, key)
+      else:
+        futures[encoded_key] = self._data_manager.latest_vs(tr, key)
 
     # Fetch remaining entities that were mutated.
     for mutation in mutations:
@@ -291,8 +256,8 @@ class FDBDatastore(object):
         futures[encoded_key] = self._get(tr, key)
 
     for key in lookups:
-      commit_vs = yield futures[key.Encode()][-1]
-      if commit_vs > read_vs:
+      latest_commit_vs = yield futures[key.Encode()][-1]
+      if latest_commit_vs > read_vs:
         raise ConcurrentModificationException(
           'An entity was modified after this transaction was started.')
 
@@ -317,213 +282,35 @@ class FDBDatastore(object):
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
-    project_id = entity.key().app()
-    namespace = entity.key().name_space()
-    path = flat_path(entity.key())
-    data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
-                                             namespace))
-
-    old_entity, old_version, old_vs = yield self._get_from_range(
-      tr, data_ns_dir.range(path))
+    old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
+      tr, entity.key())
+    if old_encoded:
+      old_entity = entity_pb.EntityProto(old_encoded)
+    else:
+      old_entity = None
 
     # If the datastore chose an ID, don't overwrite existing data.
-    if auto_id and old_version != self._ABSENT_VERSION:
+    if auto_id and old_version != ABSENT_VERSION:
       self._scattered_allocator.invalidate()
       raise InternalError('The datastore chose an existing ID')
 
     new_version = next_entity_version(old_version)
-    self.put_data(tr, entity.key(), new_version, entity.Encode())
+    self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
     self._index_manager.put_entries(tr, old_entity, old_vs, entity)
 
     raise gen.Return((entity.key(), old_version, new_version))
 
   @gen.coroutine
-  def _get(self, tr, key, read_vs=None, vs_only=False):
-    path = flat_path(key)
-
-    project_id = key.app()
-    namespace = key.name_space()
-    data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
-                                             namespace))
-    data_range = data_ns_dir.range(path)
-
-    # Ignore values written after the start of the transaction.
-    if read_vs is not None:
-      data_range = slice(data_range.start, data_ns_dir.pack(path + (read_vs,)))
-
-    if vs_only:
-      commit_vs = yield self._get_from_range(tr, data_range, vs_only=True)
-      raise gen.Return((key, commit_vs))
-    else:
-      entity, version, commit_vs = yield self._get_from_range(tr, data_range)
-      raise gen.Return((key, entity, version, commit_vs))
-
-  @gen.coroutine
   def _delete(self, tr, key):
-    path = flat_path(key)
+    old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
+      tr, key)
 
-    project_id = key.app()
-    namespace = key.name_space()
-    data_ns_dir = self._directory_cache.get((project_id, self._DATA_DIR,
-                                             namespace))
-
-    old_entity, old_version, old_vs = yield self._get_from_range(
-      tr, data_ns_dir.range(path))
-
-    if old_entity is None:
+    if old_encoded is None:
       raise gen.Return((old_version, old_version))
 
+    old_entity = entity_pb.EntityProto(old_encoded)
     new_version = next_entity_version(old_version)
-    self.put_data(tr, key, new_version, '')
+    self._data_manager.put(tr, key, new_version, '')
     self._index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
     raise gen.Return((old_version, new_version))
-
-  def put_data(self, tr, key, version, encoded_entity):
-    data_ns_dir = self._directory_cache.get(
-      (key.app(), self._DATA_DIR, key.name_space()))
-    path = flat_path(key)
-    encoded_value = fdb.tuple.pack((version, EncodedTypes.ENTITY_V3,
-                                    encoded_entity))
-    put_chunks(tr, encoded_value, data_ns_dir.subspace(path), add_vs=True)
-
-  @gen.coroutine
-  def _get_from_range(self, tr, data_range, vs_only=False):
-    entity = None
-    version = self._ABSENT_VERSION
-    commit_vs = 0
-
-    # Select the latest entity version.
-    kvs, count, more_results = yield self._tornado_fdb.get_range(
-      tr, data_range, limit=1, reverse=True)
-
-    if not count:
-      raise gen.Return((entity, version, commit_vs))
-
-    last_chunk = kvs[0]
-    last_key_path = fdb.tuple.unpack(last_chunk.key)
-    index = last_key_path[-1]
-    commit_vs = last_key_path[-2]
-
-    if vs_only:
-      raise gen.Return(commit_vs)
-
-    # If the entity is split into chunks, fetch the rest of the chunks.
-    start_key = fdb.tuple.pack(last_key_path[:-1])
-    end_key = last_chunk.key
-    chunks = [last_chunk.value]
-    iteration = 1
-    while index > 0:
-      remaining_range = slice(start_key, end_key)
-      kvs, count, more_results = yield self._tornado_fdb.get_range(
-        tr, remaining_range, iteration=iteration, reverse=True)
-      if not count:
-        raise InternalError('Incomplete entity record')
-
-      chunks = [kv.value for kv in reversed(kvs)] + chunks
-      end_key = kvs[-1].key
-      iteration += 1
-      index = fdb.tuple.unpack(end_key)[-1]
-
-    version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
-    if not encoded_entity:
-      raise gen.Return((entity, version, commit_vs))
-
-    if encoding != EncodedTypes.ENTITY_V3:
-      raise InternalError('Unknown entity type')
-
-    entity = entity_pb.EntityProto(encoded_entity)
-    raise gen.Return((entity, version, commit_vs))
-
-  @gen.coroutine
-  def _get_encoded(self, tr, entry):
-    data_ns_dir = self._directory_cache.get((entry.project_id, self._DATA_DIR,
-                                             entry.namespace))
-    logger.debug('project_id: {}'.format(entry.project_id))
-    logger.debug('ns: {}'.format(entry.namespace))
-    logger.debug('data_ns_dir: {}'.format(data_ns_dir))
-    data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
-    logger.debug('entry path: {}'.format(entry.path))
-    logger.debug('commit vs: {}'.format(entry.commit_vs))
-    logger.debug('data_range: {}'.format(data_range))
-    iterator = RangeIterator(
-      tr, self._tornado_fdb, data_range,
-      streaming_mode=fdb.StreamingMode.want_all, snapshot=True)
-
-    chunks = []
-    while True:
-      kvs, more_results = yield iterator.next_page()
-      logger.debug('kvs: {}'.format(kvs))
-      chunks.extend([kv.value for kv in kvs])
-      if not more_results:
-        break
-
-    version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
-    if encoding != EncodedTypes.ENTITY_V3:
-      raise InternalError('Unknown entity type')
-
-    raise gen.Return((version, encoded_entity))
-
-  @gen.coroutine
-  def _get_tx_metadata(self, tr, tx_dir, txid):
-    metadata_range = tx_dir.range((txid,))
-
-    read_vs = None
-    xg = None
-    lookups = set()
-    mutations = []
-
-    tmp_chunks = []
-    tmp_rpc_vs = None
-    tmp_rpc_type = None
-
-    iteration = 1
-    start_key = metadata_range.start
-    end_key = metadata_range.stop
-    while True:
-      remaining_range = slice(start_key, end_key)
-      kvs, count, more_results = yield self._tornado_fdb.get_range(
-        tr, remaining_range, streaming_mode=fdb.StreamingMode.want_all,
-        iteration=iteration)
-
-      for index, kv in enumerate(kvs):
-        if index == count - 1:
-          end_key = fdb.KeySelector.first_greater_than(kv.key)
-
-        key_parts = metadata_range.unpack(kv.key)
-        if key_parts[0] == 'read_vs':
-          read_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
-          continue
-
-        if key_parts[0] == 'xg':
-          read_vs = True if kv.value == '1' else False
-          continue
-
-        rpc_type, rpc_vs = key_parts
-        if rpc_vs == tmp_rpc_vs:
-          tmp_chunks.append(kv.value)
-          continue
-
-        if tmp_rpc_type == 'lookups':
-          lookups.update(decode_chunks(tmp_chunks, tmp_rpc_type))
-        elif tmp_rpc_type in ('puts', 'deletes'):
-          mutations.extend(decode_chunks(tmp_chunks, tmp_rpc_type))
-
-        tmp_chunks = [kv.value]
-        tmp_rpc_vs = rpc_vs
-        tmp_rpc_type = rpc_type
-
-      if not more_results:
-        break
-
-      iteration += 1
-
-    if tmp_chunks and tmp_rpc_type == 'lookups':
-      lookups.update(decode_chunks(tmp_chunks, tmp_rpc_type))
-    elif tmp_chunks and tmp_rpc_type in ('puts', 'deletes'):
-      mutations.extend(decode_chunks(tmp_chunks, tmp_rpc_type))
-
-    if read_vs is None or xg is None:
-      raise BadRequest('Transaction not found')
-
-    raise gen.Return((read_vs, lookups, mutations))
