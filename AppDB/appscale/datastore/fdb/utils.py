@@ -2,7 +2,6 @@ import logging
 import random
 import sys
 import time
-import uuid
 
 import fdb
 import six
@@ -13,7 +12,7 @@ from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import datastore_pb, entity_pb
+from google.appengine.datastore import entity_pb
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -299,9 +298,6 @@ def next_entity_version(old_version):
   # Since client timestamps are unreliable, ensure the new version is greater
   # than the old one.
   return max(int(time.time() * 1000 * 1000), old_version + 1)
-
-
-
 
 
 def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):

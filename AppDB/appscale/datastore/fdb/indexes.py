@@ -4,6 +4,10 @@ order to satisfy basic queries along with indexes that the project has defined
 for composite queries. Here is an example template:
 
   ([index dir^4], <type>, <value>, [path], <commit versionstamp>) -> ''
+
+^4: The index's directory path. For example,
+    (appscale, datastore, <project>, indexes, <namespace>, single-property,
+     <kind>, <property name>)
 """
 
 import logging

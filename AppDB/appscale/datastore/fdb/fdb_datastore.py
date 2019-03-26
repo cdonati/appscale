@@ -8,15 +8,6 @@ data: encoded entity data
 indexes: entity key references by property values
 transactions: transaction metadata
 
-^1: A directory located at (appscale, datastore, <project>, data, <namespace>).
-^2: Items wrapped in "[]" represent multiple elements for brevity.
-^3: A FoundationDB-generated value specifying the commit versionstamp. It is
-    used for enforcing consistency.
-^4: The index's directory path. For example,
-    (appscale, datastore, <project>, indexes, <namespace>, single-property,
-     <kind>, <property name>)
-^5: A directory located at (appscale, datastore, <project>, transactions).
-^6: Designates what version of the database read operations should see.
 """
 import logging
 import sys
@@ -32,8 +23,8 @@ from appscale.datastore.fdb.data import DataManager
 from appscale.datastore.fdb.indexes import IndexManager
 from appscale.datastore.fdb.transactions import TransactionManager
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, DirectoryCache, flat_path, fdb, new_txid,
-  next_entity_version, RangeIterator, ScatteredAllocator, TornadoFDB)
+  ABSENT_VERSION, DirectoryCache, fdb, next_entity_version, ScatteredAllocator,
+  TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -179,8 +170,9 @@ class FDBDatastore(object):
       suitable_entries = entries[iter_offset:remainder]
       cursor = entries[:remainder][-1]
       if fetch_data:
-        data_futures.extend([self._get_encoded(tr, entry)
-                             for entry in suitable_entries])
+        data_futures.extend(
+          [self._data_manager.get_entry(tr, entry, snapshot=True)
+           for entry in suitable_entries])
       elif query.keys_only():
         for entry in suitable_entries:
           if entry.path in unique_keys:
@@ -243,7 +235,7 @@ class FDBDatastore(object):
     for key in lookups:
       encoded_key = key.Encode()
       if encoded_key in require_data:
-        futures[encoded_key] = self._data_manager.get(tr, key)
+        futures[encoded_key] = self._data_manager.get_latest(tr, key)
       else:
         futures[encoded_key] = self._data_manager.latest_vs(tr, key)
 
@@ -253,10 +245,13 @@ class FDBDatastore(object):
              else mutation.key())
       encoded_key = key.Encode()
       if encoded_key not in futures:
-        futures[encoded_key] = self._get(tr, key)
+        futures[encoded_key] = self._data_manager.get_latest(tr, key)
 
     for key in lookups:
-      latest_commit_vs = yield futures[key.Encode()][-1]
+      latest_commit_vs = yield futures[key.Encode()]
+      if isinstance(latest_commit_vs, tuple):
+        latest_commit_vs = latest_commit_vs[-1]
+
       if latest_commit_vs > read_vs:
         raise ConcurrentModificationException(
           'An entity was modified after this transaction was started.')
@@ -265,11 +260,15 @@ class FDBDatastore(object):
     for mutation in mutations:
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
-      old_entity, old_version, old_vs = yield futures[key.Encode()][1:]
+      old_encoded, old_version, old_vs = yield futures[key.Encode()][1:]
+      if old_encoded:
+        old_entity = entity_pb.EntityProto(old_encoded)
+      else:
+        old_entity = None
 
       new_version = next_entity_version(old_version)
-      encoded_entity = mutation.Encode() if op == 'put' else ''
-      self.put_data(tr, key, new_version, encoded_entity)
+      new_encoded = mutation.Encode() if op == 'put' else ''
+      self._data_manager.put(tr, key, new_version, new_encoded)
       new_entity = mutation if op == 'put' else None
       self._index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 

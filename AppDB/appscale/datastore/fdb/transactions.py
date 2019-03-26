@@ -5,6 +5,9 @@ entries:
 
   ([directory^5], <handle id>, read_vs) -> <read versionstamp^6>
   ([directory], <handle>, lookups, <rpc versionstamp>) -> (<encoding>, <key>)
+
+^5: A directory located at (appscale, datastore, <project>, transactions).
+^6: Designates what version of the database read operations should see.
 """
 import fdb
 import sys

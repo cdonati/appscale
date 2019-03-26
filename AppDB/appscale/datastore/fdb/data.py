@@ -7,6 +7,11 @@ along with an example key-value:
 
   ([directory^1], [path]^2, <vs^3>, <index>) -> (<version>, <encoding>, <data>)
   ([directory], Greeting, 476633..., <vs>, 0) -> (0, 155284..., <protobuffer>)
+
+^1: A directory located at (appscale, datastore, <project>, data, <namespace>).
+^2: Items wrapped in "[]" represent multiple elements for brevity.
+^3: A FoundationDB-generated value specifying the commit versionstamp. It is
+    used for enforcing consistency.
 """
 import six
 from tornado import gen
@@ -14,6 +19,14 @@ from tornado import gen
 from appscale.datastore.dbconstants import InternalError
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, EncodedTypes, fdb, flat_path, put_chunks, RangeIterator)
+
+
+def from_chunks(chunks):
+  version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
+  if encoding != EncodedTypes.ENTITY_V3:
+    raise InternalError('Unknown entity type')
+
+  return version, encoded_entity
 
 
 class DataManager(object):
@@ -41,21 +54,23 @@ class DataManager(object):
     else:
       chunks = [last_chunk]
 
-    version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
-    if encoding != EncodedTypes.ENTITY_V3:
-      raise InternalError('Unknown entity type')
-
+    version, encoded_entity = from_chunks(chunks)
     raise gen.Return((key, encoded_entity, version, commit_vs))
 
-  def get_version(self, tr, key, commit_vs, snapshot):
+  @gen.coroutine
+  def get_entry(self, tr, entry, snapshot):
+    data_ns_dir = self._directory_cache.get(
+      (entry.project_id, self.DIRECTORY, entry.namespace))
+    data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
+    chunks = yield self._get_range(tr, data_range, snapshot)
+    raise gen.Return(from_chunks(chunks))
+
+  @gen.coroutine
+  def get_version(self, tr, key, commit_vs):
     path_subspace = self._subspace_from_key(key)
     vs_subspace = path_subspace.subspace((commit_vs,))
-    chunks = yield self._get_range(tr, vs_subspace.range(), snapshot)
-    version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
-    if encoding != EncodedTypes.ENTITY_V3:
-      raise InternalError('Unknown entity type')
-
-    raise gen.Return((version, encoded_entity))
+    chunks = yield self._get_range(tr, vs_subspace.range())
+    raise gen.Return(from_chunks(chunks))
 
   @gen.coroutine
   def latest_vs(self, tr, key):
