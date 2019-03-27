@@ -189,6 +189,7 @@ class TornadoFDB(object):
 class RangeIterator(object):
   def __init__(self, tr, tornado_fdb, key_slice, limit=0, reverse=False,
                streaming_mode=fdb.StreamingMode.iterator, snapshot=False):
+    self.done_with_range = False
     self._tr = tr
     self._tornado_fdb = tornado_fdb
 
@@ -201,18 +202,18 @@ class RangeIterator(object):
     self._esel = key_slice.stop
     self._fetched = 0
     self._iteration = 1
-    self._cache = []
     self._index = 0
     self._done = False
 
-  @property
-  def cache_exhausted(self):
-    return self._index == len(self._cache)
+  def increase_limit(self, difference=1):
+    if not self.done_with_range:
+      self._limit += difference
+      self._done = False
 
   @gen.coroutine
   def next_page(self):
     if self._done:
-      raise gen.Return(([], not self._done))
+      raise gen.Return(([], False))
 
     tmp_limit = 0
     if self._limit > 0:
@@ -223,32 +224,20 @@ class RangeIterator(object):
       self._iteration, self._reverse, self._snapshot)
     self._fetched += count
 
-    if more and self._fetched < self._limit:
-      self._iteration += 1
-      if self._reverse:
-        self._esel = fdb.KeySelector.first_greater_or_equal(kvs[-1].key)
+    if self._fetched < self._limit:
+      if not more:
+        self.done_with_range = True
+        self._done = True
       else:
-        self._bsel = fdb.KeySelector.first_greater_than(kvs[-1].key)
+        self._iteration += 1
+        if self._reverse:
+          self._esel = fdb.KeySelector.first_greater_or_equal(kvs[-1].key)
+        else:
+          self._bsel = fdb.KeySelector.first_greater_than(kvs[-1].key)
     else:
       self._done = True
 
     raise gen.Return((kvs, not self._done))
-
-  @gen.coroutine
-  def next(self):
-    if self._done and self.cache_exhausted:
-      return
-
-    if self.cache_exhausted:
-      self._cache = yield self.next_page()[0]
-      self._index = 0
-
-    if not self._cache:
-      return
-
-    result = self._cache[self._index]
-    self._index += 1
-    raise gen.Return(result)
 
 
 def flat_path(key):

@@ -30,7 +30,9 @@ def from_chunks(chunks):
 
 
 class DataManager(object):
-  DIRECTORY = u'data'
+  DATA_DIR = u'data'
+
+  GROUP_UPDATES_DIR = u'group-updates'
 
   def __init__(self, directory_cache, tornado_fdb):
     self._directory_cache = directory_cache
@@ -60,7 +62,7 @@ class DataManager(object):
   @gen.coroutine
   def get_entry(self, tr, entry, snapshot):
     data_ns_dir = self._directory_cache.get(
-      (entry.project_id, self.DIRECTORY, entry.namespace))
+      (entry.project_id, self.DATA_DIR, entry.namespace))
     data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
     chunks = yield self._get_range(tr, data_range, snapshot)
     raise gen.Return(from_chunks(chunks))
@@ -78,18 +80,35 @@ class DataManager(object):
     _, commit_vs, _ = yield self._last_chunk(tr, path_subspace)
     raise gen.Return(commit_vs)
 
+  @gen.coroutine
+  def last_commit(self, tr, project_id, namespace, group_path):
+    group_ns_dir = self._directory_cache.get(
+      (project_id, self.GROUP_UPDATES_DIR, namespace))
+    group_key = group_ns_dir.pack((project_id, namespace) + group_path)
+    last_updated_vs = yield self._tornado_fdb.get(tr, group_key)
+    raise gen.Return(last_updated_vs)
+
   def put(self, tr, key, version, encoded_entity):
     path_subspace = self._subspace_from_key(key)
     encoded_value = fdb.tuple.pack((version, EncodedTypes.ENTITY_V3,
                                     encoded_entity))
     put_chunks(tr, encoded_value, path_subspace, add_vs=True)
+    tr.set_versionstamped_value(self._group_key(key), b'\x00' * 14)
+
+  def _group_key(self, key):
+    project_id = six.text_type(key.app())
+    namespace = six.text_type(key.name_space())
+    group_path = flat_path(key)[:2]
+    group_ns_dir = self._directory_cache.get(
+      (project_id, self.GROUP_UPDATES_DIR, namespace))
+    return group_ns_dir.pack((project_id, namespace) + group_path)
 
   def _subspace_from_key(self, key):
     project_id = six.text_type(key.app())
     namespace = six.text_type(key.name_space())
     path = flat_path(key)
     data_ns_dir = self._directory_cache.get(
-      (project_id, self.DIRECTORY, namespace))
+      (project_id, self.DATA_DIR, namespace))
     return data_ns_dir.subspace(path)
 
   @gen.coroutine

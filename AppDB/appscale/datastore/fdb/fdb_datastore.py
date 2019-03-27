@@ -139,12 +139,18 @@ class FDBDatastore(object):
   @gen.coroutine
   def _dynamic_run_query(self, query, query_result):
     logger.debug('query: {}'.format(query))
+    project_id = six.text_type(query.app())
+    tr = self._db.create_transaction()
+    read_vs = None
+    if query.has_transaction():
+      read_vs = yield self._tx_manager.get_read_vs(
+        tr, project_id, query.transaction().handle())
+      self._tx_manager.log_query(tr, project_id, query)
 
     fetch_data = self._index_manager.include_data(query)
     rpc_limit, check_more_results = self._index_manager.rpc_limit(query)
 
-    tr = self._db.create_transaction()
-    iterator = self._index_manager.get_iterator(tr, query)
+    iterator = self._index_manager.get_iterator(tr, query, read_vs)
     for prop_name in query.property_name_list():
       prop_name = six.text_type(prop_name)
       if prop_name not in iterator.index.properties:
@@ -220,8 +226,12 @@ class FDBDatastore(object):
   def apply_txn_changes(self, project_id, txid):
     project_id = six.text_type(project_id)
     tr = self._db.create_transaction()
-    read_vs, xg, lookups, mutations = yield self._tx_manager.get_metadata(
-      tr, project_id, txid)
+    tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
+    read_vs, xg, lookups, queried_groups, mutations = tx_metadata
+
+    group_update_futures = [
+      self._data_manager.last_commit(tr, project_id, namespace, group_path)
+      for namespace, group_path in queried_groups]
 
     # Index keys that require a full lookup rather than a versionstamp.
     require_data = set()
@@ -246,6 +256,11 @@ class FDBDatastore(object):
       encoded_key = key.Encode()
       if encoded_key not in futures:
         futures[encoded_key] = self._data_manager.get_latest(tr, key)
+
+    group_updates = yield group_update_futures
+    if any(commit_vs > read_vs for commit_vs in group_updates):
+      raise ConcurrentModificationException(
+        'A queried group was modified after this transaction was started.')
 
     for key in lookups:
       latest_commit_vs = yield futures[key.Encode()]

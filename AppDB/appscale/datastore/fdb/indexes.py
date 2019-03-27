@@ -108,11 +108,12 @@ def key_selector(op):
 class IndexEntry(object):
   __SLOTS__ = ['project_id', 'namespace', 'path', 'commit_vs']
 
-  def __init__(self, project_id, namespace, path, commit_vs):
+  def __init__(self, project_id, namespace, path, commit_vs, deleted_vs):
     self.project_id = project_id
     self.namespace = namespace
     self.path = path
     self.commit_vs = commit_vs
+    self.deleted_vs = deleted_vs
 
   @property
   def key(self):
@@ -152,8 +153,10 @@ class IndexEntry(object):
 class PropertyEntry(IndexEntry):
   __SLOTS__ = ['prop_name', 'value']
 
-  def __init__(self, project_id, namespace, path, prop_name, value, commit_vs):
-    super(PropertyEntry, self).__init__(project_id, namespace, path, commit_vs)
+  def __init__(self, project_id, namespace, path, prop_name, value, commit_vs,
+               deleted_vs):
+    super(PropertyEntry, self).__init__(project_id, namespace, path, commit_vs,
+                                        deleted_vs)
     self.prop_name = prop_name
     self.value = value
 
@@ -180,14 +183,38 @@ class PropertyEntry(IndexEntry):
 
 
 class IndexIterator(object):
-  def __init__(self, index, kv_iterator):
+  def __init__(self, tr, tornado_fdb, desired_slice, limit, reverse, index,
+               read_vs=None):
+    self._kv_iterator = RangeIterator(tr, tornado_fdb, desired_slice, limit,
+                                      reverse, snapshot=True)
     self.index = index
-    self._kv_iterator = kv_iterator
+    self._read_vs = read_vs
 
   @gen.coroutine
   def next_page(self):
     kvs, more_results = yield self._kv_iterator.next_page()
-    raise gen.Return(([self.index.decode(kv) for kv in kvs], more_results))
+    usable_entries = []
+    for kv in kvs:
+      if self._read_vs is None and kv.value:
+        self._kv_iterator.increase_limit()
+        more_results = not self._kv_iterator.done_with_range
+        continue
+
+      entry = self.index.decode(kv)
+      if self._read_vs is not None and entry.commit_vs > self._read_vs:
+        self._kv_iterator.increase_limit()
+        more_results = not self._kv_iterator.done_with_range
+        continue
+
+      if (self._read_vs is not None and entry.deleted_vs is not None and
+          entry.deleted_vs < self._read_vs):
+        self._kv_iterator.increase_limit()
+        more_results = not self._kv_iterator.done_with_range
+        continue
+
+      usable_entries.append(entry)
+
+    raise gen.Return((usable_entries, more_results))
 
 
 class Index(object):
@@ -269,8 +296,12 @@ class KindlessIndex(Index):
 
   def decode(self, kv):
     parts = self.directory.unpack(kv.key)
+    deleted_vs = None
+    if kv.value:
+      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+
     return IndexEntry(self.project_id, self.namespace, path=parts[:-1],
-                      commit_vs=parts[-1])
+                      commit_vs=parts[-1], deleted_vs=deleted_vs)
 
 
 class KindIndex(Index):
@@ -307,8 +338,12 @@ class KindIndex(Index):
     parts = self.directory.unpack(kv.key)
     kindless_path = parts[:-1]
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
+    deleted_vs = None
+    if kv.value:
+      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+
     return IndexEntry(self.project_id, self.namespace, path=path,
-                      commit_vs=parts[-1])
+                      commit_vs=parts[-1], deleted_vs=deleted_vs)
 
 
 class SinglePropIndex(Index):
@@ -422,8 +457,12 @@ class SinglePropIndex(Index):
     value, remainder = self.pop_value(unpacked_key)
     kindless_path = remainder[:-1]
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
+    deleted_vs = None
+    if kv.value:
+      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
-                         value, commit_vs=remainder[-1])
+                         value, commit_vs=remainder[-1], deleted_vs=deleted_vs)
 
   def get_slice(self, filter_props):
     subspace = self.directory
@@ -473,22 +512,25 @@ class IndexManager(object):
       project_id, namespace, kind, self._directory_cache)
 
     if old_entity is not None:
-      del tr[kindless_index.encode(path, old_vs)]
-      del tr[kind_index.encode(path, old_vs)]
+      tr.set_versionstamped_value(kindless_index.encode(path, old_vs),
+                                  b'\x00' * 14)
+      tr.set_versionstamped_value(kind_index.encode(path, old_vs),
+                                  b'\x00' * 14)
       for prop in old_entity.property_list():
         prop_name = six.text_type(prop.name())
         index = SinglePropIndex.from_cache(
           project_id, namespace, kind, prop_name, self._directory_cache)
-        del tr[index.encode(prop.value(), path, old_vs)]
+        tr.set_versionstamped_value(index.encode(prop.value(), path, old_vs),
+                                    b'\x00' * 14)
 
     if new_entity is not None:
-      tr.set_versionstamped_key(kindless_index.encode(path), '')
-      tr.set_versionstamped_key(kind_index.encode(path), '')
+      tr.set_versionstamped_key(kindless_index.encode(path), b'')
+      tr.set_versionstamped_key(kind_index.encode(path), b'')
       for prop in new_entity.property_list():
         prop_name = six.text_type(prop.name())
         index = SinglePropIndex.from_cache(
           project_id, namespace, kind, prop_name, self._directory_cache)
-        tr.set_versionstamped_key(index.encode(prop.value(), path), '')
+        tr.set_versionstamped_key(index.encode(prop.value(), path), b'')
 
   def get_reverse(self, query):
     if not query.order_list():
@@ -533,7 +575,7 @@ class IndexManager(object):
 
     return False
 
-  def get_iterator(self, tr, query):
+  def get_iterator(self, tr, query, read_vs=None):
     project_id = six.text_type(query.app())
     namespace = six.text_type(query.name_space())
     filter_props = group_filters(query)
@@ -550,6 +592,11 @@ class IndexManager(object):
         project_id, namespace, six.text_type(query.kind()), prop_name,
         self._directory_cache)
     else:
+      index_to_use = _FindIndexToUse(query, self.get_indexes(app_id))
+      if index_to_use is not None:
+        result = yield self.composite_v2(query, filter_info, index_to_use)
+        raise gen.Return(result)
+
       raise BadRequest('Query is not supported')
 
     reverse = self.get_reverse(query)
@@ -559,8 +606,7 @@ class IndexManager(object):
     if check_more_results:
       fetch_limit += 1
 
-    kv_iterator = RangeIterator(tr, self._tornado_fdb, desired_slice,
-                                fetch_limit, reverse, snapshot=True)
-    iterator = IndexIterator(index, kv_iterator)
+    iterator = IndexIterator(tr, self._tornado_fdb, desired_slice, fetch_limit,
+                             reverse, index, read_vs)
     logger.debug('using index: {}'.format(index))
     return iterator

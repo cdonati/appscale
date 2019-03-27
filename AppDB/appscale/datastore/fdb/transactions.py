@@ -11,14 +11,15 @@ entries:
 """
 import fdb
 import sys
-import  uuid
+import uuid
 
+import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.utils import (
-  EncodedTypes, put_chunks, RangeIterator)
+  EncodedTypes, flat_path, put_chunks, RangeIterator)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
@@ -28,8 +29,9 @@ class MetadataKeys(object):
   READ_VS = b'0'
   XG = b'1'
   LOOKUPS = b'2'
-  PUTS = b'3'
-  DELETES = b'4'
+  QUERIES = b'3'
+  PUTS = b'4'
+  DELETES = b'5'
 
 
 def decode_chunks(chunks, rpc_type):
@@ -65,8 +67,8 @@ class TransactionManager(object):
     if read_vs.present():
       raise InternalError('The datastore chose an existing txid')
 
-    tr.set_versionstamped_value(read_vs_key, '\xff' * 14)
-    tr[tx_dir.pack((txid, MetadataKeys.XG))] = '1' if is_xg else '0'
+    tr.set_versionstamped_value(read_vs_key, b'\x00' * 14)
+    tr[tx_dir.pack((txid, MetadataKeys.XG))] = b'1' if is_xg else b'0'
     raise gen.Return(txid)
 
   @gen.coroutine
@@ -77,7 +79,7 @@ class TransactionManager(object):
     if not read_vs.present():
       raise BadRequest('Transaction does not exist')
 
-    raise gen.Return(read_vs)
+    raise gen.Return(fdb.tuple.Versionstamp.from_bytes(read_vs))
 
   def log_rpc(self, tr, project_id, request):
     txid = request.transaction.handle()
@@ -102,6 +104,18 @@ class TransactionManager(object):
 
     put_chunks(tr, value, subspace, add_vs=True)
 
+  def log_query(self, tr, project_id, query):
+    txid = query.transaction.handle()
+    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
+    namespace = six.text_type(query.name_space())
+    if not query.has_ancestor():
+      raise BadRequest('Queries in a transaction must specify an ancestor')
+
+    group_path = flat_path(query.ancestor())[:2]
+    key = tx_dir.pack_with_versionstamp(
+      (txid, MetadataKeys.QUERIES, fdb.tuple.Versionstamp()))
+    tr.set_versionstamped_key(key, fdb.tuple.pack((namespace,) + group_path))
+
   @gen.coroutine
   def get_metadata(self, tr, project_id, txid):
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
@@ -110,6 +124,7 @@ class TransactionManager(object):
     read_vs = None
     xg = None
     lookups = set()
+    queried_groups = set()
     mutations = []
 
     tmp_chunks = []
@@ -121,15 +136,23 @@ class TransactionManager(object):
       kvs, more_results = iterator.next_page()
       for kv in kvs:
         key_parts = metadata_range.unpack(kv.key)
-        if key_parts[0] == MetadataKeys.READ_VS:
+        metadata_key = key_parts[0]
+        if metadata_key == MetadataKeys.READ_VS:
           read_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
           continue
 
-        if key_parts[0] == MetadataKeys.XG:
+        if metadata_key == MetadataKeys.XG:
           read_vs = kv.value == '1'
           continue
 
-        rpc_type, rpc_vs = key_parts
+        if metadata_key == MetadataKeys.QUERIES:
+          unpacked_value = fdb.tuple.unpack(kv.value)
+          namespace = unpacked_value[0]
+          group_path = unpacked_value[1:]
+          queried_groups.add((namespace, group_path))
+          continue
+
+        rpc_vs = key_parts[1]
         if rpc_vs == tmp_rpc_vs:
           tmp_chunks.append(kv.value)
           continue
@@ -141,7 +164,7 @@ class TransactionManager(object):
 
         tmp_chunks = [kv.value]
         tmp_rpc_vs = rpc_vs
-        tmp_rpc_type = rpc_type
+        tmp_rpc_type = metadata_key
 
       if not more_results:
         break
@@ -155,4 +178,4 @@ class TransactionManager(object):
     if read_vs is None or xg is None:
       raise BadRequest('Transaction not found')
 
-    raise gen.Return((read_vs, xg, lookups, mutations))
+    raise gen.Return((read_vs, xg, lookups, queried_groups, mutations))
