@@ -158,8 +158,7 @@ class FDBDatastore(object):
                          'supported'.format(prop_name))
 
     data_futures = [] if fetch_data else None
-    unique_keys = set() if query.keys_only() else None
-
+    unique_keys = set()
     results = []
     entries_fetched = 0
     skipped_results = 0
@@ -170,27 +169,29 @@ class FDBDatastore(object):
       entries, more_iterator_results = yield iterator.next_page()
       entries_fetched += len(entries)
       if not entries:
-        break
+        if more_iterator_results:
+          continue
+        else:
+          break
 
       skipped_results += min(entries_fetched, iter_offset)
       suitable_entries = entries[iter_offset:remainder]
       cursor = entries[:remainder][-1]
-      if fetch_data:
-        data_futures.extend(
-          [self._data_manager.get_entry(tr, entry, snapshot=True)
-           for entry in suitable_entries])
-      elif query.keys_only():
-        for entry in suitable_entries:
-          if entry.path in unique_keys:
-            continue
 
-          results.append(entry.key_result())
-          unique_keys.add(entry.path)
-      else:
+      if not fetch_data and not query.keys_only():
         results.extend([entry.prop_result() for entry in suitable_entries])
+        continue
 
-      if not more_iterator_results:
-        break
+      for entry in suitable_entries:
+        if entry.path in unique_keys:
+          continue
+
+        unique_keys.add(entry.path)
+        if fetch_data:
+          data_futures.append(
+            self._data_manager.get_entry(tr, entry, snapshot=True))
+        else:
+          results.append(entry.key_result())
 
     if fetch_data:
       entity_results = yield data_futures

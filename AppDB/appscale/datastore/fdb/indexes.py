@@ -23,7 +23,7 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
-from google.appengine.datastore.datastore_pb import Query_Filter
+from google.appengine.datastore.datastore_pb import Query_Filter, Query_Order
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,33 @@ def get_type_name(encoded_type):
 
 def group_filters(query):
   filter_props = []
+  for query_filter in query.filter_list():
+    if query_filter.property_size() != 1:
+      raise BadRequest('Each filter must have exactly one property')
+
+    prop = query_filter.property(0)
+    prop_name = six.text_type(prop.name())
+    filter_info = (query_filter.op(), prop.value())
+    if filter_props and prop_name == filter_props[-1][0]:
+      filter_props[-1][1].append(filter_info)
+    else:
+      filter_props.append((prop_name, [filter_info]))
+
+  for name, filters in filter_props[:-1]:
+    if name == KEY_PROP:
+      raise BadRequest('Only the last filter property can be on __key__')
+
+    if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
+      raise BadRequest('All but the last property must be equality filters')
+
+  if len(filter_props[-1][1]) > 2:
+    raise BadRequest('A property can only have up to two filters')
+
+  return filter_props
+
+
+def get_order_info(query):
+  order_info = []
   for query_filter in query.filter_list():
     if query_filter.property_size() != 1:
       raise BadRequest('Each filter must have exactly one property')
@@ -189,9 +216,13 @@ class IndexIterator(object):
                                       reverse, snapshot=True)
     self.index = index
     self._read_vs = read_vs
+    self._done = False
 
   @gen.coroutine
   def next_page(self):
+    if self._done:
+      raise gen.Return(([], False))
+
     kvs, more_results = yield self._kv_iterator.next_page()
     usable_entries = []
     for kv in kvs:
@@ -213,6 +244,9 @@ class IndexIterator(object):
         continue
 
       usable_entries.append(entry)
+
+    if not more_results:
+      self._done = True
 
     raise gen.Return((usable_entries, more_results))
 
@@ -576,29 +610,7 @@ class IndexManager(object):
     return False
 
   def get_iterator(self, tr, query, read_vs=None):
-    project_id = six.text_type(query.app())
-    namespace = six.text_type(query.name_space())
-    filter_props = group_filters(query)
-    if not query.has_kind():
-      index = KindlessIndex.from_cache(
-        project_id, namespace, self._directory_cache)
-    elif all([name == KEY_PROP for name, _ in filter_props]):
-      index = KindIndex.from_cache(
-        project_id, namespace, six.text_type(query.kind()),
-        self._directory_cache)
-    elif sum([name != KEY_PROP for name, _ in filter_props]) == 1:
-      prop_name, filters = filter_props[0]
-      index = SinglePropIndex.from_cache(
-        project_id, namespace, six.text_type(query.kind()), prop_name,
-        self._directory_cache)
-    else:
-      index_to_use = _FindIndexToUse(query, self.get_indexes(app_id))
-      if index_to_use is not None:
-        result = yield self.composite_v2(query, filter_info, index_to_use)
-        raise gen.Return(result)
-
-      raise BadRequest('Query is not supported')
-
+    index = self.get_perfect_index(query)
     reverse = self.get_reverse(query)
     desired_slice = index.get_slice(filter_props)
     rpc_limit, check_more_results = self.rpc_limit(query)
@@ -610,3 +622,38 @@ class IndexManager(object):
                              reverse, index, read_vs)
     logger.debug('using index: {}'.format(index))
     return iterator
+
+  def get_perfect_index(self, query):
+    project_id = six.text_type(query.app())
+    namespace = six.text_type(query.name_space())
+    filter_props = group_filters(query)
+    all_props = ({name for name, _ in filter_props} |
+                 {order.property() for order in query.order_list()})
+
+    if not query.has_kind():
+      if not all(prop_name == KEY_PROP for prop_name in all_props):
+        raise BadRequest('kind must be specified when filtering or ordering '
+                         'properties other than __key__')
+
+      return KindlessIndex.from_cache(
+        project_id, namespace, self._directory_cache)
+
+    if all(prop_name == KEY_PROP for prop_name in all_props):
+      return KindIndex.from_cache(
+        project_id, namespace, six.text_type(query.kind()),
+        self._directory_cache)
+
+    if sum(prop_name != KEY_PROP for prop_name in all_props) == 1:
+      if
+      prop_name, filters = filter_props[0]
+      index = SinglePropIndex.from_cache(
+        project_id, namespace, six.text_type(query.kind()), prop_name,
+        self._directory_cache)
+    else:
+      index_to_use = _FindIndexToUse(query, self.get_indexes(app_id))
+      if index_to_use is not None:
+        # result = yield self.composite_v2(query, filter_info, index_to_use)
+        raise gen.Return(result)
+
+    return None
+      raise BadRequest('Query is not supported')

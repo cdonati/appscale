@@ -98,3 +98,4 @@ make sure tmp_chunks works correctly
 ---
 
 remove txid handle mapping (do it in the api server)
+support IN and EXISTS filters
