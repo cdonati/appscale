@@ -99,3 +99,7 @@ make sure tmp_chunks works correctly
 
 remove txid handle mapping (do it in the api server)
 support IN and EXISTS filters
+add tests for functionality that doesn't work in current datastore
+ - snapshot isolation
+ - queries with different levels of ancestors
+ - prop order (empty values)

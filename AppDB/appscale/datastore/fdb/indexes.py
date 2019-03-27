@@ -84,7 +84,7 @@ def group_filters(query):
     if name == KEY_PROP:
       raise BadRequest('Only the last filter property can be on __key__')
 
-    if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
+    if len(filters) != 1 or filters[0][0] != Query_Filter.EQUAL:
       raise BadRequest('All but the last property must be equality filters')
 
   if len(filter_props[-1][1]) > 2:
@@ -94,30 +94,27 @@ def group_filters(query):
 
 
 def get_order_info(query):
+  filter_props = group_filters(query)
+
+  # Orders on equality filters can be ignored.
+  equality_props = [prop_name for prop_name, filters in filter_props
+                    if filters[0][0] == Query_Filter.EQUAL]
+  relevant_orders = [order for order in query.order_list()
+                     if order.property() not in equality_props]
+
   order_info = []
-  for query_filter in query.filter_list():
-    if query_filter.property_size() != 1:
-      raise BadRequest('Each filter must have exactly one property')
+  for prop_name, filters in filter_props:
+    direction = next(
+      (order.direction() for order in relevant_orders
+       if order.property() == prop_name), Query_Order.ASCENDING)
+    order_info.append((prop_name, direction))
 
-    prop = query_filter.property(0)
-    prop_name = six.text_type(prop.name())
-    filter_info = (query_filter.op(), prop.value())
-    if filter_props and prop_name == filter_props[-1][0]:
-      filter_props[-1][1].append(filter_info)
-    else:
-      filter_props.append((prop_name, [filter_info]))
+  filter_prop_names = [prop_name for prop_name, _ in filter_props]
+  order_info.extend(
+    [(order.property(), order.direction()) for order in relevant_orders
+     if order.property() not in filter_prop_names])
 
-  for name, filters in filter_props[:-1]:
-    if name == KEY_PROP:
-      raise BadRequest('Only the last filter property can be on __key__')
-
-    if len(filters) != 1 or filters[0][0] != datastore_pb.Query_Filter.EQUAL:
-      raise BadRequest('All but the last property must be equality filters')
-
-  if len(filter_props[-1][1]) > 2:
-    raise BadRequest('A property can only have up to two filters')
-
-  return filter_props
+  return order_info
 
 
 def key_selector(op):
@@ -626,24 +623,23 @@ class IndexManager(object):
   def get_perfect_index(self, query):
     project_id = six.text_type(query.app())
     namespace = six.text_type(query.name_space())
-    filter_props = group_filters(query)
-    all_props = ({name for name, _ in filter_props} |
-                 {order.property() for order in query.order_list()})
+    order_info = get_order_info(query)
+    prop_names = [prop_name for prop_name, _ in order_info]
 
     if not query.has_kind():
-      if not all(prop_name == KEY_PROP for prop_name in all_props):
+      if not all(prop_name == KEY_PROP for prop_name in prop_names):
         raise BadRequest('kind must be specified when filtering or ordering '
                          'properties other than __key__')
 
       return KindlessIndex.from_cache(
         project_id, namespace, self._directory_cache)
 
-    if all(prop_name == KEY_PROP for prop_name in all_props):
+    kind = six.text_type(query.kind())
+    if all(prop_name == KEY_PROP for prop_name in prop_names):
       return KindIndex.from_cache(
-        project_id, namespace, six.text_type(query.kind()),
-        self._directory_cache)
+        project_id, namespace, kind, self._directory_cache)
 
-    if sum(prop_name != KEY_PROP for prop_name in all_props) == 1:
+    if sum(prop_name != KEY_PROP for prop_name in prop_names) == 1:
       if
       prop_name, filters = filter_props[0]
       index = SinglePropIndex.from_cache(
