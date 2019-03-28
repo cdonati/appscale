@@ -52,7 +52,7 @@ class FDBDatastore(object):
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
     self._data_manager = DataManager(self._directory_cache, self._tornado_fdb)
-    self._index_manager = IndexManager(self._directory_cache,
+    self._index_manager = IndexManager(self._db, self._directory_cache,
                                        self._tornado_fdb)
     self._tx_manager = TransactionManager(self._directory_cache,
                                           self._tornado_fdb)
@@ -289,6 +289,11 @@ class FDBDatastore(object):
       self._index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 
     yield self._tornado_fdb.commit(tr)
+
+  @gen.coroutine
+  def update_composite_index(self, project_id, index):
+    project_id = six.text_type(project_id)
+    yield self._index_manager.update_composite_index(project_id, index)
 
   @gen.coroutine
   def _upsert(self, tr, entity):

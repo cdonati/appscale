@@ -922,7 +922,10 @@ def main():
 
   index_manager = IndexManager(zk_client, datastore_access,
                                perform_admin=True)
-  datastore_access.index_manager = index_manager
+  if args.type == 'cassandra':
+    datastore_access.index_manager = index_manager
+  else:
+    datastore_access.index_manager.composite_index_manager = index_manager
 
   server = tornado.httpserver.HTTPServer(pb_application)
   server.listen(args.port)

@@ -99,7 +99,11 @@ make sure tmp_chunks works correctly
 
 remove txid handle mapping (do it in the api server)
 support IN and EXISTS filters
+test invalidation for ancestor queries (does GAE invalidate for queries in the
+whole group, or can it deal with ranges?)
 add tests for functionality that doesn't work in current datastore
  - snapshot isolation
  - queries with different levels of ancestors
  - prop order (empty values)
+support advanced queries: https://cloud.google.com/appengine/articles/indexselection
+test if prop result (projection) specifies group
