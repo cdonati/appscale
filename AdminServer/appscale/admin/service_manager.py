@@ -144,7 +144,7 @@ class DatastoreServer(Server):
   """ Keeps track of the status and location of a datastore server. """
 
   # The datastore backend.
-  DATASTORE_TYPE = 'cassandra'
+  DATASTORE_TYPE = 'fdb'
 
   # The cgroup slice used to start datastore server processes.
   SLICE = 'appscale-datastore'
