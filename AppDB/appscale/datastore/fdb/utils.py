@@ -1,18 +1,10 @@
 import logging
 import random
-import sys
 import time
 
 import fdb
-import six
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
-
-from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.dbconstants import BadRequest
-
-sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import entity_pb
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -34,19 +26,11 @@ CHUNK_SIZE = 10000
 
 
 class EncodedTypes(object):
-  ENTITY_V3 = b'0'
-  KEY_V3 = b'1'
+  ENTITY_V3 = b'\x00'
+  KEY_V3 = b'\x01'
 
 
 def ReverseBitsInt64(v):
-  """Reverse the bits of a 64-bit integer.
-
-  Args:
-    v: Input integer of type 'int' or 'long'.
-
-  Returns:
-    Bit-reversed input as 'int' on 64-bit machines or as 'long' otherwise.
-  """
   v = ((v >> 1) & 0x5555555555555555) | ((v & 0x5555555555555555) << 1)
   v = ((v >> 2) & 0x3333333333333333) | ((v & 0x3333333333333333) << 2)
   v = ((v >> 4) & 0x0F0F0F0F0F0F0F0F) | ((v & 0x0F0F0F0F0F0F0F0F) << 4)

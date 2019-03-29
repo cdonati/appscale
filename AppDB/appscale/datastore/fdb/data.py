@@ -17,8 +17,9 @@ import six
 from tornado import gen
 
 from appscale.datastore.dbconstants import InternalError
+from appscale.datastore.fdb.codecs import encode_path
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, EncodedTypes, fdb, flat_path, put_chunks, KVIterator)
+  ABSENT_VERSION, EncodedTypes, fdb, put_chunks, KVIterator)
 
 
 def from_chunks(chunks):
@@ -98,7 +99,7 @@ class DataManager(object):
   def _group_key(self, key):
     project_id = six.text_type(key.app())
     namespace = six.text_type(key.name_space())
-    group_path = flat_path(key)[:2]
+    group_path = encode_path(key.path())[:2]
     group_ns_dir = self._directory_cache.get(
       (project_id, self.GROUP_UPDATES_DIR, namespace))
     return group_ns_dir.pack((project_id, namespace) + group_path)
@@ -106,7 +107,7 @@ class DataManager(object):
   def _subspace_from_key(self, key):
     project_id = six.text_type(key.app())
     namespace = six.text_type(key.name_space())
-    path = flat_path(key)
+    path = encode_path(key.path())
     data_ns_dir = self._directory_cache.get(
       (project_id, self.DATA_DIR, namespace))
     return data_ns_dir.subspace(path)

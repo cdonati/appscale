@@ -19,6 +19,27 @@ class V3Types(object):
   USER = b'\x06'
   REFERENCE = b'\x07'
 
+  @classmethod
+  def scalar(cls, encoded_type):
+    scalar_types = (cls.INT64, cls.BOOLEAN, cls.STRING, cls.DOUBLE)
+    return (encoded_type in scalar_types or
+            cls.reverse(encoded_type) in scalar_types)
+
+  @classmethod
+  def compound(cls, encoded_type):
+    compound_types = (cls.POINT, cls.USER, cls.REFERENCE)
+    return (encoded_type in compound_types or
+            cls.reverse(encoded_type) in compound_types)
+
+  @classmethod
+  def name(cls, encoded_type):
+    return next(key for key, val in V3Types.__dict__.items()
+                if val == encoded_type or val == cls.reverse(encoded_type))
+
+  @staticmethod
+  def reverse(encoded_type):
+    return bytes(bytearray([255 - ord(encoded_type)]))
+
 
 def encode_element(element):
   if element.has_id():
@@ -31,25 +52,39 @@ def encode_element(element):
   return six.text_type(element.type()), id_or_name
 
 
+def decode_element(element_tuple):
+  path_element = entity_pb.Path_Element()
+  path_element.set_type(element_tuple[0])
+  if isinstance(element_tuple[1], int):
+    path_element.set_id(element_tuple[1])
+  else:
+    path_element.set_name(element_tuple[1])
+
+  return path_element
+
+
 def encode_path(path):
-  if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
+  if isinstance(path, entity_pb.PropertyValue):
+    element_list = path.referencevalue().pathelement_list()
+  elif isinstance(path, entity_pb.PropertyValue_ReferenceValue):
     element_list = path.pathelement_list()
   else:
     element_list = path.element_list()
 
-  return tuple(encode_element(element) for element in element_list)
+  return tuple(item for element in element_list
+               for item in encode_element(element))
 
 
-def decode_path(flattened_path, reference_value=False):
+def decode_path(encoded_path, reference_value=False):
   if reference_value:
     path = entity_pb.PropertyValue_ReferenceValue()
   else:
     path = entity_pb.Path()
 
-  for index in range(0, len(flattened_path), 2):
+  for index in range(0, len(encoded_path), 2):
     element = path.add_element()
-    element.set_type(flattened_path[index])
-    id_or_name = flattened_path[index + 1]
+    element.set_type(encoded_path[index])
+    id_or_name = encoded_path[index + 1]
     if isinstance(id_or_name, int):
       element.set_id(id_or_name)
     else:
@@ -66,10 +101,12 @@ def reverse_encode_string(unicode_string):
   return bytes(byte_array) + b'\xff'
 
 
-def encode_reference(val):
-  project_id = six.text_type(val.app())
-  namespace = six.text_type(val.name_space())
-  return (project_id, namespace) + flat_path(val)
+def reverse_decode_string(byte_string):
+  byte_array = bytearray(byte_string[:-1])
+  for index, byte_value in enumerate(byte_array):
+    byte_array[index] = (255 - byte_value) - 1
+
+  return byte_array.decode('utf-8')
 
 
 def decode_point(val):
@@ -86,19 +123,18 @@ def decode_user(val):
   return user_val
 
 
+def encode_reference(val):
+  project_id = six.text_type(val.app())
+  namespace = six.text_type(val.name_space())
+  return (project_id, namespace) + encode_path(val)
+
+
 def decode_reference(val):
   reference_val = entity_pb.PropertyValue_ReferenceValue()
   reference_val.set_app(val[0])
   reference_val.set_name_space(val[1])
-  reference_val.MergeFrom(
-    decode_path(value_parts[2:], reference_value=True))
-  decode_path(value_parts[2:], reference_value=True)
-  for kind, id_or_name in val[2:]:
-    reference_val.add_pathelement()
-
-
-def reverse_type(encoded_type):
-  return bytes(bytearray([255 - ord(encoded_type)]))
+  reference_val.MergeFrom(decode_path(val[2:], reference_value=True))
+  return reference_val
 
 
 ENCODERS = {
@@ -111,17 +147,17 @@ ENCODERS = {
   V3Types.USER: lambda val: (six.text_type(val.email()),
                              six.text_type(val.auth_domain())),
   V3Types.REFERENCE: encode_reference,
-  reverse_type(V3Types.NULL): lambda val: tuple(),
-  reverse_type(V3Types.INT64): lambda val: (val * -1,),
-  reverse_type(V3Types.BOOLEAN): lambda val: (not val,),
-  reverse_type(V3Types.STRING):
+  V3Types.reverse(V3Types.NULL): lambda val: tuple(),
+  V3Types.reverse(V3Types.INT64): lambda val: (val * -1,),
+  V3Types.reverse(V3Types.BOOLEAN): lambda val: (not val,),
+  V3Types.reverse(V3Types.STRING):
     lambda val: (reverse_encode_string(six.text_type(val)),),
-  reverse_type(V3Types.DOUBLE): lambda val: (val * -1,),
-  reverse_type(V3Types.POINT): lambda val: (val.x() * -1, val.y() * -1),
-  reverse_type(V3Types.USER):
+  V3Types.reverse(V3Types.DOUBLE): lambda val: (val * -1,),
+  V3Types.reverse(V3Types.POINT): lambda val: (val.x() * -1, val.y() * -1),
+  V3Types.reverse(V3Types.USER):
     lambda val: (reverse_encode_string(six.text_type(val.email())),
                  reverse_encode_string(six.text_type(val.auth_domain()))),
-  reverse_type(V3Types.REFERENCE):
+  V3Types.reverse(V3Types.REFERENCE):
     lambda val: tuple(reverse_encode_string(item)
                       for item in encode_reference(val))
 }
@@ -134,20 +170,19 @@ DECODERS = {
   V3Types.DOUBLE: lambda val: val[0],
   V3Types.POINT: decode_point,
   V3Types.USER: decode_user,
-  V3Types.REFERENCE: encode_reference,
-  reverse_type(V3Types.NULL): lambda val: tuple(),
-  reverse_type(V3Types.INT64): lambda val: (val * -1,),
-  reverse_type(V3Types.BOOLEAN): lambda val: (not val,),
-  reverse_type(V3Types.STRING):
-    lambda val: (reverse_encode_string(six.text_type(val)),),
-  reverse_type(V3Types.DOUBLE): lambda val: (val * -1,),
-  reverse_type(V3Types.POINT): lambda val: (val.x() * -1, val.y() * -1),
-  reverse_type(V3Types.USER):
-    lambda val: (reverse_encode_string(six.text_type(val.email())),
-                 reverse_encode_string(six.text_type(val.auth_domain()))),
-  reverse_type(V3Types.REFERENCE):
-    lambda val: tuple(reverse_encode_string(item)
-                      for item in encode_reference(val))
+  V3Types.REFERENCE: decode_reference,
+  V3Types.reverse(V3Types.INT64): lambda val: val[0] * -1,
+  V3Types.reverse(V3Types.BOOLEAN): lambda val: not val[0],
+  V3Types.reverse(V3Types.STRING): lambda val: reverse_decode_string(val[0]),
+  V3Types.reverse(V3Types.DOUBLE): lambda val: val[0] * -1,
+  V3Types.reverse(V3Types.POINT):
+    lambda val: decode_point((val[0] * -1, val[1] * -1)),
+  V3Types.reverse(V3Types.USER):
+    lambda val: decode_user((reverse_decode_string(val[0]),
+                             reverse_decode_string(val[1]))),
+  V3Types.reverse(V3Types.REFERENCE):
+    lambda val: decode_reference(tuple(reverse_decode_string(item)
+                                       for item in val))
 }
 
 
@@ -165,44 +200,20 @@ def unpack_value(value):
 def encode_value(value, reverse=False):
   encoded_type, value = unpack_value(value)
   if reverse:
-    encoded_type = reverse_type(encoded_type)
+    encoded_type = V3Types.reverse(encoded_type)
 
   return (encoded_type,) + ENCODERS[encoded_type](value)
 
 
-def decode_value(unpacked_key):
-  value = entity_pb.PropertyValue()
-  encoded_type = unpacked_key[0]
-  if encoded_type == V3Types.NULL:
-    return value, unpacked_key[1:]
-  type_name = next(key for key, val in V3Types.__dict__.items()
-                   if val == encoded_type).lower()
+def decode_value(encoded_value):
+  prop_value = entity_pb.PropertyValue()
+  encoded_type = encoded_value[0]
+  decoded_value = DECODERS[encoded_type](encoded_value[1:])
+  type_name = V3Types.name(encoded_type)
+  if V3Types.scalar(encoded_type):
+    getattr(prop_value, 'set_{}value'.format(type_name))(decoded_value)
+  elif V3Types.compound(encoded_type):
+    compound_val = getattr(prop_value, 'mutable_{}value'.format(type_name))()
+    compound_val.MergeFrom(decoded_value)
 
-  if encoded_type not in SIMPLE_TYPES:
-    type_name = get_type_name(encoded_type)
-    getattr(value, 'set_{}value'.format(type_name))(unpacked_key[1])
-    return value, unpacked_key[2:]
-
-  if encoded_type == V3Types.POINT:
-    point_val = value.mutable_pointvalue()
-    point_val.set_x(unpacked_key[1])
-    point_val.set_y(unpacked_key[2])
-    return value, unpacked_key[3:]
-
-  if encoded_type == V3Types.USER:
-    user_val = value.mutable_uservalue()
-    user_val.set_email(unpacked_key[1])
-    user_val.set_email(unpacked_key[2])
-    return value, unpacked_key[3:]
-
-  if encoded_type == V3Types.REFERENCE:
-    delimiter_index = unpacked_key.index(REF_VAL_DELIMETER)
-    value_parts = unpacked_key[1:delimiter_index]
-    reference_val = value.mutable_referencevalue()
-    reference_val.set_app(value_parts[0])
-    reference_val.set_name_space(value_parts[1])
-    reference_val.MergeFrom(
-      decode_path(value_parts[2:], reference_value=True))
-    return value, unpacked_key[slice(delimiter_index + 1, None)]
-
-  raise InternalError(u'Unsupported PropertyValue type')
+  return prop_value

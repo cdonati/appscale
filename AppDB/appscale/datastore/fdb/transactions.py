@@ -18,8 +18,8 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
-from appscale.datastore.fdb.utils import (
-  EncodedTypes, flat_path, put_chunks, KVIterator)
+from appscale.datastore.fdb.codecs import encode_path
+from appscale.datastore.fdb.utils import EncodedTypes, put_chunks, KVIterator
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
@@ -111,7 +111,7 @@ class TransactionManager(object):
     if not query.has_ancestor():
       raise BadRequest('Queries in a transaction must specify an ancestor')
 
-    group_path = flat_path(query.ancestor())[:2]
+    group_path = encode_path(query.ancestor().path())[:2]
     key = tx_dir.pack_with_versionstamp(
       (txid, MetadataKeys.QUERIES, fdb.tuple.Versionstamp()))
     tr.set_versionstamped_key(key, fdb.tuple.pack((namespace,) + group_path))

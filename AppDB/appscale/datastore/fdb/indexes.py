@@ -20,8 +20,9 @@ import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.fdb.utils import (
-  decode_path, fdb, flat_path, MAX_FDB_TX_DURATION, KVIterator)
+from appscale.datastore.fdb.codecs import (
+  encode_path, encode_value, decode_element, decode_path, decode_value)
+from appscale.datastore.fdb.utils import fdb, MAX_FDB_TX_DURATION, KVIterator
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.index_manager import IndexInaccessible
 from appscale.datastore.utils import _FindIndexToUse
@@ -36,15 +37,8 @@ INDEX_DIR = u'indexes'
 
 KEY_PROP = u'__key__'
 
-
-
-
-
 START_FILTERS = (Query_Filter.GREATER_THAN_OR_EQUAL, Query_Filter.GREATER_THAN)
 STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
-
-
-
 
 
 def group_filters(query):
@@ -99,6 +93,15 @@ def get_order_info(query):
   return tuple(order_info)
 
 
+def get_scan_direction(query, index):
+  first_property, first_direction = get_order_info(query)[0]
+  if first_property == KEY_PROP or isinstance(index, SinglePropIndex):
+    return first_direction
+
+  return next(direction for prop_name, direction in index.order_info
+              if prop_name == first_property)
+
+
 def key_selector(op):
   """ Like Python's slice notation, FDB range queries include the start and
       exclude the stop. Therefore, the stop selector must point to the first
@@ -137,13 +140,7 @@ class IndexEntry(object):
   @property
   def group(self):
     group = entity_pb.Path()
-    element = group.add_element()
-    element.set_type(self.path[0])
-    if isinstance(self.path[1], int):
-      element.set_id(self.path[1])
-    else:
-      element.set_name(self.path[1])
-
+    group.add_element().MergeFrom(decode_element(self.path[:2]))
     return group
 
   def key_result(self):
@@ -228,10 +225,9 @@ class CompositeEntry(IndexEntry):
 
 
 class IndexIterator(object):
-  def __init__(self, index, kv_iterator, ancestor_path=tuple(), read_vs=None):
+  def __init__(self, index, kv_iterator, read_vs=None):
     self.index = index
     self._kv_iterator = kv_iterator
-    self._ancestor_path = ancestor_path
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
 
@@ -246,11 +242,7 @@ class IndexIterator(object):
     kvs, more_results = yield self._kv_iterator.next_page()
     usable_entries = []
     for kv in kvs:
-      if self.index.ancestor:
-        entry = self.index.decode(kv, self._ancestor_path)
-      else:
-        entry = self.index.decode(kv)
-
+      entry = self.index.decode(kv)
       if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
         self._kv_iterator.increase_limit()
         more_results = not self._kv_iterator.done_with_range
@@ -330,25 +322,22 @@ class KindlessIndex(Index):
     return u'KindlessIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
-    if isinstance(path, entity_pb.PropertyValue):
-      path = flat_path(path.referencevalue())
-
-    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
-      path = flat_path(path)
+    if not isinstance(path, tuple):
+      path = encode_path(path)
 
     return path
 
   def encode(self, path, commit_vs):
-    return self.pack_method(commit_vs)(path + (commit_vs,))
+    return self.pack_method(commit_vs)(path, commit_vs)
 
   def decode(self, kv):
-    parts = self.directory.unpack(kv.key)
+    path, commit_vs = self.directory.unpack(kv.key)
     deleted_vs = None
     if kv.value:
       deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
 
-    return IndexEntry(self.project_id, self.namespace, path=parts[:-1],
-                      commit_vs=parts[-1], deleted_vs=deleted_vs)
+    return IndexEntry(self.project_id, self.namespace, path, commit_vs,
+                      deleted_vs)
 
 
 class KindIndex(Index):
@@ -369,28 +358,24 @@ class KindIndex(Index):
     return u'KindIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
-    if isinstance(path, entity_pb.PropertyValue):
-      path = flat_path(path.referencevalue())
-
-    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
-      path = flat_path(path)
+    if not isinstance(path, tuple):
+      path = encode_path(path)
 
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
   def encode(self, path, commit_vs):
-    return self.pack_method(commit_vs)(self.encode_path(path) + (commit_vs,))
+    return self.pack_method(commit_vs)((self.encode_path(path), commit_vs))
 
   def decode(self, kv):
-    parts = self.directory.unpack(kv.key)
-    kindless_path = parts[:-1]
+    kindless_path, commit_vs = self.directory.unpack(kv.key)
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
     deleted_vs = None
     if kv.value:
       deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
 
-    return IndexEntry(self.project_id, self.namespace, path=path,
-                      commit_vs=parts[-1], deleted_vs=deleted_vs)
+    return IndexEntry(self.project_id, self.namespace, path, commit_vs,
+                      deleted_vs)
 
 
 class SinglePropIndex(Index):
@@ -416,25 +401,20 @@ class SinglePropIndex(Index):
     return u'SinglePropIndex({})'.format(dir_repr)
 
   def encode_path(self, path):
-    if isinstance(path, entity_pb.PropertyValue):
-      path = flat_path(path.referencevalue())
-
-    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
-      path = flat_path(path)
+    if not isinstance(path, tuple):
+      path = encode_path(path)
 
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
   def encode(self, value, path, commit_vs):
     return self.pack_method(commit_vs)(
-      encode_value(value) + self.encode_path(path) + (commit_vs,))
+      (encode_value(value), self.encode_path(path), commit_vs))
 
   def decode(self, kv):
-    unpacked_key = self.directory.unpack(kv.key)
-    value, remainder = pop_value(unpacked_key)
-    kindless_path = remainder[:-1]
+    encoded_value, kindless_path, commit_vs = self.directory.unpack(kv.key)
+    value = decode_value(encoded_value)
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
-    commit_vs = remainder[-1]
     deleted_vs = None
     if kv.value:
       deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
@@ -511,51 +491,51 @@ class CompositeIndex(Index):
     return u'CompositeIndex({})'.format(u'/'.join(components))
 
   def encode_path(self, path):
-    if isinstance(path, entity_pb.PropertyValue):
-      path = flat_path(path.referencevalue())
-
-    if isinstance(path, entity_pb.PropertyValue_ReferenceValue):
-      path = flat_path(path)
+    if not isinstance(path, tuple):
+      path = encode_path(path)
 
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
   def encode(self, prop_list, path, commit_vs):
-    if self.ancestor and len(path) == 2:
-      return []
-
     encoded_values_by_prop = []
-    for index_prop_name in self.prop_names:
+    for index_prop_name, direction in self.order_info:
+      reverse = direction == Query_Order.DESCENDING
       encoded_values_by_prop.append(
-        tuple(encode_value(prop.value()) for prop in prop_list
+        tuple(encode_value(prop.value(), reverse) for prop in prop_list
               if prop.name() == index_prop_name))
 
     pack = self.pack_method(commit_vs)
     encoded_values = itertools.product(*encoded_values_by_prop)
     if not self.ancestor:
-      return tuple(pack(value + self.encode_path(path) + (commit_vs,))
+      return tuple(pack((value, self.encode_path(path), commit_vs))
                    for value in encoded_values)
 
     keys = []
     for index in range(2, len(path), 2):
       ancestor_path = path[:index]
-      encoded_remaining_path = self.encode_path(path[index:])
+      remaining_path = self.encode_path(path[index:])
       keys.extend(
-        [pack(ancestor_path + value + encoded_remaining_path + (commit_vs,))
+        [pack((ancestor_path, value, remaining_path, commit_vs))
          for value in encoded_values])
 
     return tuple(keys)
 
-  def decode(self, kv, ancestor_path=tuple()):
-    remainder = self.directory.unpack(kv.key)[len(ancestor_path):]
-    properties = []
-    for prop_name in self.prop_names:
-      value, remainder = pop_value(remainder)
-      properties.append((prop_name, value))
+  def decode(self, kv):
+    unpacked_key = self.directory.unpack(kv.key)
+    if self.ancestor:
+      kindless_path = unpacked_key[0] + unpacked_key[-2]
+      values = unpacked_key[1:-2]
+    else:
+      kindless_path = unpacked_key[-2]
+      values = unpacked_key[:-2]
 
-    kindless = remainder[:-1]
-    path = ancestor_path + kindless[:-1] + (self.kind,) + kindless[-1:]
-    commit_vs = remainder[-1]
+    properties = []
+    for index, prop_name in enumerate(self.prop_names):
+      properties.append((prop_name, decode_value(values[index])))
+
+    path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
+    commit_vs = unpacked_key[-1]
     deleted_vs = None
     if kv.value:
       deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
@@ -568,8 +548,10 @@ class CompositeIndex(Index):
     start = None
     stop = None
     for prop_name, filters in filter_props:
+      index_direction = next(direction for name, direction in self.order_info)
+      reverse = index_direction == Query_Order.DESCENDING
       if prop_name in self.prop_names:
-        encoder = encode_value
+        encoder = lambda val: encode_value(val, reverse)
       elif prop_name == KEY_PROP:
         encoder = self.encode_path
       else:
@@ -611,18 +593,6 @@ class IndexManager(object):
       for key in self._get_index_keys(new_entity):
         tr.set_versionstamped_key(key, b'')
 
-  def get_reverse(self, query):
-    if not query.order_list():
-      return False
-
-    if query.order_size() > 1:
-      raise BadRequest(u'Only one order can be specified')
-
-    if query.order(0).property() != query.filter(-1).property().name():
-      raise BadRequest(u'Only the last filter property can be ordered')
-
-    return query.order(0).direction() == query.order(0).DESCENDING
-
   def rpc_limit(self, query):
     check_more_results = False
     limit = None
@@ -657,19 +627,26 @@ class IndexManager(object):
 
   def get_iterator(self, tr, query, read_vs=None):
     index = self._get_perfect_index(query)
+    if index is None:
+      raise BadRequest('Query not supported')
+
     filter_info = group_filters(query)
     if query.has_ancestor():
-      desired_slice = index.get_slice(filter_info, flat_path(query.ancestor()))
-    reverse = self.get_reverse(query)
+      ancestor_path = encode_path(query.ancestor().path())
+      desired_slice = index.get_slice(filter_info, ancestor_path)
+    else:
+      desired_slice = index.get_slice(filter_info)
+
+    reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
     rpc_limit, check_more_results = self.rpc_limit(query)
     fetch_limit = rpc_limit
     if check_more_results:
       fetch_limit += 1
 
-    iterator = IndexIterator(tr, self._tornado_fdb, index, desired_slice,
-                             fetch_limit, reverse, read_vs=read_vs, snapshot=True)
+    kv_iterator = KVIterator(tr, self._tornado_fdb, desired_slice, fetch_limit,
+                             reverse, snapshot=True)
+    iterator = IndexIterator(index, kv_iterator, read_vs)
     logger.debug('using index: {}'.format(index))
-    raise BadRequest(u'Query is not supported')
 
     return iterator
 
@@ -738,7 +715,7 @@ class IndexManager(object):
 
     project_id = six.text_type(entity.key().app())
     namespace = six.text_type(entity.key().name_space())
-    path = flat_path(entity.key())
+    path = encode_path(entity.key().path())
     kind = path[-2]
 
     kindless_index = KindlessIndex.from_cache(
