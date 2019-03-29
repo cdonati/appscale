@@ -107,3 +107,4 @@ add tests for functionality that doesn't work in current datastore
  - prop order (empty values)
 support advanced queries: https://cloud.google.com/appengine/articles/indexselection
 test if prop result (projection) specifies group
+extend fdb.tuple for custom data types and reversable data types

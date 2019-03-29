@@ -186,7 +186,7 @@ class TornadoFDB(object):
     self._io_loop.add_callback(tornado_future.set_result, result)
 
 
-class RangeIterator(object):
+class KVIterator(object):
   def __init__(self, tr, tornado_fdb, key_slice, limit=0, reverse=False,
                streaming_mode=fdb.StreamingMode.iterator, snapshot=False):
     self.done_with_range = False
@@ -238,49 +238,6 @@ class RangeIterator(object):
       self._done = True
 
     raise gen.Return((kvs, not self._done))
-
-
-def flat_path(key):
-  path = []
-  if isinstance(key, entity_pb.PropertyValue_ReferenceValue):
-    element_list = key.pathelement_list()
-  else:
-    element_list = key.path().element_list()
-
-  for element in element_list:
-    path.append(six.text_type(element.type()))
-    if element.has_id():
-      path.append(element.id())
-    elif element.has_name():
-      path.append(six.text_type(element.name()))
-    else:
-      raise BadRequest('All path elements must either have a name or ID')
-
-  return tuple(path)
-
-
-def decode_path(flattened_path, reference_value=False):
-  if len(flattened_path) % 2 != 0:
-    raise BadRequest('Invalid path')
-
-  if reference_value:
-    path = entity_pb.PropertyValue_ReferenceValue()
-  else:
-    path = entity_pb.Path()
-
-  index = 0
-  while index < len(flattened_path):
-    element = path.add_element()
-    element.set_type(flattened_path[index])
-    id_or_name = flattened_path[index + 1]
-    if isinstance(id_or_name, int):
-      element.set_id(id_or_name)
-    else:
-      element.set_name(id_or_name)
-
-    index += 2
-
-  return path
 
 
 def next_entity_version(old_version):

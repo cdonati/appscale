@@ -21,7 +21,7 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.fdb.utils import (
-  decode_path, fdb, flat_path, MAX_FDB_TX_DURATION, RangeIterator)
+  decode_path, fdb, flat_path, MAX_FDB_TX_DURATION, KVIterator)
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.index_manager import IndexInaccessible
 from appscale.datastore.utils import _FindIndexToUse
@@ -37,105 +37,14 @@ INDEX_DIR = u'indexes'
 KEY_PROP = u'__key__'
 
 
-class V3Types(object):
-  NULL = b'0'
-  INT64 = b'1'
-  BOOLEAN = b'2'
-  STRING = b'3'
-  DOUBLE = b'4'
-  POINT = b'5'
-  USER = b'6'
-  REFERENCE = b'7'
 
 
-COMPOUND_TYPES = (V3Types.POINT, V3Types.USER, V3Types.REFERENCE)
-
-# Signifies the end of an encoded reference value.
-REF_VAL_DELIMETER = b'\x00'
 
 START_FILTERS = (Query_Filter.GREATER_THAN_OR_EQUAL, Query_Filter.GREATER_THAN)
 STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
-def get_type(value):
-  readable_types = [
-    (name.lower(), encoded) for name, encoded in V3Types.__dict__.items()
-    if not name.startswith('_') and encoded != V3Types.NULL]
-  for type_name, encoded_type in readable_types:
-    if getattr(value, 'has_{}value'.format(type_name))():
-      return type_name, encoded_type
 
-  return None, V3Types.NULL
-
-
-def get_type_name(encoded_type):
-  return next(key for key, val in V3Types.__dict__.items()
-              if val == encoded_type).lower()
-
-
-def encode_value(value):
-  type_name, encoded_type = get_type(value)
-  if encoded_type == V3Types.NULL:
-    return (encoded_type,)
-
-  if encoded_type not in COMPOUND_TYPES:
-    encoded_value = getattr(value, '{}value'.format(type_name))()
-    if encoded_type == V3Types.STRING:
-      encoded_value = six.text_type(encoded_value)
-
-    return encoded_type, encoded_value
-
-  if encoded_type == V3Types.POINT:
-    return encoded_type, value.x(), value.y()
-
-  if encoded_type == V3Types.USER:
-    email = six.text_type(value.email())
-    auth_domain = six.text_type(value.auth_domain())
-    return encoded_type, email, auth_domain
-
-  if encoded_type == V3Types.REFERENCE:
-    project_id = six.text_type(value.app())
-    namespace = six.text_type(value.name_space())
-    encoded_value = (project_id, namespace) + flat_path(value)
-    return (encoded_type,) + encoded_value + (REF_VAL_DELIMETER,)
-
-  raise BadRequest(u'{} is not a supported value'.format(type_name))
-
-
-def pop_value(unpacked_key):
-  value = entity_pb.PropertyValue()
-  encoded_type = unpacked_key[0]
-  if encoded_type == V3Types.NULL:
-    return value, unpacked_key[1:]
-
-  if encoded_type not in COMPOUND_TYPES:
-    type_name = get_type_name(encoded_type)
-    getattr(value, 'set_{}value'.format(type_name))(unpacked_key[1])
-    return value, unpacked_key[2:]
-
-  if encoded_type == V3Types.POINT:
-    point_val = value.mutable_pointvalue()
-    point_val.set_x(unpacked_key[1])
-    point_val.set_y(unpacked_key[2])
-    return value, unpacked_key[3:]
-
-  if encoded_type == V3Types.USER:
-    user_val = value.mutable_uservalue()
-    user_val.set_email(unpacked_key[1])
-    user_val.set_email(unpacked_key[2])
-    return value, unpacked_key[3:]
-
-  if encoded_type == V3Types.REFERENCE:
-    delimiter_index = unpacked_key.index(REF_VAL_DELIMETER)
-    value_parts = unpacked_key[1:delimiter_index]
-    reference_val = value.mutable_referencevalue()
-    reference_val.set_app(value_parts[0])
-    reference_val.set_name_space(value_parts[1])
-    reference_val.MergeFrom(
-      decode_path(value_parts[2:], reference_value=True))
-    return value, unpacked_key[slice(delimiter_index + 1, None)]
-
-  raise InternalError(u'Unsupported PropertyValue type')
 
 
 def group_filters(query):
@@ -211,6 +120,9 @@ class IndexEntry(object):
     self.namespace = namespace
     self.path = path
     self.commit_vs = commit_vs
+    if deleted_vs is None:
+      deleted_vs = fdb.tuple.Versionstamp()
+
     self.deleted_vs = deleted_vs
 
   @property
@@ -316,13 +228,14 @@ class CompositeEntry(IndexEntry):
 
 
 class IndexIterator(object):
-  def __init__(self, tr, tornado_fdb, desired_slice, limit, reverse, index,
-               ancestor=None, read_vs=None):
+  def __init__(self, index, kv_iterator, ancestor_path=tuple(), read_vs=None):
     self.index = index
+    self._kv_iterator = kv_iterator
+    self._ancestor_path = ancestor_path
+    if read_vs is None:
+      read_vs = fdb.tuple.Versionstamp()
+
     self._read_vs = read_vs
-    self._ancestor_path = flat_path(ancestor)
-    self._kv_iterator = RangeIterator(tr, tornado_fdb, desired_slice, limit,
-                                      reverse, snapshot=True)
     self._done = False
 
   @gen.coroutine
@@ -333,23 +246,12 @@ class IndexIterator(object):
     kvs, more_results = yield self._kv_iterator.next_page()
     usable_entries = []
     for kv in kvs:
-      if self._read_vs is None and kv.value:
-        self._kv_iterator.increase_limit()
-        more_results = not self._kv_iterator.done_with_range
-        continue
-
       if self.index.ancestor:
         entry = self.index.decode(kv, self._ancestor_path)
       else:
         entry = self.index.decode(kv)
 
-      if self._read_vs is not None and entry.commit_vs > self._read_vs:
-        self._kv_iterator.increase_limit()
-        more_results = not self._kv_iterator.done_with_range
-        continue
-
-      if (self._read_vs is not None and entry.deleted_vs is not None and
-          entry.deleted_vs < self._read_vs):
+      if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
         self._kv_iterator.increase_limit()
         more_results = not self._kv_iterator.done_with_range
         continue
@@ -436,10 +338,7 @@ class KindlessIndex(Index):
 
     return path
 
-  def encode(self, path, commit_vs=None):
-    if commit_vs is None:
-      commit_vs = fdb.tuple.Versionstamp()
-
+  def encode(self, path, commit_vs):
     return self.pack_method(commit_vs)(path + (commit_vs,))
 
   def decode(self, kv):
@@ -479,10 +378,7 @@ class KindIndex(Index):
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
-  def encode(self, path, commit_vs=None):
-    if commit_vs is None:
-      commit_vs = fdb.tuple.Versionstamp()
-
+  def encode(self, path, commit_vs):
     return self.pack_method(commit_vs)(self.encode_path(path) + (commit_vs,))
 
   def decode(self, kv):
@@ -529,10 +425,7 @@ class SinglePropIndex(Index):
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
-  def encode(self, value, path, commit_vs=None):
-    if commit_vs is None:
-      commit_vs = fdb.tuple.Versionstamp()
-
+  def encode(self, value, path, commit_vs):
     return self.pack_method(commit_vs)(
       encode_value(value) + self.encode_path(path) + (commit_vs,))
 
@@ -627,10 +520,7 @@ class CompositeIndex(Index):
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
-  def encode(self, prop_list, path, commit_vs=None):
-    if commit_vs is None:
-      commit_vs = fdb.tuple.Versionstamp()
-
+  def encode(self, prop_list, path, commit_vs):
     if self.ancestor and len(path) == 2:
       return []
 
@@ -673,13 +563,13 @@ class CompositeIndex(Index):
     return CompositeEntry(self.project_id, self.namespace, path, properties,
                           commit_vs, deleted_vs)
 
-  def get_slice(self, filter_props):
-    subspace = self.directory
+  def get_slice(self, filter_props, ancestor_path=tuple()):
+    subspace = self.directory.subspace(ancestor_path)
     start = None
     stop = None
     for prop_name, filters in filter_props:
-      if prop_name == self.prop_name:
-        encoder = self.encode_value
+      if prop_name in self.prop_names:
+        encoder = encode_value
       elif prop_name == KEY_PROP:
         encoder = self.encode_path
       else:
@@ -705,11 +595,12 @@ class CompositeIndex(Index):
 class IndexManager(object):
   _MAX_RESULTS = 300
 
-  def __init__(self, db, directory_cache, tornado_fdb):
+  def __init__(self, db, directory_cache, tornado_fdb, data_manager):
     self.composite_index_manager = None
     self._db = db
     self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
+    self._data_manager = data_manager
 
   def put_entries(self, tr, old_entity, old_vs, new_entity):
     if old_entity is not None:
@@ -766,100 +657,85 @@ class IndexManager(object):
 
   def get_iterator(self, tr, query, read_vs=None):
     index = self._get_perfect_index(query)
+    filter_info = group_filters(query)
+    if query.has_ancestor():
+      desired_slice = index.get_slice(filter_info, flat_path(query.ancestor()))
     reverse = self.get_reverse(query)
-    desired_slice = index.get_slice(filter_props)
     rpc_limit, check_more_results = self.rpc_limit(query)
     fetch_limit = rpc_limit
     if check_more_results:
       fetch_limit += 1
 
-    iterator = IndexIterator(tr, self._tornado_fdb, desired_slice, fetch_limit,
-                             reverse, index, read_vs)
+    iterator = IndexIterator(tr, self._tornado_fdb, index, desired_slice,
+                             fetch_limit, reverse, read_vs=read_vs, snapshot=True)
     logger.debug('using index: {}'.format(index))
     raise BadRequest(u'Query is not supported')
 
     return iterator
 
   @gen.coroutine
-  def update_composite_index(self, project_id, index_pb, cursor=None):
-    start_ns = ''
-    start_key = ''
-    if cursor is not None:
-      start_ns, start_key = cursor
-
+  def update_composite_index(self, project_id, index_pb, cursor=(None, None)):
+    start_ns, start_key = cursor
     kind = six.text_type(index_pb.definition().entity_type())
     ancestor = index_pb.definition().ancestor()
     order_info = ((prop.name(), prop.direction())
                   for prop in index_pb.definition().property_list())
     indexes_dir = self._directory_cache.get((project_id, INDEX_DIR))
-    # , namespace, cls.DIR_NAME, index_id))
     tr = self._db.create_transaction()
     deadline = time.time() + MAX_FDB_TX_DURATION / 2
     for namespace in indexes_dir.list(tr):
-      if namespace < start_ns:
+      if start_ns is not None and namespace < start_ns:
         continue
 
+      composite_index_dir = indexes_dir.open(
+        tr, (namespace, CompositeIndex.DIR_NAME, index_pb.id()))
+      composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
+                                       order_info)
+      logger.info('Backfilling {}'.format(composite_index))
       kind_index_dir = indexes_dir.open(
         tr, (namespace, KindIndex.DIR_NAME, kind))
       kind_index = KindIndex(kind_index_dir)
-      iterator = IndexIterator()
-      index_dir = index_dir.open(tr, (namespace, CompositeIndex.DIR_NAME,
-                                      index_pb.id()))
-      index = CompositeIndex(index_dir, kind, ancestor, order_info)
+      remaining_range = kind_index_dir.range()
+      if start_key is not None:
+        remaining_range = slice(
+          fdb.KeySelector.first_greater_than(start_key), remaining_range.stop)
+        start_key = None
 
+      kv_iterator = KVIterator(tr, self._tornado_fdb, remaining_range)
+      while True:
+        kvs, more_results = yield kv_iterator.next_page()
+        entries = [kind_index.decode(kv) for kv in kvs]
+        entity_results = yield [self._data_manager.get_entry(self, tr, entry)
+                                for entry in entries]
+        for index, kv in enumerate(kvs):
+          entity = entity_pb.EntityProto(entity_results[index][1])
+          entry = entries[index]
+          keys = composite_index.encode(
+            entity.property_list(), entry.path, entry.commit_vs)
+          for key in keys:
+            deleted_val = (entry.deleted_vs.to_bytes()
+                           if entry.deleted_vs.is_complete() else b'')
+            tr[key] = deleted_val
 
-    if time.time() > deadline:
-      try:
-        yield self._tornado_fdb.commit(tr)
-      except fdb.FDBError as fdb_error:
-        tr.on_error(fdb_error).wait()
+        if not more_results:
+          logger.info('Finished backfilling {}'.format(composite_index))
+          break
 
-      tr = self._db.create_transaction()
+        if time.time() > deadline:
+          try:
+            yield self._tornado_fdb.commit(tr)
+            cursor = (namespace, kvs[-1].key)
+          except fdb.FDBError as fdb_error:
+            logger.warning('Error while updating index: {}'.format(fdb_error))
+            tr.on_error(fdb_error).wait()
 
-    index = CompositeIndex.from_cache(project_id, )
-    logger.info(u'Updating index: {}'.format(index))
-    entries_updated = 0
-
-    # TODO: Adjust prefix based on ancestor.
-    prefix = '{app}{delimiter}{entity_type}{kind_separator}'.format(
-      app=app_id,
-      delimiter=self._SEPARATOR * 2,
-      entity_type=entity_type,
-      kind_separator=dbconstants.KIND_SEPARATOR,
-    )
-    start_row = prefix
-    end_row = prefix + self._TERM_STRING
-    start_inclusive = True
-
-    while True:
-      # Fetch references from the kind table since entity keys can have a
-      # parent prefix.
-      references = yield self.datastore_batch.range_query(
-        table_name=dbconstants.APP_KIND_TABLE,
-        column_names=dbconstants.APP_KIND_SCHEMA,
-        start_key=start_row,
-        end_key=end_row,
-        limit=self.BATCH_SIZE,
-        offset=0,
-        start_inclusive=start_inclusive,
-      )
-
-      pb_entities = yield self.__fetch_entities(references)
-      entities = [entity_pb.EntityProto(entity) for entity in pb_entities]
-
-      yield self.insert_composite_indexes(entities, [index])
-      entries_updated += len(entities)
-
-      # If we fetched fewer references than we asked for, we're done.
-      if len(references) < self.BATCH_SIZE:
-        break
-
-      start_row = references[-1].keys()[0]
-      start_inclusive = self._DISABLE_INCLUSIVITY
-
-    logger.info('Updated {} index entries.'.format(entries_updated))
+          yield self.update_composite_index(project_id, index_pb, cursor)
+          return
 
   def _get_index_keys(self, entity, commit_vs=None):
+    if commit_vs is None:
+      commit_vs = fdb.tuple.Versionstamp()
+
     project_id = six.text_type(entity.key().app())
     namespace = six.text_type(entity.key().name_space())
     path = flat_path(entity.key())
@@ -919,11 +795,13 @@ class IndexManager(object):
           project_id, namespace, six.text_type(query.kind()), prop_name,
           self._directory_cache)
 
-    index_to_use = _FindIndexToUse(query, self._get_indexes_pb(project_id))
-    if index_to_use is not None:
-      # result = yield self.composite_v2(query, filter_info, index_to_use)
-      index_to_use.
-      index = CompositeIndex.from_cache()
+    index_pb = _FindIndexToUse(query, self._get_indexes_pb(project_id))
+    if index_pb is not None:
+      order_info = ((prop.name(), prop.direction())
+                    for prop in index_pb.definition().property_list())
+      return CompositeIndex.from_cache(
+        project_id, namespace, index_pb.id(), kind,
+        index_pb.definition().ancestor(), order_info, self._directory_cache)
 
     return None
 

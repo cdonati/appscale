@@ -19,7 +19,7 @@ from tornado import gen
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.utils import (
-  EncodedTypes, flat_path, put_chunks, RangeIterator)
+  EncodedTypes, flat_path, put_chunks, KVIterator)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
@@ -131,7 +131,7 @@ class TransactionManager(object):
     tmp_rpc_vs = None
     tmp_rpc_type = None
 
-    iterator = RangeIterator(tr, self._tornado_fdb, metadata_range)
+    iterator = KVIterator(tr, self._tornado_fdb, metadata_range)
     while True:
       kvs, more_results = iterator.next_page()
       for kv in kvs:

@@ -18,7 +18,7 @@ from tornado import gen
 
 from appscale.datastore.dbconstants import InternalError
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, EncodedTypes, fdb, flat_path, put_chunks, RangeIterator)
+  ABSENT_VERSION, EncodedTypes, fdb, flat_path, put_chunks, KVIterator)
 
 
 def from_chunks(chunks):
@@ -60,7 +60,7 @@ class DataManager(object):
     raise gen.Return((key, encoded_entity, version, commit_vs))
 
   @gen.coroutine
-  def get_entry(self, tr, entry, snapshot):
+  def get_entry(self, tr, entry, snapshot=False):
     data_ns_dir = self._directory_cache.get(
       (entry.project_id, self.DATA_DIR, entry.namespace))
     data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
@@ -134,8 +134,7 @@ class DataManager(object):
 
   @gen.coroutine
   def _get_range(self, tr, data_range, snapshot=False):
-    iterator = RangeIterator(tr, self._tornado_fdb, data_range,
-                             snapshot=snapshot)
+    iterator = KVIterator(tr, self._tornado_fdb, data_range, snapshot=snapshot)
     chunks = []
     while True:
       kvs, more_results = yield iterator.next_page()

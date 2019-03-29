@@ -13,7 +13,7 @@ from tornado.locks import Event
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
 from appscale.datastore.fdb.utils import (
-  fdb, MAX_FDB_TX_DURATION, RangeIterator)
+  fdb, MAX_FDB_TX_DURATION, KVIterator)
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ class GarbageCollector(object):
       gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
       work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
       tr = self._db.create_transaction()
-      iterator = RangeIterator(self._tornado_fdb, tr, disposable_range)
+      iterator = KVIterator(self._tornado_fdb, tr, disposable_range)
       while True:
         kv = yield iterator.next()
         if kv is None:

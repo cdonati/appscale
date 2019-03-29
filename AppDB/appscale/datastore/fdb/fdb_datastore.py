@@ -53,7 +53,7 @@ class FDBDatastore(object):
     self._tornado_fdb = TornadoFDB(IOLoop.current())
     self._data_manager = DataManager(self._directory_cache, self._tornado_fdb)
     self._index_manager = IndexManager(self._db, self._directory_cache,
-                                       self._tornado_fdb)
+                                       self._tornado_fdb, self._data_manager)
     self._tx_manager = TransactionManager(self._directory_cache,
                                           self._tornado_fdb)
 
