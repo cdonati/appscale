@@ -5,8 +5,9 @@ import sys
 import tabulate
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.fdb.index_manager import (
-  get_type, KindIndex, KindlessIndex, SinglePropIndex)
+from appscale.datastore.fdb.codecs import unpack_value
+from appscale.datastore.fdb.indexes import (
+  KindIndex, KindlessIndex, SinglePropIndex)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api import datastore
@@ -40,9 +41,9 @@ def format_entity(encoded_entity):
   return datastore.Entity.FromPb(entity_proto)
 
 
-def format_value(value):
-  type_name, encoded_type = get_type(value)
-  return repr(getattr(value, '{}value'.format(type_name))())
+def format_value(prop_value):
+  encoded_type, value = unpack_value(prop_value)
+  return value
 
 
 def print_data(tr, data_dir):
