@@ -123,7 +123,7 @@ class TransactionManager(object):
   @gen.coroutine
   def get_metadata(self, tr, project_id, txid):
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    metadata_range = tx_dir.range((txid,))
+    metadata_subspace = tx_dir.subspace((txid,))
 
     read_vs = None
     xg = None
@@ -135,11 +135,11 @@ class TransactionManager(object):
     tmp_rpc_vs = None
     tmp_rpc_type = None
 
-    iterator = KVIterator(tr, self._tornado_fdb, metadata_range)
+    iterator = KVIterator(tr, self._tornado_fdb, metadata_subspace.range())
     while True:
       kvs, more_results = yield iterator.next_page()
       for kv in kvs:
-        key_parts = metadata_range.unpack(kv.key)
+        key_parts = metadata_subspace.unpack(kv.key)
         metadata_key = key_parts[0]
         if metadata_key == MetadataKeys.READ_VS:
           read_vs = fdb.tuple.Versionstamp(kv.value)
