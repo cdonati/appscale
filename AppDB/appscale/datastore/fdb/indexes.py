@@ -63,8 +63,9 @@ def group_filters(query):
     if len(filters) != 1 or filters[0][0] != Query_Filter.EQUAL:
       raise BadRequest(u'All but the last property must be equality filters')
 
-  if len(filter_props[-1][1]) > 2:
-    raise BadRequest(u'A property can only have up to two filters')
+  for prop_name, filters in filter_props:
+    if len(filters) > 2:
+      raise BadRequest(u'A property can only have up to two filters')
 
   return tuple(filter_props)
 
