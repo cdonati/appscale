@@ -657,6 +657,7 @@ class IndexManager(object):
                              reverse, snapshot=True)
     iterator = IndexIterator(index, kv_iterator, read_vs)
     logger.debug('using index: {}'.format(index))
+    logger.debug('directory: {}'.format(index.directory))
 
     return iterator
 
