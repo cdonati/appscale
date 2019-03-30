@@ -108,3 +108,5 @@ add tests for functionality that doesn't work in current datastore
 support advanced queries: https://cloud.google.com/appengine/articles/indexselection
 test if prop result (projection) specifies group
 extend fdb.tuple for custom data types and reversable data types
+fix versionstamp encode bug where packing vs.tr_version can raise exception if
+fdb.Value instead of string
