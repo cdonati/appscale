@@ -121,8 +121,8 @@ class DataManager(object):
     if read_vs is not None:
       logger.debug('path_subspace: {}'.format(path_subspace))
       logger.debug('read_vs: {}'.format(read_vs))
-      vs_subspace = path_subspace.subspace((read_vs,))
-      data_range = slice(path_subspace.start, vs_subspace.end)
+      vs_range = path_subspace.range((read_vs,))
+      data_range = slice(path_subspace.start, vs_range.stop)
     else:
       data_range = path_subspace.range()
 
