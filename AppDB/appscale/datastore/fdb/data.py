@@ -13,6 +13,7 @@ along with an example key-value:
 ^3: A FoundationDB-generated value specifying the commit versionstamp. It is
     used for enforcing consistency.
 """
+import logging
 import six
 from tornado import gen
 
