@@ -126,6 +126,7 @@ class DataManager(object):
       logger.debug('is complete: {}'.format(repr(read_vs.is_complete())))
       logger.debug('unset tr version: {}'.format(repr(read_vs._UNSET_TR_VERSION)))
       logger.debug('user_version: {}'.format(repr(read_vs.user_version)))
+      logger.debug('tr_version type: {}'.format(type(read_vs.tr_version)))
       vs_range = path_subspace.range((read_vs,))
       data_range = slice(path_subspace.start, vs_range.stop)
     else:
