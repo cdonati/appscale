@@ -447,7 +447,7 @@ class SinglePropIndex(Index):
         if op == Query_Filter.EQUAL:
           logger.debug('value: {}'.format(value))
           logger.debug('encoded val: {}'.format(encoder(value)))
-          subspace = subspace.subspace(encoder(value))
+          subspace = subspace.subspace(fdb.tuple.pack(encoder(value)))
           continue
 
       for op, value in filters:
@@ -570,9 +570,11 @@ class CompositeIndex(Index):
       else:
         raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
 
-      if len(filters) == 1 and filters[0][0] == Query_Filter.EQUAL:
-        subspace = subspace.subspace(encoder(filters[0][1]))
-        continue
+      if len(filters) == 1:
+        op, value = filters[0]
+        if op == Query_Filter.EQUAL:
+          subspace = subspace.subspace(fdb.tuple.pack(encoder(value)))
+          continue
 
       for op, value in filters:
         if op in START_FILTERS:
