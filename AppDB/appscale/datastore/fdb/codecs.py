@@ -25,6 +25,10 @@ class V3Types(object):
     ('reference', REFERENCE))
 
   @classmethod
+  def null(cls, encoded_type):
+    return encoded_type == cls.NULL or cls.reverse(encoded_type) == cls.NULL
+
+  @classmethod
   def scalar(cls, encoded_type):
     scalar_types = (cls.INT64, cls.BOOLEAN, cls.STRING, cls.DOUBLE)
     return (encoded_type in scalar_types or
@@ -210,6 +214,9 @@ def encode_value(value, reverse=False):
 def decode_value(encoded_value):
   prop_value = entity_pb.PropertyValue()
   encoded_type = encoded_value[0]
+  if V3Types.null(encoded_type):
+    return prop_value
+
   decoded_value = DECODERS[encoded_type](encoded_value[1:])
   type_name = V3Types.name(encoded_type).lower()
   if V3Types.scalar(encoded_type):
