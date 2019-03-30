@@ -147,10 +147,10 @@ class FDBDatastore(object):
         tr, project_id, query.transaction().handle())
       self._tx_manager.log_query(tr, project_id, query)
 
-    fetch_data = self._index_manager.include_data(query)
-    rpc_limit, check_more_results = self._index_manager.rpc_limit(query)
+    fetch_data = self.index_manager.include_data(query)
+    rpc_limit, check_more_results = self.index_manager.rpc_limit(query)
 
-    iterator = self._index_manager.get_iterator(tr, query, read_vs)
+    iterator = self.index_manager.get_iterator(tr, query, read_vs)
     for prop_name in query.property_name_list():
       prop_name = six.text_type(prop_name)
       if prop_name not in iterator.index.properties:
@@ -286,14 +286,14 @@ class FDBDatastore(object):
       new_encoded = mutation.Encode() if op == 'put' else ''
       self._data_manager.put(tr, key, new_version, new_encoded)
       new_entity = mutation if op == 'put' else None
-      self._index_manager.put_entries(tr, old_entity, old_vs, new_entity)
+      self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 
     yield self._tornado_fdb.commit(tr)
 
   @gen.coroutine
   def update_composite_index(self, project_id, index):
     project_id = six.text_type(project_id)
-    yield self._index_manager.update_composite_index(project_id, index)
+    yield self.index_manager.update_composite_index(project_id, index)
 
   @gen.coroutine
   def _upsert(self, tr, entity):
@@ -302,7 +302,7 @@ class FDBDatastore(object):
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
-    old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
+    _, old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
       tr, entity.key())
     if old_encoded:
       old_entity = entity_pb.EntityProto(old_encoded)
@@ -316,7 +316,7 @@ class FDBDatastore(object):
 
     new_version = next_entity_version(old_version)
     self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
-    self._index_manager.put_entries(tr, old_entity, old_vs, entity)
+    self.index_manager.put_entries(tr, old_entity, old_vs, entity)
 
     raise gen.Return((entity.key(), old_version, new_version))
 
@@ -331,6 +331,6 @@ class FDBDatastore(object):
     old_entity = entity_pb.EntityProto(old_encoded)
     new_version = next_entity_version(old_version)
     self._data_manager.put(tr, key, new_version, '')
-    self._index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
+    self.index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
     raise gen.Return((old_version, new_version))
