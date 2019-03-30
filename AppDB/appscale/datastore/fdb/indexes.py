@@ -383,6 +383,7 @@ class SinglePropIndex(Index):
 
   @classmethod
   def from_cache(cls, project_id, namespace, kind, prop_name, directory_cache):
+    logger.debug('args: {}'.format([project_id, namespace, kind, prop_name]))
     directory = directory_cache.get(
       (project_id, INDEX_DIR, namespace, cls.DIR_NAME, kind, prop_name))
     return cls(directory)
