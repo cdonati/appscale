@@ -442,10 +442,11 @@ class SinglePropIndex(Index):
       else:
         raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
 
-      logger.debug('filters: {}'.format(filters))
       if len(filters) == 1:
         op, value = filters[0]
         if op == Query_Filter.EQUAL:
+          logger.debug('value: {}'.format(value))
+          logger.debug('encoded val: {}'.format(encoder(value)))
           subspace = subspace.subspace(encoder(value))
           continue
 
