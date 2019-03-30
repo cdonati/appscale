@@ -51,8 +51,10 @@ def group_filters(query):
     prop_name = six.text_type(prop.name())
     filter_info = (query_filter.op(), prop.value())
     logger.debug('filter_props: {}'.format(filter_props))
-    if filter_props and prop_name == filter_props[1][0]:
-      filter_props[1][1].append(filter_info)
+    if filter_props:
+      last_filter_name, last_filter_list = filter_props[-1]
+      if last_filter_name == prop_name:
+        last_filter_list.append(filter_info)
     else:
       filter_props.append((prop_name, [filter_info]))
 
