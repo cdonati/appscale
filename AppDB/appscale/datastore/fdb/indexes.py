@@ -442,9 +442,12 @@ class SinglePropIndex(Index):
       else:
         raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
 
-      if len(filters) == 1 and filters[0][0] == Query_Filter.EQUAL:
-        subspace = subspace.subspace(encoder(filters[0][1]))
-        continue
+      logger.debug('filters: {}'.format(filters))
+      if len(filters) == 1:
+        op, value = filters[0]
+        if op == Query_Filter.EQUAL:
+          subspace = subspace.subspace(encoder(value))
+          continue
 
       for op, value in filters:
         if op in START_FILTERS:
