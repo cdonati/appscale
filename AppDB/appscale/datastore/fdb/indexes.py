@@ -672,13 +672,18 @@ class IndexManager(object):
         continue
 
       u_index_id = six.text_type(index_pb.id())
-      composite_index_dir = indexes_dir.open(
+      composite_index_dir = indexes_dir.create_or_open(
         tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
       composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
                                        order_info)
       logger.info('Backfilling {}'.format(composite_index))
-      kind_index_dir = indexes_dir.open(
-        tr, (namespace, KindIndex.DIR_NAME, kind))
+      try:
+        kind_index_dir = indexes_dir.open(
+          tr, (namespace, KindIndex.DIR_NAME, kind))
+      except ValueError:
+        logger.info('No entities exist for {}'.format(composite_index))
+        continue
+
       kind_index = KindIndex(kind_index_dir)
       remaining_range = kind_index_dir.range()
       if start_key is not None:
