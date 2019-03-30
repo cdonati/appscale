@@ -211,7 +211,7 @@ def decode_value(encoded_value):
   prop_value = entity_pb.PropertyValue()
   encoded_type = encoded_value[0]
   decoded_value = DECODERS[encoded_type](encoded_value[1:])
-  type_name = V3Types.name(encoded_type)
+  type_name = V3Types.name(encoded_type).lower()
   if V3Types.scalar(encoded_type):
     getattr(prop_value, 'set_{}value'.format(type_name))(decoded_value)
   elif V3Types.compound(encoded_type):

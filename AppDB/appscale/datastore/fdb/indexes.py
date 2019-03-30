@@ -50,7 +50,6 @@ def group_filters(query):
     prop = query_filter.property(0)
     prop_name = six.text_type(prop.name())
     filter_info = (query_filter.op(), prop.value())
-    logger.debug('filter_props: {}'.format(filter_props))
     if filter_props:
       last_filter_name, last_filter_list = filter_props[-1]
       if last_filter_name == prop_name:
@@ -756,7 +755,6 @@ class IndexManager(object):
 
       all_keys.extend(index.encode(entity.property_list(), path, commit_vs))
 
-    logger.debug('all_key: {}'.format(all_keys))
     return all_keys
 
   def _get_perfect_index(self, query):
