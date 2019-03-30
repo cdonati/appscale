@@ -83,7 +83,7 @@ class TransactionManager(object):
     if not read_vs.present():
       raise BadRequest('Transaction does not exist')
 
-    raise gen.Return(fdb.tuple.Versionstamp.from_bytes(read_vs))
+    raise gen.Return(fdb.tuple.Versionstamp(read_vs))
 
   def log_rpc(self, tr, project_id, request):
     txid = request.transaction().handle()
@@ -142,11 +142,11 @@ class TransactionManager(object):
         key_parts = metadata_range.unpack(kv.key)
         metadata_key = key_parts[0]
         if metadata_key == MetadataKeys.READ_VS:
-          read_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+          read_vs = fdb.tuple.Versionstamp(kv.value)
           continue
 
         if metadata_key == MetadataKeys.XG:
-          read_vs = kv.value == '1'
+          read_vs = kv.value == b'1'
           continue
 
         if metadata_key == MetadataKeys.QUERIES:

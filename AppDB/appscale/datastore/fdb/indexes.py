@@ -339,7 +339,7 @@ class KindlessIndex(Index):
     path, commit_vs = self.directory.unpack(kv.key)
     deleted_vs = None
     if kv.value:
-      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+      deleted_vs = fdb.tuple.Versionstamp(kv.value)
 
     return IndexEntry(self.project_id, self.namespace, path, commit_vs,
                       deleted_vs)
@@ -377,7 +377,7 @@ class KindIndex(Index):
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
     deleted_vs = None
     if kv.value:
-      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+      deleted_vs = fdb.tuple.Versionstamp(kv.value)
 
     return IndexEntry(self.project_id, self.namespace, path, commit_vs,
                       deleted_vs)
@@ -422,7 +422,7 @@ class SinglePropIndex(Index):
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
     deleted_vs = None
     if kv.value:
-      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+      deleted_vs = fdb.tuple.Versionstamp(kv.value)
 
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs, deleted_vs)
@@ -544,7 +544,7 @@ class CompositeIndex(Index):
     commit_vs = unpacked_key[-1]
     deleted_vs = None
     if kv.value:
-      deleted_vs = fdb.tuple.Versionstamp.from_bytes(kv.value)
+      deleted_vs = fdb.tuple.Versionstamp(kv.value)
 
     return CompositeEntry(self.project_id, self.namespace, path, properties,
                           commit_vs, deleted_vs)
