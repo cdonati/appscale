@@ -83,7 +83,7 @@ class TransactionManager(object):
     if not read_vs.present():
       raise BadRequest('Transaction does not exist')
 
-    raise gen.Return(fdb.tuple.Versionstamp(read_vs))
+    raise gen.Return(fdb.tuple.Versionstamp(read_vs.value))
 
   def log_rpc(self, tr, project_id, request):
     txid = request.transaction().handle()

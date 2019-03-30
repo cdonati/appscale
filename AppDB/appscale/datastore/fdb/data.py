@@ -119,14 +119,6 @@ class DataManager(object):
   def _last_chunk(self, tr, path_subspace, read_vs=None):
     # Ignore values written after the start of the transaction.
     if read_vs is not None:
-      logger.debug('path_subspace: {}'.format(path_subspace))
-      logger.debug('read_vs: {}'.format(read_vs))
-      logger.debug('struct format str: {}'.format(repr(read_vs._STRUCT_FORMAT_STRING)))
-      logger.debug('tr_version: {}'.format(repr(read_vs.tr_version)))
-      logger.debug('is complete: {}'.format(repr(read_vs.is_complete())))
-      logger.debug('unset tr version: {}'.format(repr(read_vs._UNSET_TR_VERSION)))
-      logger.debug('user_version: {}'.format(repr(read_vs.user_version)))
-      logger.debug('tr_version type: {}'.format(type(read_vs.tr_version)))
       vs_range = path_subspace.range((read_vs,))
       data_range = slice(path_subspace.start, vs_range.stop)
     else:
