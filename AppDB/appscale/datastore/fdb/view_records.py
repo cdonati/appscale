@@ -38,7 +38,11 @@ def format_path(path):
 
 def format_entity(encoded_entity):
   entity_proto = entity_pb.EntityProto(encoded_entity)
-  return datastore.Entity.FromPb(entity_proto)
+  printable_entity = str(datastore.Entity.FromPb(entity_proto))
+  if len(printable_entity) > 120:
+    return printable_entity[:120] + '...'
+  else:
+    return printable_entity
 
 
 def format_value(prop_value):
