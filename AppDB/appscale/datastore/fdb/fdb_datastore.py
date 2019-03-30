@@ -38,10 +38,10 @@ class FDBDatastore(object):
   _ROOT_DIR = (u'appscale', u'datastore')
 
   def __init__(self):
+    self.index_manager = None
     self._data_manager = None
     self._db = None
     self._directory_cache = None
-    self._index_manager = None
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
     self._tx_manager = None
@@ -52,8 +52,8 @@ class FDBDatastore(object):
     self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
     self._data_manager = DataManager(self._directory_cache, self._tornado_fdb)
-    self._index_manager = IndexManager(self._db, self._directory_cache,
-                                       self._tornado_fdb, self._data_manager)
+    self.index_manager = IndexManager(self._db, self._directory_cache,
+                                      self._tornado_fdb, self._data_manager)
     self._tx_manager = TransactionManager(self._directory_cache,
                                           self._tornado_fdb)
 
