@@ -143,20 +143,23 @@ def print_single_prop_indexes(tr, index_dir):
       print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
-def print_indexes(tr, indexes_dir):
+def print_indexes(tr, indexes_dir, indexes):
+  if not indexes:
+    indexes = ['kindless', 'kind', 'single-property']
+
   namespaces = indexes_dir.list(tr)
   for namespace in namespaces:
     namespace_dir = indexes_dir.open(tr, (namespace,))
     for index_type in namespace_dir.list(tr):
       index_dir = namespace_dir.open(tr, (index_type,))
-      if index_type == 'kindless':
+      if index_type == 'kindless' and index_type in indexes:
         index = KindlessIndex(index_dir)
         print_kindless_index(tr, index)
 
-      if index_type == 'kind':
+      if index_type == 'kind' and index_type in indexes:
         print_kind_indexes(tr, index_dir)
 
-      if index_type == 'single-property':
+      if index_type == 'single-property' and index_type in indexes:
         print_single_prop_indexes(tr, index_dir)
 
 
@@ -165,12 +168,13 @@ def main():
   logging.getLogger('appscale').setLevel(logging.DEBUG)
 
   parser = argparse.ArgumentParser()
-  parser.add_argument('--project-id')
+  parser.add_argument('--project')
+  parser.add_argument('--indexes', nargs='*')
   args = parser.parse_args()
 
   tr = db.create_transaction()
   for project_id in ds_dir.list(tr):
-    if args.project_id is not None and args.project_id != project_id:
+    if args.project is not None and args.project != project_id:
       continue
 
     project_dir = ds_dir.open(tr, (project_id,))
@@ -180,4 +184,4 @@ def main():
         print_data(tr, section_dir)
 
       if section_id == 'indexes':
-        print_indexes(tr, section_dir)
+        print_indexes(tr, section_dir, args.indexes)
