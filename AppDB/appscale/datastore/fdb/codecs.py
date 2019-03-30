@@ -19,6 +19,8 @@ class V3Types(object):
   USER = b'\x06'
   REFERENCE = b'\x07'
 
+  readable = (INT64, BOOLEAN, STRING, DOUBLE, POINT, USER, REFERENCE)
+
   @classmethod
   def scalar(cls, encoded_type):
     scalar_types = (cls.INT64, cls.BOOLEAN, cls.STRING, cls.DOUBLE)
@@ -187,10 +189,7 @@ DECODERS = {
 
 
 def unpack_value(value):
-  readable_types = [
-    (name.lower(), encoded) for name, encoded in V3Types.__dict__.items()
-    if not name.startswith('_') and encoded != V3Types.NULL]
-  for type_name, encoded_type in readable_types:
+  for type_name, encoded_type in V3Types.readable:
     if getattr(value, 'has_{}value'.format(type_name))():
       return encoded_type, getattr(value, '{}value'.format(type_name))()
 
