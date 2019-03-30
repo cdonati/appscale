@@ -95,7 +95,11 @@ def get_order_info(query):
 
 
 def get_scan_direction(query, index):
-  first_property, first_direction = get_order_info(query)[0]
+  order_info = get_order_info(query)
+  if not order_info:
+    return Query_Order.ASCENDING
+
+  first_property, first_direction = order_info[0]
   if first_property == KEY_PROP or isinstance(index, SinglePropIndex):
     return first_direction
 
@@ -465,7 +469,7 @@ class CompositeIndex(Index):
 
   @property
   def id(self):
-    return self.directory.get_path()[6]
+    return int(self.directory.get_path()[6])
 
   @property
   def prop_names(self):
@@ -475,7 +479,8 @@ class CompositeIndex(Index):
   def from_cache(cls, project_id, namespace, index_id, kind, ancestor,
                  order_info, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, index_id))
+      (project_id, INDEX_DIR, namespace, cls.DIR_NAME,
+       six.text_type(index_id)))
     return cls(directory, kind, ancestor, order_info)
 
   def __repr__(self):
