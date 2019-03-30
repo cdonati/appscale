@@ -247,6 +247,7 @@ class IndexIterator(object):
       raise gen.Return(([], False))
 
     kvs, more_results = yield self._kv_iterator.next_page()
+    logger.debug('kvs from iterator: {}'.format(kvs))
     usable_entries = []
     for kv in kvs:
       entry = self.index.decode(kv)
@@ -651,6 +652,7 @@ class IndexManager(object):
     if check_more_results:
       fetch_limit += 1
 
+    logger.debug('desired_slice: {}'.format(desired_slice))
     kv_iterator = KVIterator(tr, self._tornado_fdb, desired_slice, fetch_limit,
                              reverse, snapshot=True)
     iterator = IndexIterator(index, kv_iterator, read_vs)
