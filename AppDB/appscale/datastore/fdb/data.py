@@ -21,6 +21,8 @@ from appscale.datastore.fdb.codecs import encode_path
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, EncodedTypes, fdb, put_chunks, KVIterator)
 
+logger = logging.getLogger(__name__)
+
 
 def from_chunks(chunks):
   version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
@@ -116,6 +118,8 @@ class DataManager(object):
   def _last_chunk(self, tr, path_subspace, read_vs=None):
     # Ignore values written after the start of the transaction.
     if read_vs is not None:
+      logger.debug('path_subspace: {}'.format(path_subspace))
+      logger.debug('read_vs: {}'.format(read_vs))
       vs_subspace = path_subspace.subspace((read_vs,))
       data_range = slice(path_subspace.start, vs_subspace.end)
     else:
