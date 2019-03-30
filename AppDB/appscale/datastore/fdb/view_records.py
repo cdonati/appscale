@@ -1,7 +1,9 @@
-import fdb
+import argparse
 import logging
 import struct
 import sys
+
+import fdb
 import tabulate
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
@@ -161,8 +163,16 @@ def print_indexes(tr, indexes_dir):
 def main():
   logging.basicConfig()
   logging.getLogger('appscale').setLevel(logging.DEBUG)
+
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--project-id')
+  args = parser.parse_args()
+
   tr = db.create_transaction()
   for project_id in ds_dir.list(tr):
+    if args.project_id is not None and args.project_id != project_id:
+      continue
+
     project_dir = ds_dir.open(tr, (project_id,))
     for section_id in project_dir.list(tr):
       section_dir = project_dir.open(tr, (section_id,))
