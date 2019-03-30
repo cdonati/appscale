@@ -332,7 +332,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def _delete(self, tr, key):
-    old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
+    _, old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
       tr, key)
 
     if old_encoded is None:
