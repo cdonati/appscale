@@ -754,7 +754,7 @@ class IndexManager(object):
                  for index_prop_name in index.prop_names):
         continue
 
-      all_keys.extend([index.encode(entity.property_list(), path, commit_vs)])
+      all_keys.extend(index.encode(entity.property_list(), path, commit_vs))
 
     logger.debug('all_key: {}'.format(all_keys))
     return all_keys
