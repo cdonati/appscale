@@ -19,7 +19,10 @@ class V3Types(object):
   USER = b'\x06'
   REFERENCE = b'\x07'
 
-  readable = (INT64, BOOLEAN, STRING, DOUBLE, POINT, USER, REFERENCE)
+  accessible = (
+    ('int64', INT64), ('boolean', BOOLEAN), ('string', STRING),
+    ('double', DOUBLE), ('point', POINT), ('user', USER),
+    ('reference', REFERENCE))
 
   @classmethod
   def scalar(cls, encoded_type):
@@ -189,7 +192,7 @@ DECODERS = {
 
 
 def unpack_value(value):
-  for type_name, encoded_type in V3Types.readable:
+  for type_name, encoded_type in V3Types.accessible:
     if getattr(value, 'has_{}value'.format(type_name))():
       return encoded_type, getattr(value, '{}value'.format(type_name))()
 
