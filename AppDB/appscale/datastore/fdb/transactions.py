@@ -71,6 +71,10 @@ class TransactionManager(object):
     tr[tx_dir.pack((txid, MetadataKeys.XG))] = b'1' if is_xg else b'0'
     raise gen.Return(txid)
 
+  def delete(self, tr, project_id, txid):
+    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
+    del tr[tx_dir.range((txid,))]
+
   @gen.coroutine
   def get_read_vs(self, tr, project_id, txid):
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
@@ -82,7 +86,7 @@ class TransactionManager(object):
     raise gen.Return(fdb.tuple.Versionstamp.from_bytes(read_vs))
 
   def log_rpc(self, tr, project_id, request):
-    txid = request.transaction.handle()
+    txid = request.transaction().handle()
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
     if isinstance(request, datastore_pb.PutRequest):
       value = fdb.tuple.pack(
@@ -105,7 +109,7 @@ class TransactionManager(object):
     put_chunks(tr, value, subspace, add_vs=True)
 
   def log_query(self, tr, project_id, query):
-    txid = query.transaction.handle()
+    txid = query.transaction().handle()
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
     namespace = six.text_type(query.name_space())
     if not query.has_ancestor():

@@ -291,6 +291,16 @@ class FDBDatastore(object):
     yield self._tornado_fdb.commit(tr)
 
   @gen.coroutine
+  def rollback_transaction(self, project_id, txid):
+    project_id = six.text_type(project_id)
+    logger.info(
+      u'Doing a rollback on transaction {} for {}'.format(txid, project_id))
+
+    tr = self._db.create_transaction()
+    self._tx_manager.delete(tr, project_id, txid)
+    yield self._tornado_fdb.commit(tr)
+
+  @gen.coroutine
   def update_composite_index(self, project_id, index):
     project_id = six.text_type(project_id)
     yield self.index_manager.update_composite_index(project_id, index)
