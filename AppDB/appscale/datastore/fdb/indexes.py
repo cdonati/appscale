@@ -383,7 +383,6 @@ class SinglePropIndex(Index):
 
   @classmethod
   def from_cache(cls, project_id, namespace, kind, prop_name, directory_cache):
-    logger.debug('args: {}'.format([project_id, namespace, kind, prop_name]))
     directory = directory_cache.get(
       (project_id, INDEX_DIR, namespace, cls.DIR_NAME, kind, prop_name))
     return cls(directory)
@@ -768,7 +767,8 @@ class IndexManager(object):
       inequality_filters = [filters for _, filters in filter_info
                             if filters[0][0] != Query_Filter.EQUAL]
       if not query.has_ancestor() or not inequality_filters:
-        prop_name = next(prop_name != KEY_PROP for prop_name in prop_names)
+        prop_name = next(prop_name for prop_name in prop_names
+                         if prop_name != KEY_PROP)
         return SinglePropIndex.from_cache(
           project_id, namespace, six.text_type(query.kind()), prop_name,
           self._directory_cache)
