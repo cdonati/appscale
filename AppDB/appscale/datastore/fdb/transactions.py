@@ -137,7 +137,7 @@ class TransactionManager(object):
 
     iterator = KVIterator(tr, self._tornado_fdb, metadata_range)
     while True:
-      kvs, more_results = iterator.next_page()
+      kvs, more_results = yield iterator.next_page()
       for kv in kvs:
         key_parts = metadata_range.unpack(kv.key)
         metadata_key = key_parts[0]
