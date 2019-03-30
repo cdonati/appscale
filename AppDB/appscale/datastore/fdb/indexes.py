@@ -328,7 +328,7 @@ class KindlessIndex(Index):
     return path
 
   def encode(self, path, commit_vs):
-    return self.pack_method(commit_vs)(path, commit_vs)
+    return self.pack_method(commit_vs)((path, commit_vs))
 
   def decode(self, kv):
     path, commit_vs = self.directory.unpack(kv.key)
