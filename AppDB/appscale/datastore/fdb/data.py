@@ -120,7 +120,7 @@ class DataManager(object):
     # Ignore values written after the start of the transaction.
     if read_vs is not None:
       vs_range = path_subspace.range((read_vs,))
-      data_range = slice(path_subspace.start, vs_range.stop)
+      data_range = slice(path_subspace.range().start, vs_range.stop)
     else:
       data_range = path_subspace.range()
 
