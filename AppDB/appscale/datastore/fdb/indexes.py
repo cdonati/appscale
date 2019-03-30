@@ -671,8 +671,9 @@ class IndexManager(object):
       if start_ns is not None and namespace < start_ns:
         continue
 
+      u_index_id = six.text_type(index_pb.id())
       composite_index_dir = indexes_dir.open(
-        tr, (namespace, CompositeIndex.DIR_NAME, index_pb.id()))
+        tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
       composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
                                        order_info)
       logger.info('Backfilling {}'.format(composite_index))
