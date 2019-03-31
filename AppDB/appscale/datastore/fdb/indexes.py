@@ -328,14 +328,15 @@ class Index(object):
 
       if filter_prop.equality:
         value = filter_prop.filters[0][1]
-        subspace = subspace.subspace(self.encode_path(value))
+        subspace = subspace.subspace((self.encode_path(value),))
         continue
 
       for op, value in filter_prop.filters:
+        encoded_path = self.encode_path(value)
         if op in START_FILTERS:
-          start = key_selector(op)(subspace.pack(self.encode_path(value)))
+          start = key_selector(op)(subspace.pack((encoded_path,)))
         elif op in STOP_FILTERS:
-          stop = key_selector(op)(subspace.pack(self.encode_path(value)))
+          stop = key_selector(op)(subspace.pack((encoded_path,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -482,15 +483,16 @@ class SinglePropIndex(Index):
         raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
       if filter_prop.equality:
-        value = filter_prop.filters[0][1]
-        subspace = subspace.subspace((encoder(value),))
+        encoded_value = encoder(filter_prop.filters[0][1])
+        subspace = subspace.subspace((encoded_value,))
         continue
 
       for op, value in filter_prop.filters:
+        encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = key_selector(op)(subspace.pack(encoder(value)))
+          start = key_selector(op)(subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
-          stop = key_selector(op)(subspace.pack(encoder(value)))
+          stop = key_selector(op)(subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -607,15 +609,16 @@ class CompositeIndex(Index):
         raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
       if filter_prop.equality:
-        value = filter_prop.filters[0][1]
-        subspace = subspace.subspace((encoder(value),))
+        encoded_value = encoder(filter_prop.filters[0][1])
+        subspace = subspace.subspace((encoded_value,))
         continue
 
       for op, value in filter_prop.filters:
+        encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = key_selector(op)(subspace.pack(encoder(value)))
+          start = key_selector(op)(subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
-          stop = key_selector(op)(subspace.pack(encoder(value)))
+          stop = key_selector(op)(subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
