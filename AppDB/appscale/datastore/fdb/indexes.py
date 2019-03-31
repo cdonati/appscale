@@ -290,17 +290,24 @@ class Index(object):
   def encode_path(self, path):
     raise NotImplementedError()
 
-  def get_slice(self, filter_props):
+  def get_slice(self, filter_props, ancestor_path=tuple()):
     subspace = self.directory
     start = None
     stop = None
+    if ancestor_path:
+      ancestor_range = fdb.tuple.range(ancestor_path)
+      start = subspace.rawPrefix + ancestor_range.start
+      stop = subspace.rawPrefix + ancestor_range.stop
+
     for prop_name, filters in filter_props:
       if prop_name != KEY_PROP:
         raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
 
-      if len(filters) == 1 and filters[0][0] == Query_Filter.EQUAL:
-        subspace = subspace.subspace(self.encode_path(filters[0][1]))
-        continue
+      if len(filters) == 1:
+        op, value = filters[0]
+        if op == Query_Filter.EQUAL:
+          subspace = subspace.subspace(self.encode_path(value))
+          continue
 
       for op, value in filters:
         if op in START_FILTERS:
@@ -429,10 +436,23 @@ class SinglePropIndex(Index):
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs, deleted_vs)
 
-  def get_slice(self, filter_props):
+  def get_slice(self, filter_props, ancestor_path=tuple()):
     subspace = self.directory
     start = None
     stop = None
+    if ancestor_path:
+      # Apply property equality first if it exists.
+      prop_name, filters = filter_props[0]
+      if len(filters) == 1:
+        op, value = filters[0]
+        if op == Query_Filter.EQUAL:
+          subspace = subspace.subspace((encode_value(value),))
+          filter_props = filter_props[1:]
+
+      ancestor_range = fdb.tuple.range(ancestor_path)
+      start = subspace.rawPrefix + ancestor_range.start
+      stop = subspace.rawPrefix + ancestor_range.stop
+
     for prop_name, filters in filter_props:
       if prop_name == self.prop_name:
         encoder = encode_value
@@ -643,7 +663,7 @@ class IndexManager(object):
       raise BadRequest('Query not supported')
 
     filter_info = group_filters(query)
-    if isinstance(index, CompositeIndex) and index.ancestor:
+    if query.has_ancestor():
       ancestor_path = encode_path(query.ancestor().path())
       desired_slice = index.get_slice(filter_info, ancestor_path)
     else:
@@ -659,6 +679,7 @@ class IndexManager(object):
                              reverse, snapshot=True)
     iterator = IndexIterator(index, kv_iterator, read_vs)
     logger.debug('using index: {}'.format(index))
+    logger.debug('using range: {}'.format(desired_slice))
 
     return iterator
 
