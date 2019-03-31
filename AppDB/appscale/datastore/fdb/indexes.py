@@ -96,6 +96,9 @@ def get_order_info(query):
 
   order_info = []
   for filter_prop in filter_props:
+    if filter_prop.equality:
+      continue
+
     direction = next(
       (order.direction() for order in relevant_orders
        if order.property() == filter_prop.name), Query_Order.ASCENDING)
@@ -118,8 +121,12 @@ def get_scan_direction(query, index):
   if first_property == KEY_PROP or isinstance(index, SinglePropIndex):
     return first_direction
 
-  return next(direction for prop_name, direction in index.order_info
-              if prop_name == first_property)
+  index_direction = next(direction for prop_name, direction in index.order_info
+                         if prop_name == first_property)
+  if index_direction == first_direction:
+    return Query_Order.ASCENDING
+  else:
+    return Query_Order.DESCENDING
 
 
 def key_selector(op):
@@ -800,7 +807,10 @@ class IndexManager(object):
     namespace = six.text_type(query.name_space())
     filter_props = group_filters(query)
     order_info = get_order_info(query)
-    prop_names = [prop_name for prop_name, _ in order_info]
+
+    prop_names = [filter_prop.name for filter_prop in filter_props]
+    prop_names.extend([prop_name for prop_name, _ in order_info
+                       if prop_name not in prop_names])
 
     if not query.has_kind():
       if not all(prop_name == KEY_PROP for prop_name in prop_names):
@@ -816,22 +826,22 @@ class IndexManager(object):
         project_id, namespace, kind, self._directory_cache)
 
     if sum(prop_name != KEY_PROP for prop_name in prop_names) == 1:
-      inequality_filters = [prop.filters for prop in filter_props
-                            if not prop.equality]
-      if not query.has_ancestor() or not inequality_filters:
-        prop_name = next(prop_name for prop_name in prop_names
-                         if prop_name != KEY_PROP)
+      prop_name = next(prop_name for prop_name in prop_names
+                       if prop_name != KEY_PROP)
+      ordered_prop = prop_name in [order_name for order_name, _ in order_info]
+      if not query.has_ancestor() or not ordered_prop:
         return SinglePropIndex.from_cache(
           project_id, namespace, six.text_type(query.kind()), prop_name,
           self._directory_cache)
 
     index_pb = _FindIndexToUse(query, self._get_indexes_pb(project_id))
     if index_pb is not None:
-      order_info = ((prop.name(), prop.direction())
-                    for prop in index_pb.definition().property_list())
+      index_order_info = ((prop.name(), prop.direction())
+                          for prop in index_pb.definition().property_list())
       return CompositeIndex.from_cache(
         project_id, namespace, index_pb.id(), kind,
-        index_pb.definition().ancestor(), order_info, self._directory_cache)
+        index_pb.definition().ancestor(), index_order_info,
+        self._directory_cache)
 
     return None
 
