@@ -673,6 +673,7 @@ class IndexManager(object):
       raise BadRequest('Query not supported')
 
     filter_props = group_filters(query)
+    logger.debug('filter_props: {}'.format(filter_props))
     if query.has_ancestor():
       ancestor_path = encode_path(query.ancestor().path())
       desired_slice = index.get_slice(filter_props, ancestor_path)
