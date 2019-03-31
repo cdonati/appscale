@@ -42,6 +42,18 @@ START_FILTERS = (Query_Filter.GREATER_THAN_OR_EQUAL, Query_Filter.GREATER_THAN)
 STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
+class FilterProperty(object):
+  __slots__ = ['name', 'filters']
+
+  def __init__(self, prop_name, filters):
+    self.name = prop_name
+    self.filters = filters
+
+  @property
+  def equality(self):
+    return len(self.filters) == 1 and self.filters[0][0] == Query_Filter.EQUAL
+
+
 def group_filters(query):
   filter_props = []
   for query_filter in query.filter_list():
@@ -51,23 +63,21 @@ def group_filters(query):
     prop = query_filter.property(0)
     prop_name = six.text_type(prop.name())
     filter_info = (query_filter.op(), prop.value())
-    if filter_props:
-      last_filter_name, last_filter_list = filter_props[-1]
-      if last_filter_name == prop_name:
-        last_filter_list.append(filter_info)
+    if filter_props and filter_props[-1].name == prop_name:
+      filter_props[-1].filters.append(filter_info)
     else:
-      filter_props.append((prop_name, [filter_info]))
+      filter_props.append(FilterProperty(prop_name, [filter_info]))
 
-  for name, filters in filter_props[:-1]:
-    if name == KEY_PROP:
+  for filter_prop in filter_props[:-1]:
+    if filter_prop.name == KEY_PROP:
       raise BadRequest(
         u'Only the last filter property can be on {}'.format(KEY_PROP))
 
-    if len(filters) != 1 or filters[0][0] != Query_Filter.EQUAL:
+    if not filter_prop.equality:
       raise BadRequest(u'All but the last property must be equality filters')
 
-  for prop_name, filters in filter_props:
-    if len(filters) > 2:
+  for filter_prop in filter_props:
+    if len(filter_prop.filters) > 2:
       raise BadRequest(u'A property can only have up to two filters')
 
   return tuple(filter_props)
@@ -77,19 +87,18 @@ def get_order_info(query):
   filter_props = group_filters(query)
 
   # Orders on equality filters can be ignored.
-  equality_props = [prop_name for prop_name, filters in filter_props
-                    if filters[0][0] == Query_Filter.EQUAL]
+  equality_props = [prop.name for prop in filter_props if prop.equality]
   relevant_orders = [order for order in query.order_list()
                      if order.property() not in equality_props]
 
   order_info = []
-  for prop_name, filters in filter_props:
+  for filter_prop in filter_props:
     direction = next(
       (order.direction() for order in relevant_orders
-       if order.property() == prop_name), Query_Order.ASCENDING)
-    order_info.append((prop_name, direction))
+       if order.property() == filter_prop.name), Query_Order.ASCENDING)
+    order_info.append((filter_prop.name, direction))
 
-  filter_prop_names = [prop_name for prop_name, _ in filter_props]
+  filter_prop_names = [prop.name for prop in filter_props]
   order_info.extend(
     [(order.property(), order.direction()) for order in relevant_orders
      if order.property() not in filter_prop_names])
@@ -303,17 +312,16 @@ class Index(object):
     if ancestor_path:
       start, stop = encode_ancestor_range(subspace, ancestor_path)
 
-    for prop_name, filters in filter_props:
-      if prop_name != KEY_PROP:
-        raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
+    for filter_prop in filter_props:
+      if filter_prop.name != KEY_PROP:
+        raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
-      if len(filters) == 1:
-        op, value = filters[0]
-        if op == Query_Filter.EQUAL:
-          subspace = subspace.subspace(self.encode_path(value))
-          continue
+      if filter_prop.equality:
+        value = filter_prop.filters[0][1]
+        subspace = subspace.subspace(self.encode_path(value))
+        continue
 
-      for op, value in filters:
+      for op, value in filter_prop.filters:
         if op in START_FILTERS:
           start = key_selector(op)(subspace.pack(self.encode_path(value)))
         elif op in STOP_FILTERS:
@@ -446,12 +454,13 @@ class SinglePropIndex(Index):
     stop = None
     if ancestor_path:
       # Apply property equality first if it exists.
-      prop_name, filters = filter_props[0]
-      if len(filters) == 1:
-        op, value = filters[0]
-        if op == Query_Filter.EQUAL:
-          subspace = subspace.subspace((encode_value(value),))
-          filter_props = filter_props[1:]
+      if filter_props and filter_props[0].name == self.prop_name:
+        if not filter_props[0].equality:
+          raise BadRequest(u'Invalid index for ancestor query')
+
+        value = filter_props[0].filters[0][1]
+        subspace = subspace.subspace((encode_value(value),))
+        filter_props = filter_props[1:]
 
       start, stop = encode_ancestor_range(subspace, ancestor_path)
 
@@ -579,23 +588,22 @@ class CompositeIndex(Index):
     subspace = self.directory.subspace(ancestor_path)
     start = None
     stop = None
-    for prop_name, filters in filter_props:
+    for filter_prop in filter_props:
       index_direction = next(direction for name, direction in self.order_info)
       reverse = index_direction == Query_Order.DESCENDING
-      if prop_name in self.prop_names:
+      if filter_prop.name in self.prop_names:
         encoder = lambda val: encode_value(val, reverse)
-      elif prop_name == KEY_PROP:
+      elif filter_prop.name == KEY_PROP:
         encoder = self.encode_path
       else:
-        raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
+        raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
-      if len(filters) == 1:
-        op, value = filters[0]
-        if op == Query_Filter.EQUAL:
-          subspace = subspace.subspace((encoder(value),))
-          continue
+      if filter_prop.equality:
+        value = filter_prop.filters[0][1]
+        subspace = subspace.subspace((encoder(value),))
+        continue
 
-      for op, value in filters:
+      for op, value in filter_prop.filters:
         if op in START_FILTERS:
           start = key_selector(op)(subspace.pack(encoder(value)))
         elif op in STOP_FILTERS:
@@ -664,12 +672,12 @@ class IndexManager(object):
     if index is None:
       raise BadRequest('Query not supported')
 
-    filter_info = group_filters(query)
+    filter_props = group_filters(query)
     if query.has_ancestor():
       ancestor_path = encode_path(query.ancestor().path())
-      desired_slice = index.get_slice(filter_info, ancestor_path)
+      desired_slice = index.get_slice(filter_props, ancestor_path)
     else:
-      desired_slice = index.get_slice(filter_info)
+      desired_slice = index.get_slice(filter_props)
 
     reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
     rpc_limit, check_more_results = self.rpc_limit(query)
@@ -787,7 +795,7 @@ class IndexManager(object):
   def _get_perfect_index(self, query):
     project_id = six.text_type(query.app())
     namespace = six.text_type(query.name_space())
-    filter_info = group_filters(query)
+    filter_props = group_filters(query)
     order_info = get_order_info(query)
     prop_names = [prop_name for prop_name, _ in order_info]
 
@@ -805,8 +813,8 @@ class IndexManager(object):
         project_id, namespace, kind, self._directory_cache)
 
     if sum(prop_name != KEY_PROP for prop_name in prop_names) == 1:
-      inequality_filters = [filters for _, filters in filter_info
-                            if filters[0][0] != Query_Filter.EQUAL]
+      inequality_filters = [prop.filters for prop in filter_props
+                            if not prop.equality]
       if not query.has_ancestor() or not inequality_filters:
         prop_name = next(prop_name for prop_name in prop_names
                          if prop_name != KEY_PROP)
