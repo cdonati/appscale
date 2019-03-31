@@ -354,8 +354,7 @@ class KindlessIndex(Index):
     return cls(directory)
 
   def __repr__(self):
-    dir_repr = u'/'.join([self.project_id, repr(self.namespace)])
-    return u'KindlessIndex({})'.format(dir_repr)
+    return u'KindlessIndex(%r)' % self.directory
 
   def encode_path(self, path):
     if not isinstance(path, tuple):
