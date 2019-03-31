@@ -644,7 +644,7 @@ class IndexManager(object):
       raise BadRequest('Query not supported')
 
     filter_info = group_filters(query)
-    if index.ancestor:
+    if isinstance(index, CompositeIndex) and index.ancestor:
       ancestor_path = encode_path(query.ancestor().path())
       desired_slice = index.get_slice(filter_info, ancestor_path)
     else:
