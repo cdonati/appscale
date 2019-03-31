@@ -213,6 +213,8 @@ class FDBDatastore(object):
       query_result.set_keys_only(True)
 
     logger.debug('query_result: {}'.format(query_result))
+    for encoded_entity in query_result.result_list():
+      logger.debug('entity: {}'.format(entity_pb.EntityProto(encoded_entity)))
 
   @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
