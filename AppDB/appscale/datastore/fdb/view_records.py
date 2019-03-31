@@ -143,9 +143,13 @@ def print_single_prop_indexes(tr, index_dir):
       print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
+def print_composite_indexes(tr, index_dir):
+  pass
+
+
 def print_indexes(tr, indexes_dir, indexes):
   if not indexes:
-    indexes = ['kindless', 'kind', 'single-property']
+    indexes = ['kindless', 'kind', 'single-property', 'composite']
 
   namespaces = indexes_dir.list(tr)
   for namespace in namespaces:
@@ -161,6 +165,9 @@ def print_indexes(tr, indexes_dir, indexes):
 
       if index_type == 'single-property' and index_type in indexes:
         print_single_prop_indexes(tr, index_dir)
+
+      if index_type == 'composite' and index_type in indexes:
+        print_composite_indexes(tr, index_dir)
 
 
 def main():

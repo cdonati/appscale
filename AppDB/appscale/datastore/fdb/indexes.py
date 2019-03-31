@@ -594,7 +594,7 @@ class CompositeIndex(Index):
                           commit_vs, deleted_vs)
 
   def get_slice(self, filter_props, ancestor_path=tuple()):
-    subspace = self.directory.subspace(ancestor_path)
+    subspace = self.directory.subspace((ancestor_path,))
     start = None
     stop = None
     for filter_prop in filter_props:
