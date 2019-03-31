@@ -23,6 +23,12 @@ ds_dir = fdb.directory.open(db, ('appscale', 'datastore'))
 
 
 def format_versionstamp(versionstamp):
+  if not isinstance(versionstamp, fdb.tuple.Versionstamp):
+    versionstamp = fdb.tuple.Versionstamp(versionstamp)
+
+  if not versionstamp.is_complete():
+    return None
+
   return struct.unpack('>Q', versionstamp.tr_version[:8])[0]
 
 
@@ -99,13 +105,14 @@ def print_data(tr, data_dir):
 
 def print_kindless_index(tr, index):
   print(str(index) + ':')
-  headers = ['Path', 'Versionstamp']
+  headers = ['Path', 'Versionstamp', 'Deleted VS']
   table = []
 
   for kv in tr[index.directory.range()]:
     entry = index.decode(kv)
     table.append([format_path(entry.path),
-                  format_versionstamp(entry.commit_vs)])
+                  format_versionstamp(entry.commit_vs),
+                  format_versionstamp(entry.deleted_vs)])
 
   print(tabulate.tabulate(table, headers=headers) + '\n')
 
@@ -115,12 +122,13 @@ def print_kind_indexes(tr, index_dir):
     index = KindIndex(index_dir.open(tr, (kind,)))
     print(str(index) + ':')
 
-    headers = ['Path', 'Versionstamp']
+    headers = ['Path', 'Versionstamp', 'Deleted VS']
     table = []
     for kv in tr[index.directory.range()]:
       entry = index.decode(kv)
       table.append([format_path(entry.path),
-                    format_versionstamp(entry.commit_vs)])
+                    format_versionstamp(entry.commit_vs),
+                    format_versionstamp(entry.deleted_vs)])
 
     print(tabulate.tabulate(table, headers=headers) + '\n')
 
@@ -132,13 +140,14 @@ def print_single_prop_indexes(tr, index_dir):
       index = SinglePropIndex(kind_dir.open(tr, (prop_name,)))
       print(str(index) + ':')
 
-      headers = ['Value', 'Path', 'Versionstamp']
+      headers = ['Value', 'Path', 'Versionstamp', 'Deleted VS']
       table = []
       for kv in tr[index.directory.range()]:
         entry = index.decode(kv)
         table.append([format_value(entry.value),
                       format_path(entry.path),
-                      format_versionstamp(entry.commit_vs)])
+                      format_versionstamp(entry.commit_vs),
+                      format_versionstamp(entry.deleted_vs)])
 
       print(tabulate.tabulate(table, headers=headers) + '\n')
 
