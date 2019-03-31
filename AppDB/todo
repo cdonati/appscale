@@ -98,7 +98,7 @@ make sure tmp_chunks works correctly
 ---
 
 remove txid handle mapping (do it in the api server)
-support IN and EXISTS filters
+support IN and EXISTS filters?
 test invalidation for ancestor queries (does GAE invalidate for queries in the
 whole group, or can it deal with ranges?)
 add tests for functionality that doesn't work in current datastore
@@ -110,3 +110,5 @@ test if prop result (projection) specifies group
 extend fdb.tuple for custom data types and reversable data types
 fix versionstamp encode bug where packing vs.tr_version can raise exception if
 fdb.Value instead of string
+use native fdb offset instead of scanning all keys (actually, not possible
+using mvcc indexes)

@@ -674,9 +674,9 @@ class IndexManager(object):
 
     kv_iterator = KVIterator(tr, self._tornado_fdb, desired_slice, fetch_limit,
                              reverse, snapshot=True)
-    iterator = IndexIterator(index, kv_iterator, read_vs)
     logger.debug('using index: {}'.format(index))
-    logger.debug('using range: {}'.format(desired_slice))
+    logger.debug('kv_iterator: {}'.format(kv_iterator))
+    iterator = IndexIterator(index, kv_iterator, read_vs)
 
     return iterator
 

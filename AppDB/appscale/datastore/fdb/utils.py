@@ -173,6 +173,7 @@ class TornadoFDB(object):
 class KVIterator(object):
   def __init__(self, tr, tornado_fdb, key_slice, limit=0, reverse=False,
                streaming_mode=fdb.StreamingMode.iterator, snapshot=False):
+    self.slice = key_slice
     self.done_with_range = False
     self._tr = tr
     self._tornado_fdb = tornado_fdb
@@ -188,6 +189,17 @@ class KVIterator(object):
     self._iteration = 1
     self._index = 0
     self._done = False
+
+  def __repr__(self):
+    attrs = ['start={}'.format(self.slice.start),
+             'stop={}'.format(self.slice.stop)]
+    if self._limit > 0:
+      attrs.append('limit={}'.format(self._limit))
+
+    if self._reverse:
+      attrs.append('reverse={}'.format(self._reverse))
+
+    return 'KVIterator({})'.format(', '.join(attrs))
 
   def increase_limit(self, difference=1):
     if not self.done_with_range:
