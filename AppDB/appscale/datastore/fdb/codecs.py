@@ -4,6 +4,7 @@ import six
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest
+from appscale.datastore.fdb.utils import fdb
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -70,6 +71,21 @@ def decode_element(element_tuple):
     path_element.set_name(element_tuple[1])
 
   return path_element
+
+
+def encode_ancestor_range(subspace, path):
+  embedded_value = fdb.tuple.pack(path)
+  # In order to exclude the ancestor itself, the range is manually selected
+  # using the potential values for the next element in the key path. It's
+  # normally a unicode string specifying the kind of the next element, but it
+  # can also be an integer if it's the last element and the index directory
+  # includes the kind.
+  embedded_start = embedded_value + six.int2byte(fdb.tuple.STRING_CODE)
+  embedded_stop = embedded_value + six.int2byte(fdb.tuple.POS_INT_END + 1)
+  prefix = subspace.rawPrefix + six.int2byte(fdb.tuple.NESTED_CODE)
+  start = fdb.KeySelector.first_greater_than(prefix + embedded_start)
+  stop = fdb.KeySelector.last_less_or_equal(prefix + embedded_stop)
+  return start, stop
 
 
 def encode_path(path):

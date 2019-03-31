@@ -21,7 +21,8 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.fdb.codecs import (
-  encode_path, encode_value, decode_element, decode_path, decode_value)
+  encode_ancestor_range, encode_path, encode_value, decode_element,
+  decode_path, decode_value)
 from appscale.datastore.fdb.utils import fdb, MAX_FDB_TX_DURATION, KVIterator
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.index_manager import IndexInaccessible
@@ -295,9 +296,7 @@ class Index(object):
     start = None
     stop = None
     if ancestor_path:
-      ancestor_range = fdb.tuple.range(ancestor_path)
-      start = subspace.rawPrefix + ancestor_range.start
-      stop = subspace.rawPrefix + ancestor_range.stop
+      start, stop = encode_ancestor_range(subspace, ancestor_path)
 
     for prop_name, filters in filter_props:
       if prop_name != KEY_PROP:
@@ -449,9 +448,7 @@ class SinglePropIndex(Index):
           subspace = subspace.subspace((encode_value(value),))
           filter_props = filter_props[1:]
 
-      ancestor_range = fdb.tuple.range(ancestor_path)
-      start = subspace.rawPrefix + ancestor_range.start
-      stop = subspace.rawPrefix + ancestor_range.stop
+      start, stop = encode_ancestor_range(subspace, ancestor_path)
 
     for prop_name, filters in filter_props:
       if prop_name == self.prop_name:
