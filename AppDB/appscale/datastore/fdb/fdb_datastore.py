@@ -170,11 +170,11 @@ class FDBDatastore(object):
       logger.debug('entries: {}'.format(entries))
       logger.debug('more_iterator_results: {}'.format(more_iterator_results))
       entries_fetched += len(entries)
-      if not entries:
-        if more_iterator_results:
-          continue
-        else:
-          break
+      if not entries and more_iterator_results:
+        continue
+
+      if not entries and not more_iterator_results:
+        break
 
       skipped_results += min(entries_fetched, iter_offset)
       suitable_entries = entries[iter_offset:remainder]
@@ -194,6 +194,9 @@ class FDBDatastore(object):
             self._data_manager.get_entry(tr, entry, snapshot=True))
         else:
           results.append(entry.key_result())
+
+      if not more_iterator_results:
+        break
 
     if fetch_data:
       entity_results = yield data_futures

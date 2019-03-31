@@ -151,6 +151,11 @@ class IndexEntry(object):
     group.add_element().MergeFrom(decode_element(self.path[:2]))
     return group
 
+  def __repr__(self):
+    return u'IndexEntry(%r, %r, %r, %r, %r)' % (
+      self.project_id, self.namespace, self.path, self.commit_vs,
+      self.deleted_vs)
+
   def key_result(self):
     entity = entity_pb.EntityProto()
     entity.mutable_key().MergeFrom(self.key)
