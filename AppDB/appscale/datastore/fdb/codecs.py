@@ -84,7 +84,7 @@ def encode_ancestor_range(subspace, path):
   embedded_stop = embedded_value + six.int2byte(fdb.tuple.POS_INT_END + 1)
   prefix = subspace.rawPrefix + six.int2byte(fdb.tuple.NESTED_CODE)
   start = fdb.KeySelector.first_greater_than(prefix + embedded_start)
-  stop = fdb.KeySelector.last_less_or_equal(prefix + embedded_stop)
+  stop = fdb.KeySelector.first_greater_or_equal(prefix + embedded_stop)
   return start, stop
 
 
