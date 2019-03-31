@@ -53,6 +53,9 @@ class FilterProperty(object):
   def equality(self):
     return len(self.filters) == 1 and self.filters[0][0] == Query_Filter.EQUAL
 
+  def __repr__(self):
+    return u'FilterProperty(%r, %r)' % (self.name, self.filters)
+
 
 def group_filters(query):
   filter_props = []
@@ -464,21 +467,20 @@ class SinglePropIndex(Index):
 
       start, stop = encode_ancestor_range(subspace, ancestor_path)
 
-    for prop_name, filters in filter_props:
-      if prop_name == self.prop_name:
+    for filter_prop in filter_props:
+      if filter_prop.name == self.prop_name:
         encoder = encode_value
-      elif prop_name == KEY_PROP:
+      elif filter_prop.name == KEY_PROP:
         encoder = self.encode_path
       else:
-        raise BadRequest(u'Unexpected filter: {}'.format(prop_name))
+        raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
-      if len(filters) == 1:
-        op, value = filters[0]
-        if op == Query_Filter.EQUAL:
-          subspace = subspace.subspace((encoder(value),))
-          continue
+      if filter_prop.equality:
+        value = filter_prop.filters[0][1]
+        subspace = subspace.subspace((encoder(value),))
+        continue
 
-      for op, value in filters:
+      for op, value in filter_prop.filters:
         if op in START_FILTERS:
           start = key_selector(op)(subspace.pack(encoder(value)))
         elif op in STOP_FILTERS:
