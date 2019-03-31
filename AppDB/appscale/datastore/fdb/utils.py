@@ -207,19 +207,17 @@ class KVIterator(object):
       self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
       self._iteration, self._reverse, self._snapshot)
     self._fetched += count
+    self._iteration += 1
 
-    if self._fetched < self._limit:
-      if not more:
-        self.done_with_range = True
-        self._done = True
+    if kvs:
+      if self._reverse:
+        self._esel = fdb.KeySelector.first_greater_or_equal(kvs[-1].key)
       else:
-        self._iteration += 1
-        if self._reverse:
-          self._esel = fdb.KeySelector.first_greater_or_equal(kvs[-1].key)
-        else:
-          self._bsel = fdb.KeySelector.first_greater_than(kvs[-1].key)
-    else:
-      self._done = True
+        self._bsel = fdb.KeySelector.first_greater_than(kvs[-1].key)
+
+    reached_limit = self._limit > 0 and self._fetched == self._limit
+    self._done = not more or reached_limit
+    self.done_with_range = not more and not reached_limit
 
     raise gen.Return((kvs, not self._done))
 
