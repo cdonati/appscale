@@ -191,8 +191,18 @@ class KVIterator(object):
     self._done = False
 
   def __repr__(self):
-    attrs = ['start={}'.format(self.slice.start),
-             'stop={}'.format(self.slice.stop)]
+    # TODO: Simplify when KeySelector repr is fixed.
+    start = self.slice.start
+    if isinstance(start, fdb.KeySelector):
+      start = 'KeySelector(%r, %r, %r)' % (start.key, start.or_equal,
+                                           start.offset)
+
+    stop = self.slice.stop
+    if isinstance(stop, fdb.KeySelector):
+      stop = 'KeySelector(%r, %r, %r)' % (stop.key, stop.or_equal,
+                                          stop.offset)
+
+    attrs = ['start={}'.format(start), 'stop={}'.format(stop)]
     if self._limit > 0:
       attrs.append('limit={}'.format(self._limit))
 
