@@ -196,11 +196,15 @@ class KVIterator(object):
     if isinstance(start, fdb.KeySelector):
       start = 'KeySelector(%r, %r, %r)' % (start.key, start.or_equal,
                                            start.offset)
+    else:
+      start = repr(start)
 
     stop = self.slice.stop
     if isinstance(stop, fdb.KeySelector):
       stop = 'KeySelector(%r, %r, %r)' % (stop.key, stop.or_equal,
                                           stop.offset)
+    else:
+      stop = repr(stop)
 
     attrs = ['start={}'.format(start), 'stop={}'.format(stop)]
     if self._limit > 0:
