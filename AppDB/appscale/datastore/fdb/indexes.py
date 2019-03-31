@@ -445,8 +445,6 @@ class SinglePropIndex(Index):
       if len(filters) == 1:
         op, value = filters[0]
         if op == Query_Filter.EQUAL:
-          logger.debug('value: {}'.format(value))
-          logger.debug('encoded val: {}'.format(encoder(value)))
           subspace = subspace.subspace((encoder(value),))
           continue
 
@@ -573,8 +571,7 @@ class CompositeIndex(Index):
       if len(filters) == 1:
         op, value = filters[0]
         if op == Query_Filter.EQUAL:
-          packed_value = fdb.tuple.pack(encoder(value))
-          subspace = subspace.subspace((packed_value,))
+          subspace = subspace.subspace((encoder(value),))
           continue
 
       for op, value in filters:
