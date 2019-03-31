@@ -447,8 +447,7 @@ class SinglePropIndex(Index):
         if op == Query_Filter.EQUAL:
           logger.debug('value: {}'.format(value))
           logger.debug('encoded val: {}'.format(encoder(value)))
-          packed_value = fdb.tuple.pack(encoder(value))
-          subspace = subspace.subspace((packed_value,))
+          subspace = subspace.subspace((encoder(value),))
           continue
 
       for op, value in filters:
