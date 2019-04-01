@@ -283,7 +283,8 @@ class FDBDatastore(object):
     for mutation in mutations:
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
-      old_encoded, old_version, old_vs = yield futures[key.Encode()][1:]
+      old_entities = yield futures[key.Encode()]
+      old_encoded, old_version, old_vs = old_entities[1:]
       if old_encoded:
         old_entity = entity_pb.EntityProto(old_encoded)
       else:
