@@ -583,6 +583,7 @@ class CompositeIndex(Index):
   def decode(self, kv):
     logger.debug('kv: {!r}'.format(kv))
     unpacked_key = self.directory.unpack(kv.key)
+    logger.debug('unpacked key: {!r}'.format(unpacked_key))
     if self.ancestor:
       kindless_path = unpacked_key[0] + unpacked_key[-2]
       values = unpacked_key[1:-2]
