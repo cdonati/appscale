@@ -9,7 +9,7 @@ entries:
 ^5: A directory located at (appscale, datastore, <project>, transactions).
 ^6: Designates what version of the database read operations should see.
 """
-import fdb
+import logging
 import sys
 import uuid
 
@@ -19,19 +19,22 @@ from tornado import gen
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.codecs import encode_path
-from appscale.datastore.fdb.utils import EncodedTypes, put_chunks, KVIterator
+from appscale.datastore.fdb.utils import (
+  fdb, EncodedTypes, put_chunks, KVIterator)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
 
+logger = logging.getLogger(__name__)
+
 
 class MetadataKeys(object):
-  READ_VS = b'0'
-  XG = b'1'
-  LOOKUPS = b'2'
-  QUERIES = b'3'
-  PUTS = b'4'
-  DELETES = b'5'
+  READ_VS = b'\x00'
+  XG = b'\x01'
+  LOOKUPS = b'\x02'
+  QUERIES = b'\x03'
+  PUTS = b'\x04'
+  DELETES = b'\x05'
 
 
 def decode_chunks(chunks, rpc_type):
@@ -141,6 +144,7 @@ class TransactionManager(object):
       for kv in kvs:
         key_parts = metadata_subspace.unpack(kv.key)
         metadata_key = key_parts[0]
+        logger.debug('metadata_key: {}'.format(metadata_key))
         if metadata_key == MetadataKeys.READ_VS:
           read_vs = fdb.tuple.Versionstamp(kv.value)
           continue
