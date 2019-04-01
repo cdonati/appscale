@@ -566,7 +566,7 @@ class CompositeIndex(Index):
 
     pack = self.pack_method(commit_vs)
     encoded_values = itertools.product(*encoded_values_by_prop)
-    logger.debug('encoded_values: {!r}'.format(encoded_values))
+    logger.debug('encoded_values: {!r}'.format(list(encoded_values)))
     if not self.ancestor:
       return tuple(pack((value, self.encode_path(path), commit_vs))
                    for value in encoded_values)
