@@ -43,7 +43,7 @@ STOP_FILTERS = (Query_Filter.LESS_THAN_OR_EQUAL, Query_Filter.LESS_THAN)
 
 
 class FilterProperty(object):
-  __slots__ = ['name', 'filters']
+  __slots__ = [u'name', u'filters']
 
   def __init__(self, prop_name, filters):
     self.name = prop_name
@@ -129,7 +129,7 @@ def get_scan_direction(query, index):
     return Query_Order.DESCENDING
 
 
-def key_selector(op):
+def get_fdb_key_selector(op):
   """ Like Python's slice notation, FDB range queries include the start and
       exclude the stop. Therefore, the stop selector must point to the first
       key that will be excluded from the results. """
@@ -139,6 +139,26 @@ def key_selector(op):
     return fdb.KeySelector.first_greater_than
   else:
     raise BadRequest(u'Unsupported filter operator')
+
+
+def get_mvcc_key_selector(fdb_key_selector):
+  if isinstance(fdb_key_selector, six.binary_type):
+    return 0, fdb.KeySelector.first_greater_or_equal(fdb_key_selector)
+
+  if not isinstance(fdb_key_selector, fdb.KeySelector):
+    raise InternalError(u'Unexpected key selector type')
+
+  # FDB resolves key selectors by finding the last key less than the
+  # reference key unless "or_equal" is specified. Therefore,
+  # "or_equal: False, offset: 1" means the first key that's greater or equal
+  # to the reference key.
+  last_less_than = not fdb_key_selector.or_equal
+  if last_less_than:
+    return (fdb_key_selector.offset - 1,
+            fdb.KeySelector.first_greater_or_equal(fdb_key_selector.key))
+  else:
+    return (fdb_key_selector.offset,
+            fdb.KeySelector.first_greater_or_equal(fdb_key_selector.key))
 
 
 class IndexEntry(object):
@@ -257,12 +277,24 @@ class CompositeEntry(IndexEntry):
 
 
 class IndexIterator(object):
-  def __init__(self, index, kv_iterator, read_vs=None):
+  def __init__(self, tr, tornado_fdb, index, key_slice, fetch_limit, reverse,
+               read_vs=None, snapshot=False):
     self.index = index
-    self._kv_iterator = kv_iterator
+    self.start_offset, self.start = get_mvcc_key_selector(key_slice.start)
+    self.stop_offset, self.stop = get_mvcc_key_selector(key_slice.stop)
+    if self.start_offset < 0:
+      raise InternalError(u'Invalid start offset')
+
+    if self.stop_offset > 0:
+      raise InternalError(u'Invalid stop offset')
+
+    self._kv_iterator = KVIterator(tr, tornado_fdb, key_slice, fetch_limit,
+                                   reverse, snapshot=snapshot)
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
 
+    self._remaining_start_offset = self.start_offset
+    self._stop_offset_cache = []
     self._read_vs = read_vs
     self._done = False
 
@@ -272,7 +304,7 @@ class IndexIterator(object):
       raise gen.Return(([], False))
 
     kvs, more_results = yield self._kv_iterator.next_page()
-    usable_entries = []
+    usable_entries = self._stop_offset_cache
     for kv in kvs:
       entry = self.index.decode(kv)
       if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
@@ -281,6 +313,16 @@ class IndexIterator(object):
         continue
 
       usable_entries.append(entry)
+
+    # Apply start offset.
+    count = len(usable_entries)
+    usable_entries = usable_entries[self._remaining_start_offset:]
+    self._remaining_start_offset = max(self._remaining_start_offset - count, 0)
+
+    # Apply stop offset. It's not possible to know what results will be removed
+    # until the end, so potential removals are cached.
+    self._stop_offset_cache = usable_entries[self.stop_offset:]
+    usable_entries = usable_entries[:self.stop_offset]
 
     if not more_results:
       self._done = True
@@ -327,16 +369,16 @@ class Index(object):
         raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
       if filter_prop.equality:
-        value = filter_prop.filters[0][1]
-        subspace = subspace.subspace((self.encode_path(value),))
+        encoded_path = self.encode_path(filter_prop.filters[0][1])
+        subspace = subspace.subspace((encoded_path,))
         continue
 
       for op, value in filter_prop.filters:
         encoded_path = self.encode_path(value)
         if op in START_FILTERS:
-          start = key_selector(op)(subspace.pack((encoded_path,)))
+          start = get_fdb_key_selector(op)(subspace.pack((encoded_path,)))
         elif op in STOP_FILTERS:
-          stop = key_selector(op)(subspace.pack((encoded_path,)))
+          stop = get_fdb_key_selector(op)(subspace.pack((encoded_path,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -390,8 +432,7 @@ class KindIndex(Index):
     return self.directory.get_path()[-1]
 
   def __repr__(self):
-    dir_repr = u'/'.join([self.project_id, repr(self.namespace), self.kind])
-    return u'KindIndex({})'.format(dir_repr)
+    return u'KindIndex(%r)' % self.directory
 
   def encode_path(self, path):
     if not isinstance(path, tuple):
@@ -432,9 +473,7 @@ class SinglePropIndex(Index):
     return self.directory.get_path()[-1]
 
   def __repr__(self):
-    dir_repr = u'/'.join([self.project_id, repr(self.namespace), self.kind,
-                          self.prop_name])
-    return u'SinglePropIndex({})'.format(dir_repr)
+    return u'SinglePropIndex(%r)' % self.directory
 
   def encode_path(self, path):
     if not isinstance(path, tuple):
@@ -490,9 +529,9 @@ class SinglePropIndex(Index):
       for op, value in filter_prop.filters:
         encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = key_selector(op)(subspace.pack((encoded_value,)))
+          start = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
-          stop = key_selector(op)(subspace.pack((encoded_value,)))
+          stop = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -529,17 +568,8 @@ class CompositeIndex(Index):
     return cls(directory, kind, ancestor, order_info)
 
   def __repr__(self):
-    components = [self.project_id, repr(self.namespace), self.kind]
-    if self.ancestor:
-      components.append(u'(includes ancestors)')
-
-    for prop_name, direction in self.order_info:
-      if direction == Query_Order.DESCENDING:
-        prop_name = '-' + prop_name
-
-      components.append(prop_name)
-
-    return u'CompositeIndex({})'.format(u'/'.join(components))
+    return u'CompositeIndex(%r, %r, %r, %r)' % (
+      self.directory, self.kind, self.ancestor, self.order_info)
 
   def encode_path(self, path):
     if not isinstance(path, tuple):
@@ -614,11 +644,12 @@ class CompositeIndex(Index):
         continue
 
       for op, value in filter_prop.filters:
+        selector = get_fdb_key_selector(op, reverse)
         encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = key_selector(op)(subspace.pack((encoded_value,)))
+          start = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
-          stop = key_selector(op)(subspace.pack((encoded_value,)))
+          stop = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -681,7 +712,7 @@ class IndexManager(object):
   def get_iterator(self, tr, query, read_vs=None):
     index = self._get_perfect_index(query)
     if index is None:
-      raise BadRequest('Query not supported')
+      raise BadRequest(u'Query not supported')
 
     filter_props = group_filters(query)
     logger.debug('filter_props: {}'.format(filter_props))
@@ -697,11 +728,9 @@ class IndexManager(object):
     if check_more_results:
       fetch_limit += 1
 
-    kv_iterator = KVIterator(tr, self._tornado_fdb, desired_slice, fetch_limit,
-                             reverse, snapshot=True)
     logger.debug('using index: {}'.format(index))
-    logger.debug('kv_iterator: {}'.format(kv_iterator))
-    iterator = IndexIterator(index, kv_iterator, read_vs)
+    iterator = IndexIterator(tr, self._tornado_fdb, index, desired_slice,
+                             fetch_limit, reverse, read_vs, snapshot=True)
 
     return iterator
 
@@ -724,12 +753,12 @@ class IndexManager(object):
         tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
       composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
                                        order_info)
-      logger.info('Backfilling {}'.format(composite_index))
+      logger.info(u'Backfilling {}'.format(composite_index))
       try:
         kind_index_dir = indexes_dir.open(
           tr, (namespace, KindIndex.DIR_NAME, kind))
       except ValueError:
-        logger.info('No entities exist for {}'.format(composite_index))
+        logger.info(u'No entities exist for {}'.format(composite_index))
         continue
 
       kind_index = KindIndex(kind_index_dir)
@@ -756,7 +785,7 @@ class IndexManager(object):
             tr[key] = deleted_val
 
         if not more_results:
-          logger.info('Finished backfilling {}'.format(composite_index))
+          logger.info(u'Finished backfilling {}'.format(composite_index))
           break
 
         if time.time() > deadline:
@@ -764,7 +793,7 @@ class IndexManager(object):
             yield self._tornado_fdb.commit(tr)
             cursor = (namespace, kvs[-1].key)
           except fdb.FDBError as fdb_error:
-            logger.warning('Error while updating index: {}'.format(fdb_error))
+            logger.warning(u'Error while updating index: {}'.format(fdb_error))
             tr.on_error(fdb_error).wait()
 
           yield self.update_composite_index(project_id, index_pb, cursor)
