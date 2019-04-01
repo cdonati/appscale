@@ -129,36 +129,20 @@ def get_scan_direction(query, index):
     return Query_Order.DESCENDING
 
 
-def get_fdb_key_selector(op):
+def get_fdb_key_selector(op, encoded_value):
   """ Like Python's slice notation, FDB range queries include the start and
       exclude the stop. Therefore, the stop selector must point to the first
       key that will be excluded from the results. """
-  if op in (Query_Filter.GREATER_THAN_OR_EQUAL, Query_Filter.LESS_THAN):
-    return fdb.KeySelector.first_greater_or_equal
-  elif op in (Query_Filter.GREATER_THAN, Query_Filter.LESS_THAN_OR_EQUAL):
-    return fdb.KeySelector.first_greater_than
+  if op == Query_Filter.GREATER_THAN_OR_EQUAL:
+    return fdb.KeySelector.first_greater_or_equal(encoded_value)
+  elif op == Query_Filter.GREATER_THAN:
+    return fdb.KeySelector.first_greater_than(encoded_value + b'\xff')
+  elif op == Query_Filter.LESS_THAN_OR_EQUAL:
+    return fdb.KeySelector.first_greater_or_equal(encoded_value + b'\xff')
+  elif op == Query_Filter.LESS_THAN:
+    return fdb.KeySelector.first_greater_than(encoded_value)
   else:
     raise BadRequest(u'Unsupported filter operator')
-
-
-def get_mvcc_key_selector(fdb_key_selector):
-  if isinstance(fdb_key_selector, six.binary_type):
-    return 0, fdb.KeySelector.first_greater_or_equal(fdb_key_selector)
-
-  if not isinstance(fdb_key_selector, fdb.KeySelector):
-    raise InternalError(u'Unexpected key selector type')
-
-  # FDB resolves key selectors by finding the last key less than the
-  # reference key unless "or_equal" is specified. Therefore,
-  # "or_equal: False, offset: 1" means the first key that's greater or equal
-  # to the reference key.
-  last_less_than = not fdb_key_selector.or_equal
-  if last_less_than:
-    return (fdb_key_selector.offset - 1,
-            fdb.KeySelector.first_greater_or_equal(fdb_key_selector.key))
-  else:
-    return (fdb_key_selector.offset,
-            fdb.KeySelector.first_greater_or_equal(fdb_key_selector.key))
 
 
 class IndexEntry(object):
@@ -280,26 +264,11 @@ class IndexIterator(object):
   def __init__(self, tr, tornado_fdb, index, key_slice, fetch_limit, reverse,
                read_vs=None, snapshot=False):
     self.index = index
-    self.start_offset, self.start = get_mvcc_key_selector(key_slice.start)
-    self.stop_offset, self.stop = get_mvcc_key_selector(key_slice.stop)
-    if self.start_offset < 0:
-      raise InternalError(u'Invalid start offset')
-
-    if self.stop_offset > 0:
-      raise InternalError(u'Invalid stop offset')
-
-    logger.debug('start: {!r}'.format(self.start.key))
-    logger.debug('stop: {!r}'.format(self.stop.key))
-    logger.debug('start offset: {!r}'.format(self.start_offset))
-    logger.debug('stop offset: {!r}'.format(self.stop_offset))
     self._kv_iterator = KVIterator(
-      tr, tornado_fdb, slice(self.start, self.stop), fetch_limit, reverse,
-      snapshot=snapshot)
+      tr, tornado_fdb, key_slice, fetch_limit, reverse, snapshot=snapshot)
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
 
-    self._remaining_start_offset = self.start_offset
-    self._stop_offset_cache = []
     self._read_vs = read_vs
     self._done = False
 
@@ -309,7 +278,7 @@ class IndexIterator(object):
       raise gen.Return(([], False))
 
     kvs, more_results = yield self._kv_iterator.next_page()
-    usable_entries = self._stop_offset_cache
+    usable_entries = []
     for kv in kvs:
       entry = self.index.decode(kv)
       if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
@@ -318,17 +287,6 @@ class IndexIterator(object):
         continue
 
       usable_entries.append(entry)
-
-    # Apply start offset.
-    count = len(usable_entries)
-    usable_entries = usable_entries[self._remaining_start_offset:]
-    self._remaining_start_offset = max(self._remaining_start_offset - count, 0)
-
-    # Apply stop offset. It's not possible to know what results will be removed
-    # until the end, so potential removals are cached.
-    self._stop_offset_cache = usable_entries[self.stop_offset:]
-    if self.stop_offset > 0:
-      usable_entries = usable_entries[:self.stop_offset]
 
     if not more_results:
       self._done = True
@@ -382,9 +340,9 @@ class Index(object):
       for op, value in filter_prop.filters:
         encoded_path = self.encode_path(value)
         if op in START_FILTERS:
-          start = get_fdb_key_selector(op)(subspace.pack((encoded_path,)))
+          start = get_fdb_key_selector(op, subspace.pack(encoded_path))
         elif op in STOP_FILTERS:
-          stop = get_fdb_key_selector(op)(subspace.pack((encoded_path,)))
+          stop = get_fdb_key_selector(op, subspace.pack(encoded_path))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -535,9 +493,9 @@ class SinglePropIndex(Index):
       for op, value in filter_prop.filters:
         encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
+          start = get_fdb_key_selector(op, subspace.pack(encoded_value))
         elif op in STOP_FILTERS:
-          stop = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
+          stop = get_fdb_key_selector(op, subspace.pack(encoded_value))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -650,12 +608,11 @@ class CompositeIndex(Index):
         continue
 
       for op, value in filter_prop.filters:
-        selector = get_fdb_key_selector(op, reverse)
         encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
+          start = get_fdb_key_selector(op, subspace.pack(encoded_value))
         elif op in STOP_FILTERS:
-          stop = get_fdb_key_selector(op)(subspace.pack((encoded_value,)))
+          stop = get_fdb_key_selector(op, subspace.pack(encoded_value))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
