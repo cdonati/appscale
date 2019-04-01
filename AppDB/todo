@@ -112,3 +112,5 @@ fix versionstamp encode bug where packing vs.tr_version can raise exception if
 fdb.Value instead of string
 use native fdb offset instead of scanning all keys (actually, not possible
 using mvcc indexes)
+fix issue where query cursor can point to the next result, which may be an
+updated index value (need to exclude whole value instead of just key)

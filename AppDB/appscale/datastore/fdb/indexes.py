@@ -29,6 +29,7 @@ from appscale.datastore.index_manager import IndexInaccessible
 from appscale.datastore.utils import _FindIndexToUse
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
+from google.appengine.datastore import appscale_stub_util
 from google.appengine.datastore import datastore_pb, entity_pb
 from google.appengine.datastore.datastore_pb import Query_Filter, Query_Order
 
@@ -393,6 +394,10 @@ class KindlessIndex(Index):
   def encode(self, path, commit_vs):
     return self.pack_method(commit_vs)((path, commit_vs))
 
+  def encode_index_result(self, entity):
+    path = encode_path(entity.key().path())
+    return self.encode(path, fdb.tuple.Versionstamp())
+
   def decode(self, kv):
     path, commit_vs = self.directory.unpack(kv.key)
     deleted_vs = None
@@ -428,6 +433,10 @@ class KindIndex(Index):
 
   def encode(self, path, commit_vs):
     return self.pack_method(commit_vs)((self.encode_path(path), commit_vs))
+
+  def encode_index_result(self, entity):
+    path = encode_path(entity.key().path())
+    return self.encode(path, fdb.tuple.Versionstamp())
 
   def decode(self, kv):
     kindless_path, commit_vs = self.directory.unpack(kv.key)
@@ -474,6 +483,17 @@ class SinglePropIndex(Index):
   def encode(self, value, path, commit_vs):
     return self.pack_method(commit_vs)(
       (encode_value(value), self.encode_path(path), commit_vs))
+
+  def encode_index_result(self, entity):
+    path = encode_path(entity.key().path())
+    if entity.property_size() != 1:
+      raise BadRequest(u'Invalid query cursor')
+
+    prop = entity.property(0)
+    if six.text_type(prop.name()) != self.prop_name:
+      raise BadRequest(u'Invalid query cursor')
+
+    return self.encode(prop.value(), path, fdb.tuple.Versionstamp())
 
   def decode(self, kv):
     encoded_value, kindless_path, commit_vs = self.directory.unpack(kv.key)
@@ -567,7 +587,7 @@ class CompositeIndex(Index):
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
-  def encode(self, prop_list, path, commit_vs):
+  def encode(self, prop_list, path, commit_vs, ancestor_path=None):
     encoded_values_by_prop = []
     for index_prop_name, direction in self.order_info:
       reverse = direction == Query_Order.DESCENDING
@@ -581,6 +601,12 @@ class CompositeIndex(Index):
       return tuple(pack(values + (self.encode_path(path),) + (commit_vs,))
                    for values in encoded_value_combos)
 
+    if ancestor_path is not None:
+      remaining_path = self.encode_path(path[len(ancestor_path):])
+      return [
+        pack((ancestor_path,) + values + (remaining_path,) + (commit_vs,))
+        for values in encoded_value_combos]
+
     keys = []
     for index in range(2, len(path), 2):
       ancestor_path = path[:index]
@@ -590,6 +616,15 @@ class CompositeIndex(Index):
          for values in encoded_value_combos])
 
     return tuple(keys)
+
+  def encode_index_result(self, entity, ancestor_path=None):
+    path = encode_path(entity.key().path())
+    encoded_indexes = self.encode(
+      entity.property_list(), path, fdb.tuple.Versionstamp(), ancestor_path)
+    if len(encoded_indexes) != 1:
+      raise BadRequest('Invalid query cursor')
+
+    return encoded_indexes[0]
 
   def decode(self, kv):
     logger.debug('kv: {!r}'.format(kv))
@@ -718,6 +753,25 @@ class IndexManager(object):
       desired_slice = index.get_slice(filter_props)
 
     reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
+    if query.has_compiled_cursor():
+      cursor = appscale_stub_util.ListCursor(query)
+      last_result = cursor._GetLastResult()
+      if query.has_ancestor():
+        ancestor_path = encode_path(query.ancestor().path())
+        encoded_cursor_key = index.encode_index_result(
+          last_result, ancestor_path)
+      else:
+        encoded_cursor_key = index.encode_index_result(last_result)
+
+      if reverse:
+        start = desired_slice.start
+        stop = fdb.KeySelector.first_greater_or_equal(encoded_cursor_key)
+      else:
+        start = fdb.KeySelector.first_greater_than(encoded_cursor_key)
+        stop = desired_slice.stop
+
+      desired_slice = slice(start, stop)
+
     rpc_limit, check_more_results = self.rpc_limit(query)
     fetch_limit = rpc_limit
     if check_more_results:
@@ -728,71 +782,6 @@ class IndexManager(object):
                              fetch_limit, reverse, read_vs, snapshot=True)
 
     return iterator
-
-  @gen.coroutine
-  def update_composite_index(self, project_id, index_pb, cursor=(None, None)):
-    start_ns, start_key = cursor
-    kind = six.text_type(index_pb.definition().entity_type())
-    ancestor = index_pb.definition().ancestor()
-    order_info = ((prop.name(), prop.direction())
-                  for prop in index_pb.definition().property_list())
-    indexes_dir = self._directory_cache.get((project_id, INDEX_DIR))
-    tr = self._db.create_transaction()
-    deadline = time.time() + MAX_FDB_TX_DURATION / 2
-    for namespace in indexes_dir.list(tr):
-      if start_ns is not None and namespace < start_ns:
-        continue
-
-      u_index_id = six.text_type(index_pb.id())
-      composite_index_dir = indexes_dir.create_or_open(
-        tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
-      composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
-                                       order_info)
-      logger.info(u'Backfilling {}'.format(composite_index))
-      try:
-        kind_index_dir = indexes_dir.open(
-          tr, (namespace, KindIndex.DIR_NAME, kind))
-      except ValueError:
-        logger.info(u'No entities exist for {}'.format(composite_index))
-        continue
-
-      kind_index = KindIndex(kind_index_dir)
-      remaining_range = kind_index_dir.range()
-      if start_key is not None:
-        remaining_range = slice(
-          fdb.KeySelector.first_greater_than(start_key), remaining_range.stop)
-        start_key = None
-
-      kv_iterator = KVIterator(tr, self._tornado_fdb, remaining_range)
-      while True:
-        kvs, more_results = yield kv_iterator.next_page()
-        entries = [kind_index.decode(kv) for kv in kvs]
-        entity_results = yield [self._data_manager.get_entry(self, tr, entry)
-                                for entry in entries]
-        for index, kv in enumerate(kvs):
-          entity = entity_pb.EntityProto(entity_results[index][1])
-          entry = entries[index]
-          keys = composite_index.encode(
-            entity.property_list(), entry.path, entry.commit_vs)
-          for key in keys:
-            deleted_val = (entry.deleted_vs.to_bytes()
-                           if entry.deleted_vs.is_complete() else b'')
-            tr[key] = deleted_val
-
-        if not more_results:
-          logger.info(u'Finished backfilling {}'.format(composite_index))
-          break
-
-        if time.time() > deadline:
-          try:
-            yield self._tornado_fdb.commit(tr)
-            cursor = (namespace, kvs[-1].key)
-          except fdb.FDBError as fdb_error:
-            logger.warning(u'Error while updating index: {}'.format(fdb_error))
-            tr.on_error(fdb_error).wait()
-
-          yield self.update_composite_index(project_id, index_pb, cursor)
-          return
 
   def _get_index_keys(self, entity, commit_vs=None):
     if commit_vs is None:
@@ -909,3 +898,68 @@ class IndexManager(object):
       raise InternalError(u'ZooKeeper is not accessible')
 
     return indexes
+
+  @gen.coroutine
+  def update_composite_index(self, project_id, index_pb, cursor=(None, None)):
+    start_ns, start_key = cursor
+    kind = six.text_type(index_pb.definition().entity_type())
+    ancestor = index_pb.definition().ancestor()
+    order_info = ((prop.name(), prop.direction())
+                  for prop in index_pb.definition().property_list())
+    indexes_dir = self._directory_cache.get((project_id, INDEX_DIR))
+    tr = self._db.create_transaction()
+    deadline = time.time() + MAX_FDB_TX_DURATION / 2
+    for namespace in indexes_dir.list(tr):
+      if start_ns is not None and namespace < start_ns:
+        continue
+
+      u_index_id = six.text_type(index_pb.id())
+      composite_index_dir = indexes_dir.create_or_open(
+        tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
+      composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
+                                       order_info)
+      logger.info(u'Backfilling {}'.format(composite_index))
+      try:
+        kind_index_dir = indexes_dir.open(
+          tr, (namespace, KindIndex.DIR_NAME, kind))
+      except ValueError:
+        logger.info(u'No entities exist for {}'.format(composite_index))
+        continue
+
+      kind_index = KindIndex(kind_index_dir)
+      remaining_range = kind_index_dir.range()
+      if start_key is not None:
+        remaining_range = slice(
+          fdb.KeySelector.first_greater_than(start_key), remaining_range.stop)
+        start_key = None
+
+      kv_iterator = KVIterator(tr, self._tornado_fdb, remaining_range)
+      while True:
+        kvs, more_results = yield kv_iterator.next_page()
+        entries = [kind_index.decode(kv) for kv in kvs]
+        entity_results = yield [self._data_manager.get_entry(self, tr, entry)
+                                for entry in entries]
+        for index, kv in enumerate(kvs):
+          entity = entity_pb.EntityProto(entity_results[index][1])
+          entry = entries[index]
+          keys = composite_index.encode(
+            entity.property_list(), entry.path, entry.commit_vs)
+          for key in keys:
+            deleted_val = (entry.deleted_vs.to_bytes()
+                           if entry.deleted_vs.is_complete() else b'')
+            tr[key] = deleted_val
+
+        if not more_results:
+          logger.info(u'Finished backfilling {}'.format(composite_index))
+          break
+
+        if time.time() > deadline:
+          try:
+            yield self._tornado_fdb.commit(tr)
+            cursor = (namespace, kvs[-1].key)
+          except fdb.FDBError as fdb_error:
+            logger.warning(u'Error while updating index: {}'.format(fdb_error))
+            tr.on_error(fdb_error).wait()
+
+          yield self.update_composite_index(project_id, index_pb, cursor)
+          return
