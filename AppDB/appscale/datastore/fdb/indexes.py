@@ -815,6 +815,9 @@ class IndexManager(object):
     prop_names = [filter_prop.name for filter_prop in filter_props]
     prop_names.extend([prop_name for prop_name, _ in order_info
                        if prop_name not in prop_names])
+    prop_names.extend([six.text_type(prop_name)
+                       for prop_name in query.property_name_list()
+                       if prop_name not in prop_names])
 
     if not query.has_kind():
       if not all(prop_name == KEY_PROP for prop_name in prop_names):
