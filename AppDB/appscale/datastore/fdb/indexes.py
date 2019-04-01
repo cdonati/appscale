@@ -309,6 +309,7 @@ class IndexIterator(object):
       raise gen.Return(([], False))
 
     kvs, more_results = yield self._kv_iterator.next_page()
+    logger.debug('kvs: {}'.format(kvs))
     usable_entries = self._stop_offset_cache
     for kv in kvs:
       entry = self.index.decode(kv)
