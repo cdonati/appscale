@@ -350,9 +350,9 @@ class Index(object):
       for op, value in filter_prop.filters:
         encoded_path = self.encode_path(value)
         if op in START_FILTERS:
-          start = get_fdb_key_selector(op, subspace.pack(encoded_path))
+          start = get_fdb_key_selector(op, subspace.pack((encoded_path,)))
         elif op in STOP_FILTERS:
-          stop = get_fdb_key_selector(op, subspace.pack(encoded_path))
+          stop = get_fdb_key_selector(op, subspace.pack((encoded_path,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -503,9 +503,9 @@ class SinglePropIndex(Index):
       for op, value in filter_prop.filters:
         encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = get_fdb_key_selector(op, subspace.pack(encoded_value))
+          start = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
-          stop = get_fdb_key_selector(op, subspace.pack(encoded_value))
+          stop = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
@@ -620,9 +620,9 @@ class CompositeIndex(Index):
       for op, value in filter_prop.filters:
         encoded_value = encoder(value)
         if op in START_FILTERS:
-          start = get_fdb_key_selector(op, subspace.pack(encoded_value))
+          start = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
-          stop = get_fdb_key_selector(op, subspace.pack(encoded_value))
+          stop = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
