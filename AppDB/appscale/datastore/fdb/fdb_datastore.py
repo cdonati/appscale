@@ -176,7 +176,7 @@ class FDBDatastore(object):
       if not entries and not more_iterator_results:
         break
 
-      skipped_results += min(entries_fetched, iter_offset)
+      skipped_results += min(len(entries), iter_offset)
       suitable_entries = entries[iter_offset:remainder]
       cursor = entries[:remainder][-1]
 
