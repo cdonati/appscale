@@ -71,6 +71,17 @@ def group_filters(query):
     else:
       filter_props.append(FilterProperty(prop_name, [filter_info]))
 
+  # Since the filter list can come in any order, put inequality filters last.
+  inequality_index = None
+  for index, filter_prop in enumerate(filter_props):
+    if not filter_prop.equality:
+      inequality_index = index
+      break
+
+  if inequality_index is not None:
+    inequality_prop = filter_props.pop(inequality_index)
+    filter_props.append(inequality_prop)
+
   for filter_prop in filter_props[:-1]:
     if filter_prop.name == KEY_PROP:
       raise BadRequest(
