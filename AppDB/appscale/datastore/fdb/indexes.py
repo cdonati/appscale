@@ -290,10 +290,10 @@ class IndexIterator(object):
 
     logger.debug('start offset: {}'.format(self.start_offset))
     logger.debug('stop offset: {}'.format(self.stop_offset))
-    logger.debug('start: {}'.format(self.start.key))
-    logger.debug('stop: {}'.format(self.stop.key))
+    logger.debug('start: {!r}'.format(self.start.key))
+    logger.debug('stop: {!r}'.format(self.stop.key))
     self._kv_iterator = KVIterator(
-      tr, tornado_fdb, (self.start, self.stop), fetch_limit, reverse,
+      tr, tornado_fdb, slice(self.start, self.stop), fetch_limit, reverse,
       snapshot=snapshot)
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
