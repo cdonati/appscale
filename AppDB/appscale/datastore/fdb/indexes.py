@@ -843,8 +843,9 @@ class IndexManager(object):
 
     index_pb = _FindIndexToUse(query, self._get_indexes_pb(project_id))
     if index_pb is not None:
-      index_order_info = ((prop.name(), prop.direction())
-                          for prop in index_pb.definition().property_list())
+      index_order_info = tuple(
+        (six.text_type(prop.name()), prop.direction())
+        for prop in index_pb.definition().property_list())
       return CompositeIndex.from_cache(
         project_id, namespace, index_pb.id(), kind,
         index_pb.definition().ancestor(), index_order_info,
