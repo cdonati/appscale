@@ -205,8 +205,10 @@ class FDBDatastore(object):
       results = [result.Encode() for result in results]
 
     query_result.result_list().extend(results)
-    if query.compile() and cursor is not None:
-      query_result.mutable_compiled_cursor().MergeFrom(cursor.cursor_result())
+    if query.compile():
+      mutable_cursor = query_result.mutable_compiled_cursor()
+      if cursor is not None:
+        mutable_cursor.MergeFrom(cursor.cursor_result())
 
     more_results = check_more_results and entries_fetched > rpc_limit
     query_result.set_more_results(more_results)
