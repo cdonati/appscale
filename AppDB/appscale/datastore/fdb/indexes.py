@@ -565,20 +565,18 @@ class CompositeIndex(Index):
               if prop.name() == index_prop_name))
 
     pack = self.pack_method(commit_vs)
-    encoded_values = itertools.product(*encoded_values_by_prop)
-    for encoded_value in encoded_values:
-      logger.debug('encoded_value: {!r}'.format(encoded_value))
+    encoded_value_combos = itertools.product(*encoded_values_by_prop)
     if not self.ancestor:
-      return tuple(pack((value, self.encode_path(path), commit_vs))
-                   for value in encoded_values)
+      return tuple(pack(values + (self.encode_path(path),) + (commit_vs,))
+                   for values in encoded_value_combos)
 
     keys = []
     for index in range(2, len(path), 2):
       ancestor_path = path[:index]
       remaining_path = self.encode_path(path[index:])
       keys.extend(
-        [pack((ancestor_path, value, remaining_path, commit_vs))
-         for value in encoded_values])
+        [pack((ancestor_path,) + values + (remaining_path,) + (commit_vs,))
+         for values in encoded_value_combos])
 
     return tuple(keys)
 
