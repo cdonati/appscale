@@ -288,10 +288,6 @@ class IndexIterator(object):
     if self.stop_offset > 0:
       raise InternalError(u'Invalid stop offset')
 
-    logger.debug('start offset: {}'.format(self.start_offset))
-    logger.debug('stop offset: {}'.format(self.stop_offset))
-    logger.debug('start: {!r}'.format(self.start.key))
-    logger.debug('stop: {!r}'.format(self.stop.key))
     self._kv_iterator = KVIterator(
       tr, tornado_fdb, slice(self.start, self.stop), fetch_limit, reverse,
       snapshot=snapshot)
@@ -309,7 +305,6 @@ class IndexIterator(object):
       raise gen.Return(([], False))
 
     kvs, more_results = yield self._kv_iterator.next_page()
-    logger.debug('kvs: {}'.format(kvs))
     usable_entries = self._stop_offset_cache
     for kv in kvs:
       entry = self.index.decode(kv)
@@ -324,13 +319,12 @@ class IndexIterator(object):
     count = len(usable_entries)
     usable_entries = usable_entries[self._remaining_start_offset:]
     self._remaining_start_offset = max(self._remaining_start_offset - count, 0)
-    logger.debug('usable after start offset: {}'.format(usable_entries))
 
     # Apply stop offset. It's not possible to know what results will be removed
     # until the end, so potential removals are cached.
     self._stop_offset_cache = usable_entries[self.stop_offset:]
-    usable_entries = usable_entries[:self.stop_offset]
-    logger.debug('usable after stop offset: {}'.format(usable_entries))
+    if self.stop_offset > 0:
+      usable_entries = usable_entries[:self.stop_offset]
 
     if not more_results:
       self._done = True
