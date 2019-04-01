@@ -319,8 +319,8 @@ class Index(object):
     return self.directory.get_path()[4]
 
   @property
-  def properties(self):
-    return []
+  def prop_names(self):
+    return tuple()
 
   def pack_method(self, versionstamp):
     if versionstamp.is_complete():
@@ -445,6 +445,10 @@ class SinglePropIndex(Index):
   @property
   def prop_name(self):
     return self.directory.get_path()[-1]
+
+  @property
+  def prop_names(self):
+    return (self.directory.get_path()[-1],)
 
   def __repr__(self):
     return u'SinglePropIndex(%r)' % self.directory
