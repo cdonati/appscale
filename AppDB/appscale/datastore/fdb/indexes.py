@@ -324,11 +324,13 @@ class IndexIterator(object):
     count = len(usable_entries)
     usable_entries = usable_entries[self._remaining_start_offset:]
     self._remaining_start_offset = max(self._remaining_start_offset - count, 0)
+    logger.debug('usable after start offset: {}'.format(usable_entries))
 
     # Apply stop offset. It's not possible to know what results will be removed
     # until the end, so potential removals are cached.
     self._stop_offset_cache = usable_entries[self.stop_offset:]
     usable_entries = usable_entries[:self.stop_offset]
+    logger.debug('usable after stop offset: {}'.format(usable_entries))
 
     if not more_results:
       self._done = True
