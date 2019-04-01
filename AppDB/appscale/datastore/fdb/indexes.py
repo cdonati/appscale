@@ -288,6 +288,10 @@ class IndexIterator(object):
     if self.stop_offset > 0:
       raise InternalError(u'Invalid stop offset')
 
+    logger.debug('start: {!r}'.format(self.start.key))
+    logger.debug('stop: {!r}'.format(self.stop.key))
+    logger.debug('start offset: {!r}'.format(self.start_offset))
+    logger.debug('stop offset: {!r}'.format(self.stop_offset))
     self._kv_iterator = KVIterator(
       tr, tornado_fdb, slice(self.start, self.stop), fetch_limit, reverse,
       snapshot=snapshot)
