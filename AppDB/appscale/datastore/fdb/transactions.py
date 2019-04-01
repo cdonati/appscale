@@ -28,6 +28,10 @@ from google.appengine.datastore import datastore_pb, entity_pb
 logger = logging.getLogger(__name__)
 
 
+NOT_XG = b'\x00'
+XG = b'\x01'
+
+
 class MetadataKeys(object):
   READ_VS = b'\x00'
   XG = b'\x01'
@@ -71,7 +75,7 @@ class TransactionManager(object):
       raise InternalError('The datastore chose an existing txid')
 
     tr.set_versionstamped_value(read_vs_key, b'\x00' * 14)
-    tr[tx_dir.pack((txid, MetadataKeys.XG))] = b'1' if is_xg else b'0'
+    tr[tx_dir.pack((txid, MetadataKeys.XG))] = XG if is_xg else NOT_XG
     raise gen.Return(txid)
 
   def delete(self, tr, project_id, txid):
@@ -144,13 +148,12 @@ class TransactionManager(object):
       for kv in kvs:
         key_parts = metadata_subspace.unpack(kv.key)
         metadata_key = key_parts[0]
-        logger.debug('metadata_key: {!r}'.format(metadata_key))
         if metadata_key == MetadataKeys.READ_VS:
           read_vs = fdb.tuple.Versionstamp(kv.value)
           continue
 
         if metadata_key == MetadataKeys.XG:
-          read_vs = kv.value == b'1'
+          xg = kv.value == XG
           continue
 
         if metadata_key == MetadataKeys.QUERIES:
