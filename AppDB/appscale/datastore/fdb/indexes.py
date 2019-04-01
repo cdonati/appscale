@@ -335,7 +335,9 @@ class Index(object):
     subspace = self.directory
     start = None
     stop = None
+    logger.debug('ancestor_path: {}'.format(ancestor_path))
     if ancestor_path:
+      logger.debug('applying ancestor_path')
       start, stop = encode_ancestor_range(subspace, ancestor_path)
 
     for filter_prop in filter_props:
@@ -344,14 +346,17 @@ class Index(object):
 
       if filter_prop.equality:
         encoded_path = self.encode_path(filter_prop.filters[0][1])
+        logger.debug('applying equality prop')
         subspace = subspace.subspace((encoded_path,))
         continue
 
       for op, value in filter_prop.filters:
         encoded_path = self.encode_path(value)
         if op in START_FILTERS:
+          logger.debug('applying start filter')
           start = get_fdb_key_selector(op, subspace.pack((encoded_path,)))
         elif op in STOP_FILTERS:
+          logger.debug('applying stop filter')
           stop = get_fdb_key_selector(op, subspace.pack((encoded_path,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
