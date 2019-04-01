@@ -264,6 +264,8 @@ class IndexIterator(object):
   def __init__(self, tr, tornado_fdb, index, key_slice, fetch_limit, reverse,
                read_vs=None, snapshot=False):
     self.index = index
+    logger.debug('start: {!r}'.format(key_slice.start.key))
+    logger.debug('stop: {!r}'.format(key_slice.stop.key))
     self._kv_iterator = KVIterator(
       tr, tornado_fdb, key_slice, fetch_limit, reverse, snapshot=snapshot)
     if read_vs is None:
