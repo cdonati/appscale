@@ -264,8 +264,16 @@ class IndexIterator(object):
   def __init__(self, tr, tornado_fdb, index, key_slice, fetch_limit, reverse,
                read_vs=None, snapshot=False):
     self.index = index
-    logger.debug('start: {!r}'.format(key_slice.start.key))
-    logger.debug('stop: {!r}'.format(key_slice.stop.key))
+    if isinstance(key_slice.start, fdb.KeySelector):
+      logger.debug('start: {!r}'.format(key_slice.start.key))
+    else:
+      logger.debug('start: {!r}'.format(key_slice.start))
+
+    if isinstance(key_slice.stop, fdb.KeySelector):
+      logger.debug('stop: {!r}'.format(key_slice.stop.key))
+    else:
+      logger.debug('stop: {!r}'.format(key_slice.stop))
+
     self._kv_iterator = KVIterator(
       tr, tornado_fdb, key_slice, fetch_limit, reverse, snapshot=snapshot)
     if read_vs is None:
