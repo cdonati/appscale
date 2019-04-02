@@ -368,21 +368,18 @@ class MergeJoinIterator(object):
         if entry.commit_vs < self._read_vs <= entry.deleted_vs:
           usable_entries.append(entry)
 
+      new_start = fdb.KeySelector.first_greater_than(kvs[-1].key)
+      logger.debug('new start: {!r}'.format(new_start.key))
+      self.indexes[index][1] = slice(new_start, key_slice.stop)
+
       if usable_entries:
         path = usable_entries[0].path
       else:
         path = prop_index.decode(kvs[0]).path
 
-      encoded_path = prop_index.encode_path(path)
-      encoded_value = encode_value(value)
-      new_start = get_fdb_key_selector(
-        Query_Filter.GREATER_THAN,
-        prop_index.directory.pack((encoded_value, encoded_path)))
-      logger.debug('new start: {!r}'.format(new_start.key))
-      self.indexes[index][1] = slice(new_start, key_slice.stop)
-
       next_slice_index = (index + 1) % len(self.indexes)
       next_index, next_slice, next_value = self.indexes[next_slice_index]
+      encoded_path = next_index.encode_path(path)
       encoded_value = encode_value(next_value)
       new_start = get_fdb_key_selector(
         Query_Filter.GREATER_THAN_OR_EQUAL,
