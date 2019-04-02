@@ -765,9 +765,12 @@ class CompositeIndex(Index):
         encoded_value = encoder(value)
         logger.debug('value: {}'.format(value))
         logger.debug('encoded value: {}'.format(encoded_value))
-        if op in START_FILTERS:
-          start = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
-        elif op in STOP_FILTERS:
+        selector = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
+        if ((op in START_FILTERS and not reverse) or
+            (op in STOP_FILTERS and reverse)):
+          start = selector
+        elif ((op in STOP_FILTERS and not reverse) or
+              (op in START_FILTERS and reverse)):
           stop = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
