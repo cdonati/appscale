@@ -350,7 +350,11 @@ class MergeJoinIterator(object):
 
     entries_from_slices = []
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-      logger.debug('start: {!r}'.format(key_slice.start))
+      if isinstance(key_slice.start, fdb.KeySelector):
+        logger.debug('start: {!r}'.format(key_slice.start.key))
+      else:
+        logger.debug('start: {!r}'.format(key_slice.start))
+
       kvs, count, more = yield self._tornado_fdb.get_range(
         self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
         snapshot=self._snapshot)
@@ -359,6 +363,7 @@ class MergeJoinIterator(object):
 
       usable_entries = []
       for kv in kvs:
+        logger.debug('kv: {}'.format(kv))
         entry = prop_index.decode(kv)
         if entry.commit_vs < self._read_vs <= entry.deleted_vs:
           usable_entries.append(entry)
