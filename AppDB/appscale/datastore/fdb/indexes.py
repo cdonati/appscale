@@ -344,6 +344,9 @@ class MergeJoinIterator(object):
     self._fetched = 0
     self._snapshot = snapshot
     self._done = False
+    self._candidate_path = None
+    self._candidate_count = 0
+    self._last_page = False
 
   @property
   def prop_names(self):
@@ -358,9 +361,8 @@ class MergeJoinIterator(object):
     if self._done:
       raise gen.Return(([], False))
 
-    results = []
-    candidate_path = None
-    candidate_count = 0
+    last_page = self._last_page
+    result = None
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
       if isinstance(key_slice.start, fdb.KeySelector):
         logger.debug('start for {}: {!r}'.format(prop_index.prop_name, key_slice.start.key))
@@ -388,22 +390,21 @@ class MergeJoinIterator(object):
 
       logger.debug('usable entry: {}'.format(usable_entry))
       logger.debug('usable entry path: {}'.format(usable_entry.path))
-      logger.debug('candidate path: {}'.format(usable_entry.path))
-      if usable_entry.path == candidate_path:
-        candidate_count += 1
+      logger.debug('candidate path: {}'.format(self._candidate_path))
+      if usable_entry.path == self._candidate_path:
+        self._candidate_count += 1
       else:
-        candidate_path = usable_entry.path
-        candidate_count = 1
+        self._candidate_path = usable_entry.path
+        self._candidate_count = 1
 
-      logger.debug('candidate_count: {}'.format(candidate_count))
+      logger.debug('candidate_count: {}'.format(self._candidate_count))
       next_index_op = Query_Filter.GREATER_THAN_OR_EQUAL
-      if candidate_count == len(self.indexes):
-        composite_entry = CompositeEntry(
-          usable_entry.project_id, usable_entry.namespace, candidate_path,
-          self.properties, usable_entry.commit_vs, usable_entry.deleted_vs)
-        logger.debug('result: {}'.format(composite_entry))
-        results.append(composite_entry)
-        candidate_count = 0
+      if self._candidate_count == len(self.indexes):
+        result = CompositeEntry(
+          usable_entry.project_id, usable_entry.namespace,
+          self._candidate_path, self.properties, usable_entry.commit_vs,
+          usable_entry.deleted_vs)
+        self._candidate_count = 0
         next_index_op = Query_Filter.GREATER_THAN
 
       next_index_position = (index + 1) % len(self.indexes)
@@ -418,10 +419,12 @@ class MergeJoinIterator(object):
       self.indexes[next_index_position][1] = slice(new_start, next_slice.stop)
 
       if not more:
-        self._done = True
+        self._last_page = True
 
-    remaining = self._fetch_limit - self._fetched
-    results = results[:remaining]
+    if last_page:
+      self._done = True
+
+    results = [result] if result is not None else []
     self._fetched += len(results)
     if self._fetched == self._fetch_limit:
       self._done = True
