@@ -384,7 +384,8 @@ class MergeJoinIterator(object):
       new_start = get_fdb_key_selector(
         Query_Filter.GREATER_THAN_OR_EQUAL,
         next_index.directory.pack((encoded_value, encoded_path)))
-      self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
+      if new_start.key > next_slice.start:
+        self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
 
       entries_from_slices.append(usable_entries)
       if not more:
