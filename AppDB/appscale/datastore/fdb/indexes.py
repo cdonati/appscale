@@ -734,8 +734,11 @@ class CompositeIndex(Index):
 
     start = None
     stop = None
+
     ordered_filter_props = []
+    logger.debug('about to order filter props')
     for name, direction in self.order_info:
+      logger.debug('name: {}, direction: {}'.format(name, direction))
       ordered_filter_props.append(
         next(filter_prop for filter_prop in filter_props
              if filter_prop.name == name))
@@ -877,6 +880,7 @@ class IndexManager(object):
       return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
                                read_vs, snapshot=True)
 
+    logger.debug('using index: {}'.format(index))
     desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
                                     reverse)
 
