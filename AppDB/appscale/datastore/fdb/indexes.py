@@ -350,6 +350,7 @@ class MergeJoinIterator(object):
 
     entries_from_slices = []
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
+      logger.debug('prop: {}'.format(prop_index.prop_name))
       if isinstance(key_slice.start, fdb.KeySelector):
         logger.debug('start: {!r}'.format(key_slice.start.key))
       else:
@@ -371,6 +372,7 @@ class MergeJoinIterator(object):
       new_start = fdb.KeySelector.first_greater_than(kvs[-1].key)
       logger.debug('new start: {!r}'.format(new_start.key))
       self.indexes[index][1] = slice(new_start, key_slice.stop)
+      logger.debug('slice start: {}'.format(self.indexes[index][1]))
 
       if usable_entries:
         path = usable_entries[0].path
