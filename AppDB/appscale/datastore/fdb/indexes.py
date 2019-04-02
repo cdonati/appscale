@@ -364,11 +364,6 @@ class MergeJoinIterator(object):
     last_page = self._last_page
     result = None
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-      if isinstance(key_slice.start, fdb.KeySelector):
-        logger.debug('start for {}: {!r}'.format(prop_index.prop_name, key_slice.start.key))
-      else:
-        logger.debug('start for {}: {!r}'.format(prop_index.prop_name, key_slice.start))
-
       usable_entry = None
       while True:
         kvs, count, more = yield self._tornado_fdb.get_range(
@@ -388,16 +383,12 @@ class MergeJoinIterator(object):
         if usable_entry is not None:
           break
 
-      logger.debug('usable entry: {}'.format(usable_entry))
-      logger.debug('usable entry path: {}'.format(usable_entry.path))
-      logger.debug('candidate path: {}'.format(self._candidate_path))
       if usable_entry.path == self._candidate_path:
         self._candidate_count += 1
       else:
         self._candidate_path = usable_entry.path
         self._candidate_count = 1
 
-      logger.debug('candidate_count: {}'.format(self._candidate_count))
       next_index_op = Query_Filter.GREATER_THAN_OR_EQUAL
       if self._candidate_count == len(self.indexes):
         result = CompositeEntry(
@@ -411,11 +402,9 @@ class MergeJoinIterator(object):
       next_index, next_slice, next_value = self.indexes[next_index_position]
       encoded_value = encode_value(next_value)
       encoded_path = next_index.encode_path(usable_entry.path)
-      logger.debug('next_index_op: {}'.format(next_index_op))
       new_start = get_fdb_key_selector(
         next_index_op,
         next_index.directory.pack((encoded_value, encoded_path)))
-      logger.debug('new start for {}: {!r}'.format(next_index.prop_name, new_start.key))
       self.indexes[next_index_position][1] = slice(new_start, next_slice.stop)
 
       if not more:
