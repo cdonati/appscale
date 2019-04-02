@@ -387,12 +387,15 @@ class MergeJoinIterator(object):
           break
 
       logger.debug('usable entry: {}'.format(usable_entry))
+      logger.debug('usable entry path: {}'.format(usable_entry.path))
+      logger.debug('candidate path: {}'.format(usable_entry.path))
       if usable_entry.path == candidate_path:
         candidate_count += 1
       else:
         candidate_path = usable_entry.path
         candidate_count = 0
 
+      logger.debug('candidate_count: {}'.format(candidate_count))
       next_index_op = Query_Filter.GREATER_THAN_OR_EQUAL
       if candidate_count == len(self.indexes):
         composite_entry = CompositeEntry(
