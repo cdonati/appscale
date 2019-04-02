@@ -412,6 +412,9 @@ class MergeJoinIterator(object):
     remaining = self._fetch_limit - self._fetched
     matching_entries = matching_entries[:remaining]
     self._fetched += len(matching_entries)
+    if self._fetched == self._fetch_limit:
+      self._done = True
+
     raise gen.Return((matching_entries, not self._done))
 
 
