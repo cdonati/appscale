@@ -317,6 +317,7 @@ class IndexIterator(object):
     usable_entries = []
     for kv in kvs:
       entry = self.index.decode(kv)
+      logger.debug('entry: {}'.format(entry))
       if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
         self._kv_iterator.increase_limit()
         more_results = not self._kv_iterator.done_with_range
