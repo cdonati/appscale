@@ -374,25 +374,21 @@ class MergeJoinIterator(object):
       self.indexes[index][1] = slice(new_start, key_slice.stop)
 
       if usable_entries:
-        path = usable_entries[0].path
-      else:
-        path = prop_index.decode(kvs[0]).path
+        next_slice_index = (index + 1) % len(self.indexes)
+        next_index, next_slice, next_value = self.indexes[next_slice_index]
+        encoded_value = encode_value(next_value)
+        encoded_path = next_index.encode_path(usable_entries[0].path)
+        new_start = get_fdb_key_selector(
+          Query_Filter.GREATER_THAN_OR_EQUAL,
+          next_index.directory.pack((encoded_value, encoded_path)))
+        if isinstance(next_slice.start, fdb.KeySelector):
+          next_start_key = next_slice.start.key
+        else:
+          next_start_key = next_slice.start
 
-      next_slice_index = (index + 1) % len(self.indexes)
-      next_index, next_slice, next_value = self.indexes[next_slice_index]
-      encoded_path = next_index.encode_path(path)
-      encoded_value = encode_value(next_value)
-      new_start = get_fdb_key_selector(
-        Query_Filter.GREATER_THAN_OR_EQUAL,
-        next_index.directory.pack((encoded_value, encoded_path)))
-      if isinstance(next_slice.start, fdb.KeySelector):
-        next_start_key = next_slice.start.key
-      else:
-        next_start_key = next_slice.start
-
-      if new_start.key > next_start_key:
-        logger.debug('new start for {}: {!r}'.format(next_index.prop_name, new_start.key))
-        self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
+        if new_start.key > next_start_key:
+          logger.debug('new start for {}: {!r}'.format(next_index.prop_name, new_start.key))
+          self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
 
       entries_from_slices.append(usable_entries)
       if not more:
