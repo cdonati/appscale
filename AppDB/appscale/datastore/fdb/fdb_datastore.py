@@ -151,6 +151,7 @@ class FDBDatastore(object):
     rpc_limit, check_more_results = self.index_manager.rpc_limit(query)
 
     iterator = self.index_manager.get_iterator(tr, query, read_vs)
+    logger.debug('iterator: {}'.format(iterator))
     for prop_name in query.property_name_list():
       prop_name = six.text_type(prop_name)
       if prop_name not in iterator.prop_names:

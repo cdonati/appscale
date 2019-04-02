@@ -734,7 +734,14 @@ class CompositeIndex(Index):
 
     start = None
     stop = None
-    for filter_prop in filter_props:
+    ordered_filter_props = []
+    for name, direction in self.order_info:
+      ordered_filter_props.append(
+        next(filter_prop for filter_prop in filter_props
+        if filter_prop.name == name))
+
+    for filter_prop in ordered_filter_props:
+      logger.debug('processing {}'.format(filter_prop))
       index_direction = next(direction for name, direction in self.order_info)
       reverse = index_direction == Query_Order.DESCENDING
       if filter_prop.name in self.prop_names:
