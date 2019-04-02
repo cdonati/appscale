@@ -381,6 +381,7 @@ class MergeJoinIterator(object):
         if usable_entry is not None:
           break
 
+      logger.debug('usable entry: {}'.format(usable_entry))
       if usable_entry.path == candidate_path:
         candidate_count += 1
       else:
@@ -408,6 +409,7 @@ class MergeJoinIterator(object):
       next_index, next_slice, next_value = self.indexes[next_index_position]
       encoded_value = encode_value(next_value)
       encoded_path = next_index.encode_path(usable_entry.path)
+      logger.debug('next encoded path: {}'.format(encoded_path))
       new_start = get_fdb_key_selector(
         next_index_op,
         next_index.directory.pack((encoded_value, encoded_path)))
