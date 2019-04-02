@@ -389,13 +389,14 @@ class MergeJoinIterator(object):
                          self.properties, usable_entry.commit_vs,
                          usable_entry.deleted_vs))
 
-    new_path = max(entries[-1] for entries in entries_from_slices if entries)
-    for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-      encoded_value = encode_value(value)
-      new_start = get_fdb_key_selector(
-        Query_Filter.GREATER_THAN_OR_EQUAL,
-        prop_index.directory.pack((encoded_value, new_path)))
-      self.indexes[index][1] = slice(new_start, key_slice.stop)
+    if any(entries_from_slices):
+      new_path = max(entries[-1] for entries in entries_from_slices if entries)
+      for index, (prop_index, key_slice, value) in enumerate(self.indexes):
+        encoded_value = encode_value(value)
+        new_start = get_fdb_key_selector(
+          Query_Filter.GREATER_THAN_OR_EQUAL,
+          prop_index.directory.pack((encoded_value, new_path)))
+        self.indexes[index][1] = slice(new_start, key_slice.stop)
 
     raise gen.Return((matching_entries, not self._done))
 
