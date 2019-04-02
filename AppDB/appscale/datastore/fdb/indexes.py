@@ -372,6 +372,7 @@ class MergeJoinIterator(object):
       new_start = fdb.KeySelector.first_greater_than(kvs[-1].key)
       logger.debug('new start: {!r}'.format(new_start.key))
       self.indexes[index][1] = slice(new_start, key_slice.stop)
+      logger.debug('new slice start: {!r}'.format(self.indexes[index][1].start.key))
 
       if usable_entries:
         next_slice_index = (index + 1) % len(self.indexes)
@@ -405,16 +406,21 @@ class MergeJoinIterator(object):
                          self.properties, usable_entry.commit_vs,
                          usable_entry.deleted_vs))
 
-    if any(entries_from_slices):
-      latest_entry = max(entries[-1] for entries in entries_from_slices
-                         if entries)
+    if matching_entries:
       for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-        latest_path = prop_index.encode_path(latest_entry.path)
         encoded_value = encode_value(value)
+        latest_path = prop_index.encode_path(matching_entries[-1].path)
         new_start = get_fdb_key_selector(
           Query_Filter.GREATER_THAN_OR_EQUAL,
           prop_index.directory.pack((encoded_value, latest_path)))
-        self.indexes[index][1] = slice(new_start, key_slice.stop)
+        if isinstance(key_slice.start, fdb.KeySelector):
+          start_key = key_slice.start.key
+        else:
+          start_key = key_slice.start
+
+        if new_start.key > start_key:
+          logger.debug('new start for {}: {!r}'.format(prop_index.prop_name, new_start.key))
+          self.indexes[index][1] = slice(new_start, key_slice.stop)
 
     remaining = self._fetch_limit - self._fetched
     matching_entries = matching_entries[:remaining]
