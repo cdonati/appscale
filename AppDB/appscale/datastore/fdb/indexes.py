@@ -393,7 +393,7 @@ class MergeJoinIterator(object):
         candidate_count += 1
       else:
         candidate_path = usable_entry.path
-        candidate_count = 0
+        candidate_count = 1
 
       logger.debug('candidate_count: {}'.format(candidate_count))
       next_index_op = Query_Filter.GREATER_THAN_OR_EQUAL
