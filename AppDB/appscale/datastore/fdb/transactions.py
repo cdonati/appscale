@@ -17,7 +17,8 @@ import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.dbconstants import (
+  BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
 from appscale.datastore.fdb.codecs import encode_path
 from appscale.datastore.fdb.utils import (
   fdb, EncodedTypes, put_chunks, KVIterator)
@@ -188,5 +189,23 @@ class TransactionManager(object):
 
     if read_vs is None or xg is None:
       raise BadRequest('Transaction not found')
+
+    lookup_groups = set()
+    for key in lookups:
+      group_path = encode_path(key.path())[:2]
+      lookup_groups.add((key.name_space(), group_path))
+
+    mutated_groups = set()
+    for mutation in mutations:
+      key = mutation
+      if isinstance(mutation, entity_pb.EntityProto):
+        key = mutation.key()
+
+      group_path = encode_path(key.path())[:2]
+      mutated_groups.add((key.name_space(), group_path))
+    tx_groups = queried_groups | lookup_groups | mutated_groups
+    max_groups = MAX_GROUPS_FOR_XG if xg else 1
+    if len(tx_groups) > max_groups:
+      raise TooManyGroupsException('Too many groups in transaction')
 
     raise gen.Return((read_vs, xg, lookups, queried_groups, mutations))
