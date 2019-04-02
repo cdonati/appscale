@@ -353,86 +353,75 @@ class MergeJoinIterator(object):
     if self._done:
       raise gen.Return(([], False))
 
-    entries_from_slices = []
+    results = []
+    candidate_path = None
+    candidate_count = 0
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-      logger.debug('prop: {}'.format(prop_index.prop_name))
       if isinstance(key_slice.start, fdb.KeySelector):
-        logger.debug('start: {!r}'.format(key_slice.start.key))
+        logger.debug('start for {}: {!r}'.format(prop_index.prop_name, key_slice.start.key))
       else:
-        logger.debug('start: {!r}'.format(key_slice.start))
+        logger.debug('start for {}: {!r}'.format(prop_index.prop_name, key_slice.start))
 
-      kvs, count, more = yield self._tornado_fdb.get_range(
-        self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
-        snapshot=self._snapshot)
-      if not count:
-        raise gen.Return(([], False))
+      usable_entry = None
+      while True:
+        kvs, count, more = yield self._tornado_fdb.get_range(
+          self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
+          snapshot=self._snapshot)
+        if not count and not more:
+          raise gen.Return(([], False))
 
-      usable_entries = []
-      for kv in kvs:
-        entry = prop_index.decode(kv)
-        if entry.commit_vs < self._read_vs <= entry.deleted_vs:
-          usable_entries.append(entry)
+        for kv in kvs:
+          entry = prop_index.decode(kv)
+          if entry.commit_vs < self._read_vs <= entry.deleted_vs:
+            usable_entry = entry
+            break
 
-      new_start = fdb.KeySelector.first_greater_than(kvs[-1].key)
+        if usable_entry is not None:
+          break
+
+      if usable_entry.path == candidate_path:
+        candidate_count += 1
+      else:
+        candidate_path = usable_entry.path
+        candidate_count = 0
+
+      next_index_op = Query_Filter.GREATER_THAN_OR_EQUAL
+      if candidate_count == len(self.indexes):
+        composite_entry = CompositeEntry(
+          usable_entry.project_id, usable_entry.namespace, candidate_path,
+          self.properties, usable_entry.commit_vs, usable_entry.deleted_vs)
+        results.append(composite_entry)
+        candidate_count = 0
+        next_index_op = Query_Filter.GREATER_THAN
+
+      encoded_value = encode_value(value)
+      encoded_path = prop_index.encode_path(usable_entry.path)
+      new_start = get_fdb_key_selector(
+        Query_Filter.GREATER_THAN,
+        prop_index.pack((encoded_value, encoded_path)))
       logger.debug('new start: {!r}'.format(new_start.key))
       self.indexes[index][1] = slice(new_start, key_slice.stop)
-      logger.debug('new slice start: {!r}'.format(self.indexes[index][1].start.key))
 
-      if usable_entries:
-        next_slice_index = (index + 1) % len(self.indexes)
-        next_index, next_slice, next_value = self.indexes[next_slice_index]
-        encoded_value = encode_value(next_value)
-        encoded_path = next_index.encode_path(usable_entries[0].path)
-        new_start = get_fdb_key_selector(
-          Query_Filter.GREATER_THAN_OR_EQUAL,
-          next_index.directory.pack((encoded_value, encoded_path)))
-        if isinstance(next_slice.start, fdb.KeySelector):
-          next_start_key = next_slice.start.key
-        else:
-          next_start_key = next_slice.start
+      next_index_position = (index + 1) % len(self.indexes)
+      next_index, next_slice, next_value = self.indexes[next_index_position]
+      encoded_value = encode_value(next_value)
+      encoded_path = next_index.encode_path(usable_entry.path)
+      new_start = get_fdb_key_selector(
+        next_index_op,
+        next_index.directory.pack((encoded_value, encoded_path)))
+      logger.debug('new start for {}: {!r}'.format(next_index.prop_name, new_start.key))
+      self.indexes[next_index_position][1] = slice(new_start, next_slice.stop)
 
-        if new_start.key > next_start_key:
-          logger.debug('new start for {}: {!r}'.format(next_index.prop_name, new_start.key))
-          self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
-
-      entries_from_slices.append(usable_entries)
       if not more:
         self._done = True
 
-    matching_entries = []
-    # TODO: Keep track of position in lists to avoid rescanning.
-    for usable_entry in entries_from_slices[0]:
-      path = usable_entry.path
-      if all(path in [entry.path for entry in other_usable_entries]
-             for other_usable_entries in entries_from_slices[1:]):
-        matching_entries.append(
-          CompositeEntry(usable_entry.project_id, usable_entry.namespace, path,
-                         self.properties, usable_entry.commit_vs,
-                         usable_entry.deleted_vs))
-
-    if matching_entries:
-      for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-        encoded_value = encode_value(value)
-        latest_path = prop_index.encode_path(matching_entries[-1].path)
-        new_start = get_fdb_key_selector(
-          Query_Filter.GREATER_THAN_OR_EQUAL,
-          prop_index.directory.pack((encoded_value, latest_path)))
-        if isinstance(key_slice.start, fdb.KeySelector):
-          start_key = key_slice.start.key
-        else:
-          start_key = key_slice.start
-
-        if new_start.key > start_key:
-          logger.debug('new start for {}: {!r}'.format(prop_index.prop_name, new_start.key))
-          self.indexes[index][1] = slice(new_start, key_slice.stop)
-
     remaining = self._fetch_limit - self._fetched
-    matching_entries = matching_entries[:remaining]
-    self._fetched += len(matching_entries)
+    results = results[:remaining]
+    self._fetched += len(results)
     if self._fetched == self._fetch_limit:
       self._done = True
 
-    raise gen.Return((matching_entries, not self._done))
+    raise gen.Return((results, not self._done))
 
 
 class Index(object):
