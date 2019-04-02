@@ -372,7 +372,6 @@ class MergeJoinIterator(object):
       new_start = fdb.KeySelector.first_greater_than(kvs[-1].key)
       logger.debug('new start: {!r}'.format(new_start.key))
       self.indexes[index][1] = slice(new_start, key_slice.stop)
-      logger.debug('slice start: {}'.format(self.indexes[index][1]))
 
       if usable_entries:
         path = usable_entries[0].path
@@ -387,6 +386,7 @@ class MergeJoinIterator(object):
         Query_Filter.GREATER_THAN_OR_EQUAL,
         next_index.directory.pack((encoded_value, encoded_path)))
       if new_start.key > next_slice.start:
+        logger.debug('new start for {}: {!r}'.format(next_index.prop_name, new_start.key))
         self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
 
       entries_from_slices.append(usable_entries)
