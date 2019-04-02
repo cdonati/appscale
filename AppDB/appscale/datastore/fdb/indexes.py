@@ -745,11 +745,9 @@ class CompositeIndex(Index):
         continue
 
     for filter_prop in ordered_filter_props:
-      logger.debug('processing {}'.format(filter_prop))
       index_direction = next(direction for name, direction in self.order_info
                              if name == filter_prop.name)
       reverse = index_direction == Query_Order.DESCENDING
-      logger.debug('reverse: {}'.format(reverse))
       if filter_prop.name in self.prop_names:
         encoder = lambda val: encode_value(val, reverse)
       elif filter_prop.name == KEY_PROP:
@@ -759,6 +757,7 @@ class CompositeIndex(Index):
 
       if filter_prop.equality:
         encoded_value = encoder(filter_prop.filters[0][1])
+        logger.debug('encoded_value: {}'.format(encoded_value))
         subspace = subspace.subspace((encoded_value,))
         continue
 
