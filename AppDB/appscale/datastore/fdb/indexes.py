@@ -880,7 +880,7 @@ class IndexManager(object):
           project_id, namespace, six.text_type(query.kind()), filter_prop.name,
           self._directory_cache)
         slice = index.get_slice((filter_prop,), ancestor_path, last_result)
-        value = filter_prop.filters[1]
+        value = filter_prop.filters[0][1]
         indexes.append((index, slice, value))
 
       return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
