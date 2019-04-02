@@ -229,9 +229,11 @@ class KVIterator(object):
     if self._limit > 0:
       tmp_limit = self._limit - self._fetched
 
+    logger.debug('start key: %r' % self._bsel.key)
     kvs, count, more = yield self._tornado_fdb.get_range(
       self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
       self._iteration, self._reverse, self._snapshot)
+    logger.debug('fetched %d kvs' % count)
     self._fetched += count
     self._iteration += 1
 
