@@ -150,6 +150,7 @@ class FDBDatastore(object):
     fetch_data = self.index_manager.include_data(query)
     rpc_limit, check_more_results = self.index_manager.rpc_limit(query)
 
+    logger.debug('about to get iterator')
     iterator = self.index_manager.get_iterator(tr, query, read_vs)
     logger.debug('iterator: {}'.format(iterator))
     for prop_name in query.property_name_list():
