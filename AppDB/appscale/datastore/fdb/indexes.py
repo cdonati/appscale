@@ -391,8 +391,11 @@ class MergeJoinIterator(object):
 
     if any(entries_from_slices):
       new_path = max(entries[-1] for entries in entries_from_slices if entries)
+      logger.debug('new_path: {}'.format(new_path))
       for index, (prop_index, key_slice, value) in enumerate(self.indexes):
         encoded_value = encode_value(value)
+        logger.debug('value: {}'.format(value))
+        logger.debug('encoded value: {}'.format(encoded_value))
         new_start = get_fdb_key_selector(
           Query_Filter.GREATER_THAN_OR_EQUAL,
           prop_index.directory.pack((encoded_value, new_path)))
