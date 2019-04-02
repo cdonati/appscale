@@ -215,6 +215,11 @@ class PropertyEntry(IndexEntry):
     self.prop_name = prop_name
     self.value = value
 
+  def __repr__(self):
+    return u'PropertyEntry(%r, %r, %r, %r, %r, %r, %r)' % (
+      self.project_id, self.namespace, self.path, self.prop_name, self.value,
+      self.commit_vs, self.deleted_vs)
+
   def prop_result(self):
     entity = entity_pb.EntityProto()
     entity.mutable_key().MergeFrom(self.key)
@@ -247,7 +252,7 @@ class CompositeEntry(IndexEntry):
     self.properties = properties
 
   def __repr__(self):
-    return 'CompositeEntry({!r}, {!r}, {!r}, {!r}, {!r}, {!r})'.format(
+    return u'CompositeEntry(%r, %r, %r, %r, %r, %r)' % (
       self.project_id, self.namespace, self.path, self.properties,
       self.commit_vs, self.deleted_vs)
 
@@ -393,23 +398,16 @@ class MergeJoinIterator(object):
         composite_entry = CompositeEntry(
           usable_entry.project_id, usable_entry.namespace, candidate_path,
           self.properties, usable_entry.commit_vs, usable_entry.deleted_vs)
+        logger.debug('result: {}'.format(composite_entry))
         results.append(composite_entry)
         candidate_count = 0
         next_index_op = Query_Filter.GREATER_THAN
-
-      encoded_value = encode_value(value)
-      encoded_path = prop_index.encode_path(usable_entry.path)
-      new_start = get_fdb_key_selector(
-        Query_Filter.GREATER_THAN,
-        prop_index.directory.pack((encoded_value, encoded_path)))
-      logger.debug('new start: {!r}'.format(new_start.key))
-      self.indexes[index][1] = slice(new_start, key_slice.stop)
 
       next_index_position = (index + 1) % len(self.indexes)
       next_index, next_slice, next_value = self.indexes[next_index_position]
       encoded_value = encode_value(next_value)
       encoded_path = next_index.encode_path(usable_entry.path)
-      logger.debug('next encoded path: {}'.format(encoded_path))
+      logger.debug('next_index_op: {}'.format(next_index_op))
       new_start = get_fdb_key_selector(
         next_index_op,
         next_index.directory.pack((encoded_value, encoded_path)))
