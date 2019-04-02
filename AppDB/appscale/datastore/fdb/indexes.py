@@ -366,12 +366,19 @@ class MergeJoinIterator(object):
       else:
         path = prop_index.decode(kvs[0]).path
 
+      encoded_path = prop_index.encode_path(path)
+      encoded_value = encode_value(value)
+      new_start = get_fdb_key_selector(
+        Query_Filter.GREATER_THAN,
+        prop_index.directory.pack((encoded_value, encoded_path)))
+      self.indexes[index][1] = slice(new_start, key_slice.stop)
+
       next_slice_index = (index + 1) % len(self.indexes)
       next_index, next_slice, next_value = self.indexes[next_slice_index]
       encoded_value = encode_value(next_value)
       new_start = get_fdb_key_selector(
         Query_Filter.GREATER_THAN_OR_EQUAL,
-        next_index.directory.pack((encoded_value, path)))
+        next_index.directory.pack((encoded_value, encoded_path)))
       self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
 
       entries_from_slices.append(usable_entries)
@@ -395,8 +402,6 @@ class MergeJoinIterator(object):
       for index, (prop_index, key_slice, value) in enumerate(self.indexes):
         latest_path = prop_index.encode_path(latest_entry.path)
         encoded_value = encode_value(value)
-        logger.debug('value: {}'.format(value))
-        logger.debug('encoded value: {}'.format(encoded_value))
         new_start = get_fdb_key_selector(
           Query_Filter.GREATER_THAN_OR_EQUAL,
           prop_index.directory.pack((encoded_value, latest_path)))
