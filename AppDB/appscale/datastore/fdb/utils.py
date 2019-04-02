@@ -184,7 +184,13 @@ class KVIterator(object):
     self._snapshot = snapshot
 
     self._bsel = key_slice.start
+    if not isinstance(self._bsel, fdb.KeySelector):
+      self._bsel = fdb.KeySelector.first_greater_or_equal(self._bsel)
+
     self._esel = key_slice.stop
+    if not isinstance(self._esel, fdb.KeySelector):
+      self._esel = fdb.KeySelector.first_greater_or_equal(self._esel)
+
     self._fetched = 0
     self._iteration = 1
     self._index = 0
