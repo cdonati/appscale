@@ -393,7 +393,7 @@ class MergeJoinIterator(object):
       latest_entry = max(entries[-1] for entries in entries_from_slices
                          if entries)
       for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-        latest_path = index.encode_path(latest_entry.path)
+        latest_path = prop_index.encode_path(latest_entry.path)
         encoded_value = encode_value(value)
         logger.debug('value: {}'.format(value))
         logger.debug('encoded value: {}'.format(encoded_value))
