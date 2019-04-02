@@ -737,11 +737,12 @@ class CompositeIndex(Index):
 
     ordered_filter_props = []
     logger.debug('about to order filter props')
-    for name, direction in self.order_info:
-      logger.debug('name: {}, direction: {}'.format(name, direction))
-      ordered_filter_props.append(
-        next(filter_prop for filter_prop in filter_props
-             if filter_prop.name == name))
+    for index_prop_name, direction in self.prop_names:
+      logger.debug('index_prop_name: {}'.format(index_prop_name))
+      filter_prop = next(filter_prop for filter_prop in filter_props
+                         if filter_prop.name == index_prop_name)
+      logger.debug('filter_prop: {}'.format(filter_prop))
+      ordered_filter_props.append(filter_prop)
 
     logger.debug('ordered filter props: {}'.format(ordered_filter_props))
     for filter_prop in ordered_filter_props:
