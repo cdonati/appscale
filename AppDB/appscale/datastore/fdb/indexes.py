@@ -881,7 +881,7 @@ class IndexManager(object):
           self._directory_cache)
         slice = index.get_slice((filter_prop,), ancestor_path, last_result)
         value = filter_prop.filters[0][1]
-        indexes.append((index, slice, value))
+        indexes.append([index, slice, value])
 
       return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
                                read_vs, snapshot=True)
