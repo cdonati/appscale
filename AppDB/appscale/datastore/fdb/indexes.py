@@ -352,6 +352,7 @@ class MergeJoinIterator(object):
       kvs, count, more = yield self._tornado_fdb.get_range(
         self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
         snapshot=self._snapshot)
+      logger.debug('kvs: {}'.format(kvs))
       if not count:
         raise gen.Return(([], False))
 
