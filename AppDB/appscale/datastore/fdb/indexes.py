@@ -378,7 +378,7 @@ class MergeJoinIterator(object):
       new_start = get_fdb_key_selector(
         Query_Filter.GREATER_THAN,
         prop_index.directory.pack((encoded_value, encoded_path)))
-      logger.debug('new start: {}'.format(new_start.key))
+      logger.debug('new start: {!r}'.format(new_start.key))
       self.indexes[index][1] = slice(new_start, key_slice.stop)
 
       next_slice_index = (index + 1) % len(self.indexes)
