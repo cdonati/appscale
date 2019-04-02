@@ -294,6 +294,10 @@ class IndexIterator(object):
     self._read_vs = read_vs
     self._done = False
 
+  @property
+  def prop_names(self):
+    return self.index.prop_names
+
   @gen.coroutine
   def next_page(self):
     if self._done:
@@ -314,6 +318,86 @@ class IndexIterator(object):
       self._done = True
 
     raise gen.Return((usable_entries, more_results))
+
+
+class MergeJoinIterator(object):
+  def __init__(self, tr, tornado_fdb, indexes, fetch_limit, read_vs=None,
+               snapshot=False):
+    self.indexes = indexes
+    if read_vs is None:
+      read_vs = fdb.tuple.Versionstamp()
+
+    self._read_vs = read_vs
+    self._tr = tr
+    self._tornado_fdb = tornado_fdb
+    self._fetch_limit = fetch_limit
+    self._snapshot = snapshot
+    self._done = False
+
+  @property
+  def prop_names(self):
+    return tuple(index.prop_name for index, _, _ in self.indexes)
+
+  @property
+  def properties(self):
+    return tuple((index.prop_name, value) for index, _, value in self.indexes)
+
+  @gen.coroutine
+  def next_page(self):
+    if self._done:
+      raise gen.Return(([], False))
+
+    entries_from_slices = []
+    for index, (prop_index, slice, value) in enumerate(self.indexes):
+      kvs, count, more = yield self._tornado_fdb.get_range(
+        self._tr, slice, 0, fdb.StreamingMode.small, 1,
+        snapshot=self._snapshot)
+      if not count:
+        raise gen.Return(([], False))
+
+      usable_entries = []
+      for kv in kvs:
+        entry = prop_index.decode(kv)
+        if entry.commit_vs < self._read_vs <= entry.deleted_vs:
+          usable_entries.append(entry)
+
+      if usable_entries:
+        path = usable_entries[0].path
+      else:
+        path = prop_index.decode(kvs[0]).path
+
+      next_slice_index = (index + 1) % len(self.indexes)
+      next_index, next_slice, next_value = self.indexes[next_slice_index]
+      encoded_value = encode_value(next_value)
+      new_start = get_fdb_key_selector(
+        Query_Filter.GREATER_THAN_OR_EQUAL,
+        next_index.directory.pack((encoded_value, path)))
+      self.indexes[next_slice_index][1] = slice(new_start, next_slice.stop)
+
+      entries_from_slices.append(usable_entries)
+      if not more:
+        self._done = True
+
+    matching_entries = []
+    # TODO: Keep track of position in lists to avoid rescanning.
+    for usable_entry in entries_from_slices[0]:
+      path = usable_entry.path
+      if all(path in [entry.path for entry in other_usable_entries]
+             for other_usable_entries in entries_from_slices[1:]):
+        matching_entries.append(
+          CompositeEntry(usable_entry.project_id, usable_entry.namespace, path,
+                         self.properties, usable_entry.commit_vs,
+                         usable_entry.deleted_vs))
+
+    new_path = max(entries[-1] for entries in entries_from_slices if entries)
+    for index, (prop_index, slice, value) in enumerate(self.indexes):
+      encoded_value = encode_value(value)
+      new_start = get_fdb_key_selector(
+        Query_Filter.GREATER_THAN_OR_EQUAL,
+        prop_index.directory.pack((encoded_value, new_path)))
+      self.indexes[index][1] = slice(new_start, slice.stop)
+
+    raise gen.Return((matching_entries, not self._done))
 
 
 class Index(object):
@@ -343,7 +427,8 @@ class Index(object):
   def encode_path(self, path):
     raise NotImplementedError()
 
-  def get_slice(self, filter_props, ancestor_path=tuple()):
+  def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
+                reverse=False):
     subspace = self.directory
     start = None
     stop = None
@@ -367,6 +452,15 @@ class Index(object):
           stop = get_fdb_key_selector(op, subspace.pack((encoded_path,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
+
+    if cursor is not None:
+      encoded_path = self.encode_path(cursor.key().path())
+      if reverse:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack((encoded_path,)))
+      else:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+                                     subspace.pack((encoded_path,)))
 
     start = start or subspace.range().start
     stop = stop or subspace.range().stop
@@ -393,10 +487,6 @@ class KindlessIndex(Index):
 
   def encode(self, path, commit_vs):
     return self.pack_method(commit_vs)((path, commit_vs))
-
-  def encode_index_result(self, entity):
-    path = encode_path(entity.key().path())
-    return self.encode(path, fdb.tuple.Versionstamp())
 
   def decode(self, kv):
     path, commit_vs = self.directory.unpack(kv.key)
@@ -433,10 +523,6 @@ class KindIndex(Index):
 
   def encode(self, path, commit_vs):
     return self.pack_method(commit_vs)((self.encode_path(path), commit_vs))
-
-  def encode_index_result(self, entity):
-    path = encode_path(entity.key().path())
-    return self.encode(path, fdb.tuple.Versionstamp())
 
   def decode(self, kv):
     kindless_path, commit_vs = self.directory.unpack(kv.key)
@@ -484,17 +570,6 @@ class SinglePropIndex(Index):
     return self.pack_method(commit_vs)(
       (encode_value(value), self.encode_path(path), commit_vs))
 
-  def encode_index_result(self, entity):
-    path = encode_path(entity.key().path())
-    if entity.property_size() != 1:
-      raise BadRequest(u'Invalid query cursor')
-
-    prop = entity.property(0)
-    if six.text_type(prop.name()) != self.prop_name:
-      raise BadRequest(u'Invalid query cursor')
-
-    return self.encode(prop.value(), path, fdb.tuple.Versionstamp())
-
   def decode(self, kv):
     encoded_value, kindless_path, commit_vs = self.directory.unpack(kv.key)
     value = decode_value(encoded_value)
@@ -506,7 +581,8 @@ class SinglePropIndex(Index):
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs, deleted_vs)
 
-  def get_slice(self, filter_props, ancestor_path=tuple()):
+  def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
+                reverse=False):
     subspace = self.directory
     start = None
     stop = None
@@ -543,6 +619,19 @@ class SinglePropIndex(Index):
           stop = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
+
+    if cursor is not None:
+      encoded_path = self.encode_path(cursor.key().path())
+      prop = next(prop for prop in cursor.property_list()
+                  if prop.name() == self.prop_name)
+      encoded_value = encode_value(prop.value())
+      encoded_cursor = (encoded_path, encoded_value)
+      if reverse:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack(encoded_cursor))
+      else:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+                                     subspace.pack(encoded_cursor))
 
     start = start or subspace.range().start
     stop = stop or subspace.range().stop
@@ -587,7 +676,7 @@ class CompositeIndex(Index):
     kindless_path = path[:-2] + path[-1:]
     return kindless_path
 
-  def encode(self, prop_list, path, commit_vs, ancestor_path=None):
+  def encode(self, prop_list, path, commit_vs):
     encoded_values_by_prop = []
     for index_prop_name, direction in self.order_info:
       reverse = direction == Query_Order.DESCENDING
@@ -601,12 +690,6 @@ class CompositeIndex(Index):
       return tuple(pack(values + (self.encode_path(path),) + (commit_vs,))
                    for values in encoded_value_combos)
 
-    if ancestor_path is not None:
-      remaining_path = self.encode_path(path[len(ancestor_path):])
-      return [
-        pack((ancestor_path,) + values + (remaining_path,) + (commit_vs,))
-        for values in encoded_value_combos]
-
     keys = []
     for index in range(2, len(path), 2):
       ancestor_path = path[:index]
@@ -616,15 +699,6 @@ class CompositeIndex(Index):
          for values in encoded_value_combos])
 
     return tuple(keys)
-
-  def encode_index_result(self, entity, ancestor_path=None):
-    path = encode_path(entity.key().path())
-    encoded_indexes = self.encode(
-      entity.property_list(), path, fdb.tuple.Versionstamp(), ancestor_path)
-    if len(encoded_indexes) != 1:
-      raise BadRequest('Invalid query cursor')
-
-    return encoded_indexes[0]
 
   def decode(self, kv):
     logger.debug('kv: {!r}'.format(kv))
@@ -652,7 +726,8 @@ class CompositeIndex(Index):
     return CompositeEntry(self.project_id, self.namespace, path, properties,
                           commit_vs, deleted_vs)
 
-  def get_slice(self, filter_props, ancestor_path=tuple()):
+  def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
+                reverse=False):
     subspace = self.directory
     if ancestor_path:
       subspace = subspace.subspace((ancestor_path,))
@@ -682,6 +757,25 @@ class CompositeIndex(Index):
           stop = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
+
+    if cursor is not None:
+      full_path = encode_path(cursor.key().path())
+      remaining_path = self.encode_path(full_path[len(ancestor_path):])
+      encoded_values = []
+      for prop_name, index_direction in self.order_info:
+        prop = next(prop for prop in cursor.property_list()
+                    if prop.name() == prop_name)
+        reverse = index_direction == Query_Order.DESCENDING
+        encoded_values.append(encode_value(prop.value(), reverse))
+
+      encoded_cursor = ((ancestor_path,) + tuple(encoded_values) +
+                        (remaining_path,))
+      if reverse:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack(encoded_cursor))
+      else:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+                                     subspace.pack(encoded_cursor))
 
     start = start or subspace.range().start
     stop = stop or subspace.range().stop
@@ -740,42 +834,43 @@ class IndexManager(object):
     return False
 
   def get_iterator(self, tr, query, read_vs=None):
+    project_id = six.text_type(query.app())
+    namespace = six.text_type(query.name_space())
     index = self._get_perfect_index(query)
-    if index is None:
-      raise BadRequest(u'Query not supported')
-
     filter_props = group_filters(query)
-    logger.debug('filter_props: {}'.format(filter_props))
+    ancestor_path = tuple()
     if query.has_ancestor():
       ancestor_path = encode_path(query.ancestor().path())
-      desired_slice = index.get_slice(filter_props, ancestor_path)
-    else:
-      desired_slice = index.get_slice(filter_props)
 
     reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
+    last_result = None
     if query.has_compiled_cursor():
       cursor = appscale_stub_util.ListCursor(query)
       last_result = cursor._GetLastResult()
-      if query.has_ancestor():
-        ancestor_path = encode_path(query.ancestor().path())
-        encoded_cursor_key = index.encode_index_result(
-          last_result, ancestor_path)
-      else:
-        encoded_cursor_key = index.encode_index_result(last_result)
-
-      if reverse:
-        start = desired_slice.start
-        stop = fdb.KeySelector.first_greater_or_equal(encoded_cursor_key)
-      else:
-        start = fdb.KeySelector.first_greater_than(encoded_cursor_key)
-        stop = desired_slice.stop
-
-      desired_slice = slice(start, stop)
 
     rpc_limit, check_more_results = self.rpc_limit(query)
     fetch_limit = rpc_limit
     if check_more_results:
       fetch_limit += 1
+
+    if index is None:
+      if not all(prop.equality for prop in filter_props):
+        raise BadRequest(u'Query not supported')
+
+      indexes = []
+      for filter_prop in filter_props:
+        index = SinglePropIndex.from_cache(
+          project_id, namespace, six.text_type(query.kind()), filter_prop.name,
+          self._directory_cache)
+        slice = index.get_slice((filter_prop,), ancestor_path, last_result)
+        value = filter_prop.filters[1]
+        indexes.append((index, slice, value))
+
+      return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
+                               read_vs, snapshot=True)
+
+    desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
+                                    reverse)
 
     logger.debug('using index: {}'.format(index))
     iterator = IndexIterator(tr, self._tornado_fdb, index, desired_slice,

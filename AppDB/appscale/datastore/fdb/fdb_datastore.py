@@ -153,7 +153,7 @@ class FDBDatastore(object):
     iterator = self.index_manager.get_iterator(tr, query, read_vs)
     for prop_name in query.property_name_list():
       prop_name = six.text_type(prop_name)
-      if prop_name not in iterator.index.prop_names:
+      if prop_name not in iterator.prop_names:
         raise BadRequest('Projections on {} are not '
                          'supported'.format(prop_name))
 
