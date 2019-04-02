@@ -51,15 +51,22 @@ class V3Types(object):
     return bytes(bytearray([255 - ord(encoded_type)]))
 
 
+def decode_str(string):
+  if isinstance(string, six.text_type):
+    return string
+
+  return string.decode('utf-8')
+
+
 def encode_element(element):
   if element.has_id():
     id_or_name = element.id()
   elif element.has_name():
-    id_or_name = six.text_type(element.name())
+    id_or_name = decode_str(element.name())
   else:
     raise BadRequest('All path elements must either have a name or ID')
 
-  return six.text_type(element.type()), id_or_name
+  return decode_str(element.type()), id_or_name
 
 
 def decode_element(element_tuple):
@@ -149,8 +156,8 @@ def decode_user(val):
 
 
 def encode_reference(val):
-  project_id = six.text_type(val.app())
-  namespace = six.text_type(val.name_space())
+  project_id = decode_str(val.app())
+  namespace = decode_str(val.name_space())
   return (project_id, namespace) + encode_path(val)
 
 
@@ -166,22 +173,22 @@ ENCODERS = {
   V3Types.NULL: lambda val: tuple(),
   V3Types.INT64: lambda val: (val,),
   V3Types.BOOLEAN: lambda val: (val,),
-  V3Types.STRING: lambda val: (six.text_type(val),),
+  V3Types.STRING: lambda val: (decode_str(val),),
   V3Types.DOUBLE: lambda val: (val,),
   V3Types.POINT: lambda val: (val.x(), val.y()),
-  V3Types.USER: lambda val: (six.text_type(val.email()),
-                             six.text_type(val.auth_domain())),
+  V3Types.USER: lambda val: (decode_str(val.email()),
+                             decode_str(val.auth_domain())),
   V3Types.REFERENCE: encode_reference,
   V3Types.reverse(V3Types.NULL): lambda val: tuple(),
   V3Types.reverse(V3Types.INT64): lambda val: (val * -1,),
   V3Types.reverse(V3Types.BOOLEAN): lambda val: (not val,),
   V3Types.reverse(V3Types.STRING):
-    lambda val: (reverse_encode_string(six.text_type(val)),),
+    lambda val: (reverse_encode_string(decode_str(val)),),
   V3Types.reverse(V3Types.DOUBLE): lambda val: (val * -1,),
   V3Types.reverse(V3Types.POINT): lambda val: (val.x() * -1, val.y() * -1),
   V3Types.reverse(V3Types.USER):
-    lambda val: (reverse_encode_string(six.text_type(val.email())),
-                 reverse_encode_string(six.text_type(val.auth_domain()))),
+    lambda val: (reverse_encode_string(decode_str(val.email())),
+                 reverse_encode_string(decode_str(val.auth_domain()))),
   V3Types.reverse(V3Types.REFERENCE):
     lambda val: tuple(reverse_encode_string(item)
                       for item in encode_reference(val))

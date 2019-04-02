@@ -19,6 +19,7 @@ from tornado.ioloop import IOLoop
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
+from appscale.datastore.fdb.codecs import decode_str
 from appscale.datastore.fdb.data import DataManager
 from appscale.datastore.fdb.indexes import IndexManager
 from appscale.datastore.fdb.transactions import TransactionManager
@@ -60,7 +61,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
     logger.debug('put_request:\n{}'.format(put_request))
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
 
     if put_request.auto_id_policy() != put_request.CURRENT:
       raise BadRequest('Sequential allocator is not implemented')
@@ -90,7 +91,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def dynamic_get(self, project_id, get_request, get_response):
     logger.debug('get_request:\n{}'.format(get_request))
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
     tr = self._db.create_transaction()
 
     read_vs = None
@@ -117,7 +118,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def dynamic_delete(self, project_id, delete_request):
     logger.debug('delete_request:\n{}'.format(delete_request))
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
     tr = self._db.create_transaction()
 
     if delete_request.has_transaction():
@@ -139,7 +140,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def _dynamic_run_query(self, query, query_result):
     logger.debug('query: {}'.format(query))
-    project_id = six.text_type(query.app())
+    project_id = decode_str(query.app())
     tr = self._db.create_transaction()
     read_vs = None
     if query.has_transaction():
@@ -153,7 +154,7 @@ class FDBDatastore(object):
     iterator = self.index_manager.get_iterator(tr, query, read_vs)
     logger.debug('iterator: {}'.format(iterator))
     for prop_name in query.property_name_list():
-      prop_name = six.text_type(prop_name)
+      prop_name = decode_str(prop_name)
       if prop_name not in iterator.prop_names:
         raise BadRequest('Projections on {} are not '
                          'supported'.format(prop_name))
@@ -226,7 +227,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     txid = yield self._tx_manager.create(tr, project_id, is_xg)
     yield self._tornado_fdb.commit(tr)
@@ -235,7 +236,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def apply_txn_changes(self, project_id, txid):
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
     read_vs, xg, lookups, queried_groups, mutations = tx_metadata
@@ -303,7 +304,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
     logger.info(
       u'Doing a rollback on transaction {} for {}'.format(txid, project_id))
 
@@ -313,7 +314,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def update_composite_index(self, project_id, index):
-    project_id = six.text_type(project_id)
+    project_id = decode_str(project_id)
     yield self.index_manager.update_composite_index(project_id, index)
 
   @gen.coroutine

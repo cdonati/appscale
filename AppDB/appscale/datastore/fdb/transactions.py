@@ -19,7 +19,7 @@ from tornado import gen
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
-from appscale.datastore.fdb.codecs import encode_path
+from appscale.datastore.fdb.codecs import decode_str, encode_path
 from appscale.datastore.fdb.utils import (
   fdb, EncodedTypes, put_chunks, KVIterator)
 
@@ -119,7 +119,7 @@ class TransactionManager(object):
   def log_query(self, tr, project_id, query):
     txid = query.transaction().handle()
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    namespace = six.text_type(query.name_space())
+    namespace = decode_str(query.name_space())
     if not query.has_ancestor():
       raise BadRequest('Queries in a transaction must specify an ancestor')
 

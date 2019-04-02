@@ -21,8 +21,8 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.fdb.codecs import (
-  encode_ancestor_range, encode_path, encode_value, decode_element,
-  decode_path, decode_value)
+  decode_element, decode_path, decode_str, decode_value, encode_ancestor_range,
+  encode_path, encode_value)
 from appscale.datastore.fdb.utils import fdb, MAX_FDB_TX_DURATION, KVIterator
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.index_manager import IndexInaccessible
@@ -65,7 +65,7 @@ def group_filters(query):
       raise BadRequest(u'Each filter must have exactly one property')
 
     prop = query_filter.property(0)
-    prop_name = six.text_type(prop.name())
+    prop_name = decode_str(prop.name())
     filter_info = (query_filter.op(), prop.value())
     if filter_props and filter_props[-1].name == prop_name:
       filter_props[-1].filters.append(filter_info)
@@ -317,7 +317,6 @@ class IndexIterator(object):
     usable_entries = []
     for kv in kvs:
       entry = self.index.decode(kv)
-      logger.debug('entry: {}'.format(entry))
       if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
         self._kv_iterator.increase_limit()
         more_results = not self._kv_iterator.done_with_range
@@ -683,8 +682,7 @@ class CompositeIndex(Index):
   def from_cache(cls, project_id, namespace, index_id, kind, ancestor,
                  order_info, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME,
-       six.text_type(index_id)))
+      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, decode_str(index_id)))
     return cls(directory, kind, ancestor, order_info)
 
   def __repr__(self):
@@ -873,8 +871,8 @@ class IndexManager(object):
     return False
 
   def get_iterator(self, tr, query, read_vs=None):
-    project_id = six.text_type(query.app())
-    namespace = six.text_type(query.name_space())
+    project_id = decode_str(query.app())
+    namespace = decode_str(query.name_space())
     index = self._get_perfect_index(query)
     filter_props = group_filters(query)
     ancestor_path = tuple()
@@ -899,7 +897,7 @@ class IndexManager(object):
       indexes = []
       for filter_prop in filter_props:
         index = SinglePropIndex.from_cache(
-          project_id, namespace, six.text_type(query.kind()), filter_prop.name,
+          project_id, namespace, decode_str(query.kind()), filter_prop.name,
           self._directory_cache)
         slice = index.get_slice((filter_prop,), ancestor_path, last_result)
         value = filter_prop.filters[0][1]
@@ -921,8 +919,8 @@ class IndexManager(object):
     if commit_vs is None:
       commit_vs = fdb.tuple.Versionstamp()
 
-    project_id = six.text_type(entity.key().app())
-    namespace = six.text_type(entity.key().name_space())
+    project_id = decode_str(entity.key().app())
+    namespace = decode_str(entity.key().name_space())
     path = encode_path(entity.key().path())
     kind = path[-2]
 
@@ -936,7 +934,7 @@ class IndexManager(object):
                 kind_index.encode(path, commit_vs)]
     entity_prop_names = []
     for prop in entity.property_list():
-      prop_name = six.text_type(prop.name())
+      prop_name = decode_str(prop.name())
       entity_prop_names.append(prop_name)
       index = SinglePropIndex.from_cache(
         project_id, namespace, kind, prop_name, self._directory_cache)
@@ -952,15 +950,15 @@ class IndexManager(object):
     return all_keys
 
   def _get_perfect_index(self, query):
-    project_id = six.text_type(query.app())
-    namespace = six.text_type(query.name_space())
+    project_id = decode_str(query.app())
+    namespace = decode_str(query.name_space())
     filter_props = group_filters(query)
     order_info = get_order_info(query)
 
     prop_names = [filter_prop.name for filter_prop in filter_props]
     prop_names.extend([prop_name for prop_name, _ in order_info
                        if prop_name not in prop_names])
-    prop_names.extend([six.text_type(prop_name)
+    prop_names.extend([decode_str(prop_name)
                        for prop_name in query.property_name_list()
                        if prop_name not in prop_names])
 
@@ -972,7 +970,7 @@ class IndexManager(object):
       return KindlessIndex.from_cache(
         project_id, namespace, self._directory_cache)
 
-    kind = six.text_type(query.kind())
+    kind = decode_str(query.kind())
     if all(prop_name == KEY_PROP for prop_name in prop_names):
       return KindIndex.from_cache(
         project_id, namespace, kind, self._directory_cache)
@@ -983,13 +981,13 @@ class IndexManager(object):
       ordered_prop = prop_name in [order_name for order_name, _ in order_info]
       if not query.has_ancestor() or not ordered_prop:
         return SinglePropIndex.from_cache(
-          project_id, namespace, six.text_type(query.kind()), prop_name,
+          project_id, namespace, decode_str(query.kind()), prop_name,
           self._directory_cache)
 
     index_pb = _FindIndexToUse(query, self._get_indexes_pb(project_id))
     if index_pb is not None:
       index_order_info = tuple(
-        (six.text_type(prop.name()), prop.direction())
+        (decode_str(prop.name()), prop.direction())
         for prop in index_pb.definition().property_list())
       return CompositeIndex.from_cache(
         project_id, namespace, index_pb.id(), kind,
@@ -1036,7 +1034,7 @@ class IndexManager(object):
   @gen.coroutine
   def update_composite_index(self, project_id, index_pb, cursor=(None, None)):
     start_ns, start_key = cursor
-    kind = six.text_type(index_pb.definition().entity_type())
+    kind = decode_str(index_pb.definition().entity_type())
     ancestor = index_pb.definition().ancestor()
     order_info = ((prop.name(), prop.direction())
                   for prop in index_pb.definition().property_list())
@@ -1047,7 +1045,7 @@ class IndexManager(object):
       if start_ns is not None and namespace < start_ns:
         continue
 
-      u_index_id = six.text_type(index_pb.id())
+      u_index_id = decode_str(index_pb.id())
       composite_index_dir = indexes_dir.create_or_open(
         tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
       composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
