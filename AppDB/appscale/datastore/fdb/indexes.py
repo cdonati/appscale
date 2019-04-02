@@ -348,9 +348,9 @@ class MergeJoinIterator(object):
       raise gen.Return(([], False))
 
     entries_from_slices = []
-    for index, (prop_index, slice, value) in enumerate(self.indexes):
+    for index, (prop_index, key_slice, value) in enumerate(self.indexes):
       kvs, count, more = yield self._tornado_fdb.get_range(
-        self._tr, slice, 0, fdb.StreamingMode.small, 1,
+        self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
         snapshot=self._snapshot)
       if not count:
         raise gen.Return(([], False))
@@ -390,12 +390,12 @@ class MergeJoinIterator(object):
                          usable_entry.deleted_vs))
 
     new_path = max(entries[-1] for entries in entries_from_slices if entries)
-    for index, (prop_index, slice, value) in enumerate(self.indexes):
+    for index, (prop_index, key_slice, value) in enumerate(self.indexes):
       encoded_value = encode_value(value)
       new_start = get_fdb_key_selector(
         Query_Filter.GREATER_THAN_OR_EQUAL,
         prop_index.directory.pack((encoded_value, new_path)))
-      self.indexes[index][1] = slice(new_start, slice.stop)
+      self.indexes[index][1] = slice(new_start, key_slice.stop)
 
     raise gen.Return((matching_entries, not self._done))
 
