@@ -246,6 +246,11 @@ class CompositeEntry(IndexEntry):
       project_id, namespace, path, commit_vs, deleted_vs)
     self.properties = properties
 
+  def __repr__(self):
+    return 'CompositeEntry({!r}, {!r}, {!r}, {!r}, {!r}, {!r})'.format(
+      self.project_id, self.namespace, self.path, self.properties,
+      self.commit_vs, self.deleted_vs)
+
   def prop_result(self):
     entity = entity_pb.EntityProto()
     entity.mutable_key().MergeFrom(self.key)
@@ -364,7 +369,6 @@ class MergeJoinIterator(object):
 
       usable_entries = []
       for kv in kvs:
-        logger.debug('kv: {}'.format(kv))
         entry = prop_index.decode(kv)
         if entry.commit_vs < self._read_vs <= entry.deleted_vs:
           usable_entries.append(entry)
