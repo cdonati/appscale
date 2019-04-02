@@ -736,22 +736,20 @@ class CompositeIndex(Index):
     stop = None
 
     ordered_filter_props = []
-    logger.debug('about to order filter props')
     for prop_name in self.prop_names:
-      logger.debug('index_prop_name: {}'.format(prop_name))
       try:
         filter_prop = next(filter_prop for filter_prop in filter_props
                            if filter_prop.name == prop_name)
-        logger.debug('filter_prop: {}'.format(filter_prop))
         ordered_filter_props.append(filter_prop)
       except StopIteration:
         continue
 
-    logger.debug('ordered filter props: {}'.format(ordered_filter_props))
     for filter_prop in ordered_filter_props:
       logger.debug('processing {}'.format(filter_prop))
-      index_direction = next(direction for name, direction in self.order_info)
+      index_direction = next(direction for name, direction in self.order_info
+                             if name == filter_prop.name)
       reverse = index_direction == Query_Order.DESCENDING
+      logger.debug('reverse: {}'.format(reverse))
       if filter_prop.name in self.prop_names:
         encoder = lambda val: encode_value(val, reverse)
       elif filter_prop.name == KEY_PROP:
@@ -766,6 +764,8 @@ class CompositeIndex(Index):
 
       for op, value in filter_prop.filters:
         encoded_value = encoder(value)
+        logger.debug('value: {}'.format(value))
+        logger.debug('encoded value: {}'.format(encoded_value))
         if op in START_FILTERS:
           start = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         elif op in STOP_FILTERS:
