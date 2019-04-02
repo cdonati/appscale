@@ -390,15 +390,16 @@ class MergeJoinIterator(object):
                          usable_entry.deleted_vs))
 
     if any(entries_from_slices):
-      new_path = max(entries[-1] for entries in entries_from_slices if entries)
-      logger.debug('new_path: {}'.format(new_path))
+      latest_entry = max(entries[-1] for entries in entries_from_slices
+                         if entries)
       for index, (prop_index, key_slice, value) in enumerate(self.indexes):
+        latest_path = index.encode_path(latest_entry.path)
         encoded_value = encode_value(value)
         logger.debug('value: {}'.format(value))
         logger.debug('encoded value: {}'.format(encoded_value))
         new_start = get_fdb_key_selector(
           Query_Filter.GREATER_THAN_OR_EQUAL,
-          prop_index.directory.pack((encoded_value, new_path)))
+          prop_index.directory.pack((encoded_value, latest_path)))
         self.indexes[index][1] = slice(new_start, key_slice.stop)
 
     raise gen.Return((matching_entries, not self._done))
