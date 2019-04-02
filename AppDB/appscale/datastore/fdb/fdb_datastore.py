@@ -170,7 +170,6 @@ class FDBDatastore(object):
       iter_offset = max(query.offset() - entries_fetched, 0)
       entries, more_iterator_results = yield iterator.next_page()
       logger.debug('entries: {}'.format(entries))
-      logger.debug('more_iterator_results: {}'.format(more_iterator_results))
       entries_fetched += len(entries)
       if not entries and more_iterator_results:
         continue
@@ -180,7 +179,8 @@ class FDBDatastore(object):
 
       skipped_results += min(len(entries), iter_offset)
       suitable_entries = entries[iter_offset:remainder]
-      cursor = entries[:remainder][-1]
+      if entries[:remainder]:
+        cursor = entries[:remainder][-1]
 
       if not fetch_data and not query.keys_only():
         results.extend([entry.prop_result() for entry in suitable_entries])
