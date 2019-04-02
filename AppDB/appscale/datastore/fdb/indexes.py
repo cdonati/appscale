@@ -367,9 +367,11 @@ class MergeJoinIterator(object):
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
-        if not count and not more:
+        if not count:
           raise gen.Return(([], False))
 
+        key_slice = slice(fdb.KeySelector.first_greater_than(kvs[-1].key),
+                          key_slice.stop)
         for kv in kvs:
           entry = prop_index.decode(kv)
           if entry.commit_vs < self._read_vs <= entry.deleted_vs:
