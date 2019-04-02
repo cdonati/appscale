@@ -122,7 +122,7 @@ class FDBDatastore(object):
 
     if delete_request.has_transaction():
       self._tx_manager.log_rpc(tr, project_id, delete_request)
-      deletes = [(key, None, None) for key in delete_request.key_list()]
+      deletes = [(None, None) for _ in delete_request.key_list()]
     else:
       futures = []
       for key in delete_request.key_list():
