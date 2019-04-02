@@ -331,6 +331,7 @@ class MergeJoinIterator(object):
     self._tr = tr
     self._tornado_fdb = tornado_fdb
     self._fetch_limit = fetch_limit
+    self._fetched = 0
     self._snapshot = snapshot
     self._done = False
 
@@ -349,10 +350,10 @@ class MergeJoinIterator(object):
 
     entries_from_slices = []
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
+      logger.debug('start: {!r}'.format(key_slice.start))
       kvs, count, more = yield self._tornado_fdb.get_range(
         self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
         snapshot=self._snapshot)
-      logger.debug('kvs: {}'.format(kvs))
       if not count:
         raise gen.Return(([], False))
 
@@ -408,6 +409,9 @@ class MergeJoinIterator(object):
           prop_index.directory.pack((encoded_value, latest_path)))
         self.indexes[index][1] = slice(new_start, key_slice.stop)
 
+    remaining = self._fetch_limit - self._fetched
+    matching_entries = matching_entries[:remaining]
+    self._fetched += len(matching_entries)
     raise gen.Return((matching_entries, not self._done))
 
 
