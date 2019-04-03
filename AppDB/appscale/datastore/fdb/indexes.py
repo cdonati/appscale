@@ -388,10 +388,11 @@ class MergeJoinIterator(object):
 
   @property
   def prop_names(self):
-    return tuple(index.prop_name for index, _, _, _ in self.indexes)
+    prop_names = set()
+    for index, _, _, _ in self.indexes:
+      prop_names.update(index.prop_names)
 
-  def __repr__(self):
-    return u'MergeJoinIterator({!r})'.format(self.prop_names)
+    return tuple(prop_names)
 
   @gen.coroutine
   def next_page(self):
