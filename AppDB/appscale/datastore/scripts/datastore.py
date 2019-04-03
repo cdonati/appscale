@@ -669,6 +669,7 @@ class MainHandler(tornado.web.RequestHandler):
     except dbconstants.Timeout as error:
       raise gen.Return(('', datastore_pb.Error.TIMEOUT, str(error)))
     except (dbconstants.BadRequest, zktransaction.ZKBadRequest) as error:
+      logger.exception('BadRequest')
       raise gen.Return(('', datastore_pb.Error.BAD_REQUEST, str(error)))
     except zktransaction.ZKTransactionException as error:
       logger.exception('Concurrent transaction during {}'.format(putreq_pb))
