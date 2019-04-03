@@ -447,19 +447,18 @@ class MergeJoinIterator(object):
 
       tmp_filter_props = []
       for filter_prop in self._filter_props:
-        if filter_prop.name == KEY_PROP:
+        if filter_prop.name in (next_prop_name, last_prop, KEY_PROP):
           continue
-        elif filter_prop.name == next_prop_name:
-          tmp_filter_props.append(
-            FilterProperty(filter_prop.name,
-                           [(Query_Filter.EQUAL, next_value)]))
-        elif last_prop == filter_prop.name:
-          val = next(value for prop_name, value in usable_entry.properties
-                     if prop_name == last_prop)
-          tmp_filter_props.append(
-            FilterProperty(filter_prop.name, [(Query_Filter.EQUAL, val)]))
         else:
           tmp_filter_props.append(filter_prop)
+
+      tmp_filter_props.append(
+        FilterProperty(next_prop_name, [(Query_Filter.EQUAL, next_value)]))
+
+      val = next(value for prop_name, value in usable_entry.properties
+                 if prop_name == last_prop)
+      tmp_filter_props.append(
+        FilterProperty(last_prop, [(Query_Filter.EQUAL, val)]))
 
       tmp_filter_props.append(
         FilterProperty(KEY_PROP, [(next_index_op, usable_entry)]))
