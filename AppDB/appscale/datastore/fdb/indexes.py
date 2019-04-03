@@ -827,8 +827,9 @@ class CompositeIndex(Index):
 
     for filter_prop in ordered_filter_props:
       logger.debug('processing {}'.format(filter_prop.name))
-      index_direction = next(direction for name, direction in self.order_info
-                             if name == filter_prop.name)
+      index_direction = next(
+        (direction for name, direction in self.order_info
+         if name == filter_prop.name), Query_Order.ASCENDING)
       reverse = index_direction == Query_Order.DESCENDING
       if filter_prop.name in self.prop_names:
         encoder = lambda val: encode_value(val, reverse)
