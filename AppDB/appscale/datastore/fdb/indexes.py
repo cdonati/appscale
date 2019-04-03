@@ -52,6 +52,7 @@ class FilterProperty(object):
 
   @property
   def equality(self):
+    logger.debug('filters: %r' % self.filters)
     return all(op == Query_Filter.EQUAL for op, _ in self.filters)
 
   def __repr__(self):
