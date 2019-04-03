@@ -260,6 +260,7 @@ class CompositeEntry(IndexEntry):
       prop = entity.add_property()
       prop.set_name(prop_name)
       prop.set_meaning(entity_pb.Property.INDEX_VALUE)
+      # TODO: Check if this is sometimes True.
       prop.set_multiple(False)
       prop.mutable_value().MergeFrom(value)
 
@@ -357,12 +358,13 @@ class MultipleRangeIterator(object):
 
 
 class MergeJoinIterator(object):
-  def __init__(self, tr, tornado_fdb, indexes, fetch_limit, read_vs=None,
-               snapshot=False):
+  def __init__(self, tr, tornado_fdb, filter_props, indexes, fetch_limit,
+               read_vs=None, snapshot=False):
     self.indexes = indexes
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
 
+    self._filter_props = filter_props
     self._read_vs = read_vs
     self._tr = tr
     self._tornado_fdb = tornado_fdb
@@ -371,16 +373,12 @@ class MergeJoinIterator(object):
     self._snapshot = snapshot
     self._done = False
     self._candidate_path = None
-    self._candidate_count = 0
+    self._candidate_entries = []
     self._last_page = False
 
   @property
   def prop_names(self):
-    return tuple(index.prop_name for index, _, _ in self.indexes)
-
-  @property
-  def properties(self):
-    return tuple((index.prop_name, value) for index, _, value in self.indexes)
+    return tuple(index.prop_name for index, _, _, _ in self.indexes)
 
   @gen.coroutine
   def next_page(self):
@@ -389,7 +387,7 @@ class MergeJoinIterator(object):
 
     last_page = self._last_page
     result = None
-    for index, (prop_index, key_slice, value) in enumerate(self.indexes):
+    for i, (index, key_slice, prop_name, value) in enumerate(self.indexes):
       logger.debug('value: {!r}'.format(encode_value(value)))
       usable_entry = None
       while True:
@@ -403,7 +401,7 @@ class MergeJoinIterator(object):
         key_slice = slice(fdb.KeySelector.first_greater_than(kvs[-1].key),
                           key_slice.stop)
         for kv in kvs:
-          entry = prop_index.decode(kv)
+          entry = index.decode(kv)
           if entry.commit_vs < self._read_vs <= entry.deleted_vs:
             usable_entry = entry
             break
@@ -413,29 +411,61 @@ class MergeJoinIterator(object):
 
       logger.debug('usable entry: {}'.format(usable_entry))
       if usable_entry.path == self._candidate_path:
-        self._candidate_count += 1
+        self._candidate_entries.append(usable_entry)
       else:
         self._candidate_path = usable_entry.path
-        self._candidate_count = 1
+        self._candidate_entries = [usable_entry]
 
       next_index_op = Query_Filter.GREATER_THAN_OR_EQUAL
-      if self._candidate_count == len(self.indexes):
+      if len(self._candidate_entries) == len(self.indexes):
+        properties = []
+        for partial_entry in self._candidate_entries:
+          if isinstance(partial_entry, PropertyEntry):
+            properties.append((partial_entry.prop_name, partial_entry.value))
+          else:
+            for property in partial_entry.properties:
+              if property not in properties:
+                properties.append(property)
+
         result = CompositeEntry(
           usable_entry.project_id, usable_entry.namespace,
-          self._candidate_path, self.properties, usable_entry.commit_vs,
+          self._candidate_path, properties, usable_entry.commit_vs,
           usable_entry.deleted_vs)
-        self._candidate_count = 0
+        self._candidate_entries = []
         next_index_op = Query_Filter.GREATER_THAN
 
-      next_index_position = (index + 1) % len(self.indexes)
-      next_index, next_slice, next_value = self.indexes[next_index_position]
+      next_index_i = (i + 1) % len(self.indexes)
+      next_index, next_slice, next_prop_name, next_value =\
+        self.indexes[next_index_i]
+
+      # TODO: This probably doesn't work for all cases.
+      last_prop = None
+      if isinstance(next_index, CompositeIndex):
+        last_prop = next_index.prop_names[-1]
+
+      tmp_filter_props = []
+      for filter_prop in self._filter_props:
+        if filter_prop.name == KEY_PROP:
+          continue
+        elif filter_prop.name == next_prop_name:
+          tmp_filter_props.append(
+            FilterProperty(filter_prop.name,
+                           [(Query_Filter.EQUAL, next_value)]))
+        elif last_prop == filter_prop.name:
+          val = next(value for prop_name, value in usable_entry.properties
+                     if prop_name == last_prop)
+          tmp_filter_props.append(
+            FilterProperty(filter_prop.name, [(Query_Filter.EQUAL, val)]))
+        else:
+          tmp_filter_props.append(filter_prop)
+
+      tmp_filter_props.append(
+        FilterProperty(KEY_PROP, [(next_index_op, usable_entry)]))
+
+      new_slice = next_index.get_slice(tmp_filter_props)
       encoded_value = encode_value(next_value)
-      encoded_path = next_index.encode_path(usable_entry.path)
-      new_start = get_fdb_key_selector(
-        next_index_op,
-        next_index.directory.pack((encoded_value, encoded_path)))
-      logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_start.key))
-      self.indexes[next_index_position][1] = slice(new_start, next_slice.stop)
+      logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_slice.start.key))
+      self.indexes[next_index_i][1] = new_slice
 
       if not more:
         self._last_page = True
@@ -931,10 +961,10 @@ class IndexManager(object):
           self._directory_cache)
         slice = index.get_slice((filter_prop,), ancestor_path, last_result)
         value = filter_prop.filters[0][1]
-        indexes.append([index, slice, value])
+        indexes.append([index, slice, filter_prop.name, value])
 
-      return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
-                               read_vs, snapshot=True)
+      return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
+                               fetch_limit, read_vs, snapshot=True)
 
     logger.debug('using index: {}'.format(index))
     equality_prop = next(
@@ -953,10 +983,10 @@ class IndexManager(object):
 
         desired_slice = index.get_slice(
           tmp_filter_props, ancestor_path, last_result, reverse)
-        indexes.append([index, desired_slice, value])
+        indexes.append([index, desired_slice, equality_prop.name, value])
 
-      return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
-                               read_vs, snapshot=True)
+      return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
+                               fetch_limit, read_vs, snapshot=True)
 
     desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
                                     reverse)

@@ -68,32 +68,10 @@ rework directory cache. per-project?
 
 ---
 
-enforce xg constraint
-
-    # Fail if there are too many groups involved in the transaction.
-    groups_mutated = set()
-    for mutation in mutations:
-      
-    groups_put = {group_for_key(key).Encode() for key in metadata['puts']}
-    groups_deleted = {group_for_key(key).Encode()
-                      for key in metadata['deletes']}
-    groups_mutated = groups_put | groups_deleted
-    tx_groups = groups_mutated | metadata['reads']
-    if len(tx_groups) > dbconstants.MAX_GROUPS_FOR_XG:
-      raise dbconstants.TooManyGroupsException(
-        'Too many groups in transaction')
----
-
-test behavior of queries including meaning field
-
----
-
 handle pointvalue, uservalue, referencevalue
 test decoding/encoding double (float)
 scattered property
 test delete response (pretty sure popluated version field is the new empty version?)
-improve merge join query performance
-make sure tmp_chunks works correctly
 
 ---
 
@@ -105,12 +83,11 @@ add tests for functionality that doesn't work in current datastore
  - snapshot isolation
  - queries with different levels of ancestors
  - prop order (empty values)
+ - entity versions
+ - projection (performance?)
 support advanced queries: https://cloud.google.com/appengine/articles/indexselection
 test if prop result (projection) specifies group
 extend fdb.tuple for custom data types and reversable data types
-fix versionstamp encode bug where packing vs.tr_version can raise exception if
-fdb.Value instead of string
-use native fdb offset instead of scanning all keys (actually, not possible
-using mvcc indexes)
 fix issue where query cursor can point to the next result, which may be an
 updated index value (need to exclude whole value instead of just key)
+clean up merge join iterator. handle ancestors and cursors there.
