@@ -937,24 +937,22 @@ class IndexManager(object):
       (filter_prop for filter_prop in filter_props if filter_prop.equality),
       None)
     if equality_prop is not None and len(equality_prop.filters) > 1:
-      iterators = []
-      for filter_ in equality_prop.filters:
+      indexes = []
+      for op, value in equality_prop.filters:
         tmp_filter_props = []
         for filter_prop in filter_props:
           if filter_prop.name == equality_prop.name:
             tmp_filter_props.append(
-              FilterProperty(filter_prop.name, [filter_]))
+              FilterProperty(filter_prop.name, [(op, value)]))
           else:
             tmp_filter_props.append(filter_prop)
 
-        logger.debug('tmp_filter_props: {!r}'.format(tmp_filter_props))
         desired_slice = index.get_slice(
           tmp_filter_props, ancestor_path, last_result, reverse)
-        iterators.append(
-          IndexIterator(tr, self._tornado_fdb, index, desired_slice,
-                        fetch_limit, reverse, read_vs, snapshot=True))
+        indexes.append([index, desired_slice, value])
 
-      return MultipleRangeIterator(iterators, fetch_limit)
+      return MergeJoinIterator(tr, self._tornado_fdb, indexes, fetch_limit,
+                               read_vs, snapshot=True)
 
     desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
                                     reverse)
