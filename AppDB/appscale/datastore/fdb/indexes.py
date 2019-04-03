@@ -389,13 +389,15 @@ class MergeJoinIterator(object):
       logger.debug('prop_name: {}, value: {!r}'.format(prop_name, encode_value(value)))
       usable_entry = None
       # TODO: Keep cache of ranges to reduce unnecessary lookups.
+      index_exhausted = False
       while True:
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
         if not count:
           logger.debug('no more results')
-          raise gen.Return(([], False))
+          index_exhausted = True
+          break
 
         key_slice = slice(fdb.KeySelector.first_greater_than(kvs[-1].key),
                           key_slice.stop)
@@ -407,6 +409,10 @@ class MergeJoinIterator(object):
 
         if usable_entry is not None:
           break
+
+      if index_exhausted:
+        self._done = True
+        break
 
       logger.debug('usable entry: {}'.format(usable_entry))
       if usable_entry.path == self._candidate_path:
@@ -473,7 +479,6 @@ class MergeJoinIterator(object):
       logger.debug('done with limit')
       self._done = True
 
-    logger.debug('page results: {}'.format((results, not self._done)))
     raise gen.Return((results, not self._done))
 
 
