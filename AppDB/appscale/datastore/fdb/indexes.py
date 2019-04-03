@@ -390,14 +390,13 @@ class MergeJoinIterator(object):
     last_page = self._last_page
     result = None
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
-      logger.debug('value: {!r}'.format(value))
+      logger.debug('value: {!r}'.format(encode_value(value)))
       usable_entry = None
       while True:
         logger.debug('start: {!r}'.format(key_slice.start.key))
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
-        logger.debug('kvs: {}'.format(kvs))
         if not count:
           raise gen.Return(([], False))
 
@@ -412,6 +411,7 @@ class MergeJoinIterator(object):
         if usable_entry is not None:
           break
 
+      logger.debug('usable entry: {}'.format(usable_entry))
       if usable_entry.path == self._candidate_path:
         self._candidate_count += 1
       else:
@@ -434,6 +434,7 @@ class MergeJoinIterator(object):
       new_start = get_fdb_key_selector(
         next_index_op,
         next_index.directory.pack((encoded_value, encoded_path)))
+      logger.debug('changing {} from {} to {}'.format(encoded_value, next_slice.start.key, new_start.key))
       self.indexes[next_index_position][1] = slice(new_start, next_slice.stop)
 
       if not more:
