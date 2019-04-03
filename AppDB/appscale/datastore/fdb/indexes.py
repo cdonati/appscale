@@ -374,7 +374,6 @@ class MergeJoinIterator(object):
     self._done = False
     self._candidate_path = None
     self._candidate_entries = []
-    self._last_page = False
 
   @property
   def prop_names(self):
@@ -385,14 +384,11 @@ class MergeJoinIterator(object):
     if self._done:
       raise gen.Return(([], False))
 
-    last_page = self._last_page
-    if last_page:
-      logger.debug('last page')
-
     result = None
     for i, (index, key_slice, prop_name, value) in enumerate(self.indexes):
       logger.debug('prop_name: {}, value: {!r}'.format(prop_name, encode_value(value)))
       usable_entry = None
+      # TODO: Keep cache of ranges to reduce unnecessary lookups.
       while True:
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
@@ -469,12 +465,6 @@ class MergeJoinIterator(object):
       encoded_value = encode_value(next_value)
       logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_slice.start.key))
       self.indexes[next_index_i][1] = new_slice
-
-      if not more:
-        self._last_page = True
-
-    if last_page:
-      self._done = True
 
     results = [result] if result is not None else []
     self._fetched += len(results)
