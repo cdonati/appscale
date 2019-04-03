@@ -464,6 +464,7 @@ class MergeJoinIterator(object):
       tmp_filter_props.append(
         FilterProperty(KEY_PROP, [(next_index_op, usable_entry)]))
 
+      logger.debug('tmp_filter_props: {}'.format(tmp_filter_props))
       new_slice = next_index.get_slice(tmp_filter_props)
       encoded_value = encode_value(next_value)
       logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_slice.start.key))
