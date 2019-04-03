@@ -454,8 +454,11 @@ class MergeJoinIterator(object):
       tmp_filter_props.append(
         FilterProperty(next_prop_name, [(Query_Filter.EQUAL, next_value)]))
 
-      val = next(value for prop_name, value in usable_entry.properties
-                 if prop_name == last_prop)
+      if isinstance(usable_entry, PropertyEntry):
+        val = usable_entry.value
+      else:
+        val = next(value for prop_name, value in usable_entry.properties
+                   if prop_name == last_prop)
       tmp_filter_props.append(
         FilterProperty(last_prop, [(Query_Filter.EQUAL, val)]))
 
