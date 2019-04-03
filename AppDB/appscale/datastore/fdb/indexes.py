@@ -390,11 +390,14 @@ class MergeJoinIterator(object):
     last_page = self._last_page
     result = None
     for index, (prop_index, key_slice, value) in enumerate(self.indexes):
+      logger.debug('value: {!r}'.format(value))
       usable_entry = None
       while True:
+        logger.debug('start: {!r}'.format(key_slice.start.key))
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
+        logger.debug('kvs: {}'.format(kvs))
         if not count:
           raise gen.Return(([], False))
 
