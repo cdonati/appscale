@@ -222,7 +222,7 @@ class ListCursor(BaseCursor):
             property = cursor_entity.add_property()
             property.set_name(indexvalue.property())
             property.mutable_value().CopyFrom(indexvalue.value())
-            remaining_properties.remove(indexvalue.property())
+            remaining_properties.discard(indexvalue.property())
 
         Check(not remaining_properties,
               'Cursor does not match query: missing values for %r' %
