@@ -322,7 +322,10 @@ class FDBDatastore(object):
   @gen.coroutine
   def _upsert(self, tr, entity):
     last_element = entity.key().path().element(-1)
-    auto_id = not (last_element.has_id() and last_element.id() != 0)
+    auto_id = False
+    if not last_element.has_name():
+      auto_id = not (last_element.has_id() and last_element.id() != 0)
+
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
