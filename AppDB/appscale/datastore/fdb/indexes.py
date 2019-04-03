@@ -682,7 +682,8 @@ class CompositeIndex(Index):
   def from_cache(cls, project_id, namespace, index_id, kind, ancestor,
                  order_info, directory_cache):
     directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, decode_str(index_id)))
+      (project_id, INDEX_DIR, namespace, cls.DIR_NAME,
+       six.text_type(index_id)))
     return cls(directory, kind, ancestor, order_info)
 
   def __repr__(self):
@@ -1045,7 +1046,7 @@ class IndexManager(object):
       if start_ns is not None and namespace < start_ns:
         continue
 
-      u_index_id = decode_str(index_pb.id())
+      u_index_id = six.text_type(index_pb.id())
       composite_index_dir = indexes_dir.create_or_open(
         tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
       composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
