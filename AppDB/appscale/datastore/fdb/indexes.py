@@ -83,6 +83,17 @@ def group_filters(query):
     inequality_prop = filter_props.pop(inequality_index)
     filter_props.append(inequality_prop)
 
+  # Put key filters last.
+  key_index = None
+  for index, filter_prop in enumerate(filter_props):
+    if filter_prop.name == KEY_PROP:
+      key_index = index
+      break
+
+  if key_index is not None:
+    key_prop = filter_props.pop(key_index)
+    filter_props.append(key_prop)
+
   for filter_prop in filter_props[:-1]:
     if filter_prop.name == KEY_PROP:
       raise BadRequest(
