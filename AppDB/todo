@@ -91,3 +91,4 @@ extend fdb.tuple for custom data types and reversable data types
 fix issue where query cursor can point to the next result, which may be an
 updated index value (need to exclude whole value instead of just key)
 clean up merge join iterator. handle ancestors and cursors there.
+what's up with the cursor for every result? (pb response from sdk and gae)

@@ -386,12 +386,14 @@ class MergeJoinIterator(object):
       raise gen.Return(([], False))
 
     last_page = self._last_page
+    if last_page:
+      logger.debug('last page')
+
     result = None
     for i, (index, key_slice, prop_name, value) in enumerate(self.indexes):
-      logger.debug('value: {!r}'.format(encode_value(value)))
+      logger.debug('prop_name: {}, value: {!r}'.format(prop_name, encode_value(value)))
       usable_entry = None
       while True:
-        logger.debug('start: {!r}'.format(key_slice.start.key))
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
@@ -401,7 +403,6 @@ class MergeJoinIterator(object):
         key_slice = slice(fdb.KeySelector.first_greater_than(kvs[-1].key),
                           key_slice.stop)
         for kv in kvs:
-          logger.debug('kv: {!r}'.format(kv))
           entry = index.decode(kv)
           if entry.commit_vs < self._read_vs <= entry.deleted_vs:
             usable_entry = entry
@@ -464,7 +465,6 @@ class MergeJoinIterator(object):
       tmp_filter_props.append(
         FilterProperty(KEY_PROP, [(next_index_op, usable_entry.path)]))
 
-      logger.debug('tmp_filter_props: {}'.format(tmp_filter_props))
       new_slice = next_index.get_slice(tmp_filter_props)
       encoded_value = encode_value(next_value)
       logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_slice.start.key))
