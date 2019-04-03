@@ -460,7 +460,7 @@ class MergeJoinIterator(object):
         FilterProperty(last_prop, [(Query_Filter.EQUAL, val)]))
 
       tmp_filter_props.append(
-        FilterProperty(KEY_PROP, [(next_index_op, usable_entry)]))
+        FilterProperty(KEY_PROP, [(next_index_op, usable_entry.path)]))
 
       logger.debug('tmp_filter_props: {}'.format(tmp_filter_props))
       new_slice = next_index.get_slice(tmp_filter_props)
@@ -846,7 +846,11 @@ class CompositeIndex(Index):
 
       logger.debug('filters: {}'.format(filter_prop.filters))
       for op, value in filter_prop.filters:
-        encoded_value = encoder(value)
+        if filter_prop.name == KEY_PROP:
+          encoded_value = self.encode_path(value)
+        else:
+          encoded_value = encoder(value)
+
         logger.debug('value: {}'.format(value))
         logger.debug('encoded value: {}'.format(encoded_value))
         selector = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
