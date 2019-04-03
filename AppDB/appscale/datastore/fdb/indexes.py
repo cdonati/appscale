@@ -52,7 +52,7 @@ class FilterProperty(object):
 
   @property
   def equality(self):
-    return len(self.filters) == 1 and self.filters[0][0] == Query_Filter.EQUAL
+    return all(op == Query_Filter.EQUAL for op, _ in self.filters)
 
   def __repr__(self):
     return u'FilterProperty(%r, %r)' % (self.name, self.filters)
@@ -90,10 +90,6 @@ def group_filters(query):
 
     if not filter_prop.equality:
       raise BadRequest(u'All but the last property must be equality filters')
-
-  for filter_prop in filter_props:
-    if len(filter_prop.filters) > 2:
-      raise BadRequest(u'A property can only have up to two filters')
 
   return tuple(filter_props)
 
@@ -308,6 +304,10 @@ class IndexIterator(object):
   def prop_names(self):
     return self.index.prop_names
 
+  @property
+  def start_key(self):
+    return self._kv_iterator.slice.start.key
+
   @gen.coroutine
   def next_page(self):
     if self._done:
@@ -328,6 +328,32 @@ class IndexIterator(object):
       self._done = True
 
     raise gen.Return((usable_entries, more_results))
+
+
+class MultipleRangeIterator(object):
+  def __init__(self, iterators, fetch_limit):
+    self._iterators = sorted(
+      iterators, key=lambda iterator: iterator.start_key)
+    self._fetch_limit = fetch_limit
+    self._fetched = 0
+    self._done = False
+
+  @gen.coroutine
+  def next_page(self):
+    if self._done:
+      raise gen.Return(([], False))
+
+    entries, more_results = yield self._iterators[0].next_page()
+    if not more_results:
+      self._iterators.pop(0)
+
+    remaining = self._fetch_limit - self._fetched
+    entries = entries[:remaining]
+    self._fetched += len(entries)
+    if self._fetched == self._fetch_limit or not self._iterators:
+      self._done = True
+
+    raise gen.Return((entries, not self._done))
 
 
 class MergeJoinIterator(object):
@@ -908,6 +934,27 @@ class IndexManager(object):
                                read_vs, snapshot=True)
 
     logger.debug('using index: {}'.format(index))
+    equality_prop = next(
+      (filter_prop for filter_prop in filter_props if filter_prop.equality),
+      None)
+    if equality_prop is not None and len(equality_prop.filters) > 1:
+      iterators = []
+      for filter_ in equality_prop.filters:
+        tmp_filter_props = []
+        for filter_prop in filter_props:
+          if filter_prop.name == equality_prop.name:
+            tmp_filter_props.append(FilterProperty(filter_prop.name, filter_))
+          else:
+            tmp_filter_props.append(filter_prop)
+
+        desired_slice = index.get_slice(
+          tmp_filter_props, ancestor_path, last_result, reverse)
+        iterators.append(
+          IndexIterator(tr, self._tornado_fdb, index, desired_slice,
+                        fetch_limit, reverse, read_vs, snapshot=True))
+
+      return MultipleRangeIterator(iterators)
+
     desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
                                     reverse)
 
