@@ -509,8 +509,9 @@ class Index(object):
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack((encoded_path,)))
 
-    start = start or subspace.range().start
-    stop = stop or subspace.range().stop
+    selector = fdb.KeySelector.first_greater_or_equal
+    start = start or selector(subspace.range().start)
+    stop = stop or selector(subspace.range().stop)
     return slice(start, stop)
 
 
@@ -680,8 +681,9 @@ class SinglePropIndex(Index):
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack(encoded_cursor))
 
-    start = start or subspace.range().start
-    stop = stop or subspace.range().stop
+    selector = fdb.KeySelector.first_greater_or_equal
+    start = start or selector(subspace.range().start)
+    stop = stop or selector(subspace.range().stop)
     return slice(start, stop)
 
 
@@ -841,8 +843,9 @@ class CompositeIndex(Index):
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack(encoded_cursor))
 
-    start = start or subspace.range().start
-    stop = stop or subspace.range().stop
+    selector = fdb.KeySelector.first_greater_or_equal
+    start = start or selector(subspace.range().start)
+    stop = stop or selector(subspace.range().stop)
     return slice(start, stop)
 
 
