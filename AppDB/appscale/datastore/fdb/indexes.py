@@ -434,7 +434,7 @@ class MergeJoinIterator(object):
       new_start = get_fdb_key_selector(
         next_index_op,
         next_index.directory.pack((encoded_value, encoded_path)))
-      logger.debug('changing {} from {} to {}'.format(encoded_value, next_slice.start.key, new_start.key))
+      logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_start.key))
       self.indexes[next_index_position][1] = slice(new_start, next_slice.stop)
 
       if not more:
