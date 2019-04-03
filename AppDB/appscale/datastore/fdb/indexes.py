@@ -394,6 +394,7 @@ class MergeJoinIterator(object):
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
         if not count:
+          logger.debug('no more results')
           raise gen.Return(([], False))
 
         key_slice = slice(fdb.KeySelector.first_greater_than(kvs[-1].key),
@@ -469,8 +470,10 @@ class MergeJoinIterator(object):
     results = [result] if result is not None else []
     self._fetched += len(results)
     if self._fetched == self._fetch_limit:
+      logger.debug('done with limit')
       self._done = True
 
+    logger.debug('page results: {}'.format((results, not self._done)))
     raise gen.Return((results, not self._done))
 
 
