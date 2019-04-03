@@ -817,6 +817,7 @@ class CompositeIndex(Index):
 
     ordered_filter_props = []
     for prop_name in self.prop_names + (KEY_PROP,):
+      logger.debug('prop_name: {}'.format(prop_name))
       try:
         filter_prop = next(filter_prop for filter_prop in filter_props
                            if filter_prop.name == prop_name)
