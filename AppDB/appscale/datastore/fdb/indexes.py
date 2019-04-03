@@ -23,13 +23,13 @@ from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.fdb.codecs import (
   decode_element, decode_path, decode_str, decode_value, encode_ancestor_range,
   encode_path, encode_value)
+from appscale.datastore.fdb.sdk import ListCursor
 from appscale.datastore.fdb.utils import fdb, MAX_FDB_TX_DURATION, KVIterator
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.index_manager import IndexInaccessible
 from appscale.datastore.utils import _FindIndexToUse
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import appscale_stub_util
 from google.appengine.datastore import datastore_pb, entity_pb
 from google.appengine.datastore.datastore_pb import Query_Filter, Query_Order
 
@@ -966,7 +966,7 @@ class IndexManager(object):
     reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
     last_result = None
     if query.has_compiled_cursor():
-      cursor = appscale_stub_util.ListCursor(query)
+      cursor = ListCursor(query)
       last_result = cursor._GetLastResult()
 
     rpc_limit, check_more_results = self.rpc_limit(query)
