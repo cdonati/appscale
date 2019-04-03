@@ -401,6 +401,7 @@ class MergeJoinIterator(object):
         key_slice = slice(fdb.KeySelector.first_greater_than(kvs[-1].key),
                           key_slice.stop)
         for kv in kvs:
+          logger.debug('kv: {!r}'.format(kv))
           entry = index.decode(kv)
           if entry.commit_vs < self._read_vs <= entry.deleted_vs:
             usable_entry = entry
@@ -442,6 +443,7 @@ class MergeJoinIterator(object):
       last_prop = None
       if isinstance(next_index, CompositeIndex):
         last_prop = next_index.prop_names[-1]
+        logger.debug('last_prop: {!r}'.format(last_prop))
 
       tmp_filter_props = []
       for filter_prop in self._filter_props:
