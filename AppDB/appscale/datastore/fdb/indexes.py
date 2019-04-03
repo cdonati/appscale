@@ -750,9 +750,7 @@ class CompositeIndex(Index):
     return tuple(keys)
 
   def decode(self, kv):
-    logger.debug('kv: {!r}'.format(kv))
     unpacked_key = self.directory.unpack(kv.key)
-    logger.debug('unpacked key: {!r}'.format(unpacked_key))
     if self.ancestor:
       kindless_path = unpacked_key[0] + unpacked_key[-2]
       values = unpacked_key[1:-2]
@@ -761,9 +759,7 @@ class CompositeIndex(Index):
       values = unpacked_key[:-2]
 
     properties = []
-    logger.debug('values: {!r}'.format(values))
     for index, prop_name in enumerate(self.prop_names):
-      logger.debug('value: {!r}'.format(values[index]))
       properties.append((prop_name, decode_value(values[index])))
 
     path = kindless_path[:-1] + (self.kind,) + kindless_path[-1:]
