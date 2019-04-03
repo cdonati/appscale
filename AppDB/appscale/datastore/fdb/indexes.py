@@ -379,7 +379,6 @@ class MergeJoinIterator(object):
   def prop_names(self):
     return tuple(index.prop_name for index, _, _, _ in self.indexes)
 
-  @property
   def __repr__(self):
     return u'MergeJoinIterator({!r})'.format(self.prop_names)
 
