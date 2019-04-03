@@ -443,7 +443,6 @@ class MergeJoinIterator(object):
       last_prop = None
       if isinstance(next_index, CompositeIndex):
         last_prop = next_index.prop_names[-1]
-        logger.debug('last_prop: {!r}'.format(last_prop))
 
       tmp_filter_props = []
       for filter_prop in self._filter_props:
@@ -817,7 +816,7 @@ class CompositeIndex(Index):
     stop = None
 
     ordered_filter_props = []
-    for prop_name in self.prop_names:
+    for prop_name in self.prop_names + (KEY_PROP,):
       try:
         filter_prop = next(filter_prop for filter_prop in filter_props
                            if filter_prop.name == prop_name)
