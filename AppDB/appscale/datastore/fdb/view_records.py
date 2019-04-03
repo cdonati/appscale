@@ -137,8 +137,11 @@ def print_kind_indexes(tr, index_dir):
     print(tabulate.tabulate(table, headers=headers) + '\n')
 
 
-def print_single_prop_indexes(tr, index_dir):
+def print_single_prop_indexes(tr, index_dir, selected_kind):
   for kind in index_dir.list(tr):
+    if selected_kind is not None and kind != selected_kind:
+      continue
+
     kind_dir = index_dir.open(tr, (kind,))
     for prop_name in kind_dir.list(tr):
       index = SinglePropIndex(kind_dir.open(tr, (prop_name,)))
@@ -160,7 +163,7 @@ def print_composite_indexes(tr, index_dir):
   pass
 
 
-def print_indexes(tr, indexes_dir, indexes):
+def print_indexes(tr, indexes_dir, indexes, kind):
   if not indexes:
     indexes = ['kindless', 'kind', 'single-property', 'composite']
 
@@ -177,7 +180,7 @@ def print_indexes(tr, indexes_dir, indexes):
         print_kind_indexes(tr, index_dir)
 
       if index_type == 'single-property' and index_type in indexes:
-        print_single_prop_indexes(tr, index_dir)
+        print_single_prop_indexes(tr, index_dir, kind)
 
       if index_type == 'composite' and index_type in indexes:
         print_composite_indexes(tr, index_dir)
@@ -190,6 +193,7 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--project')
   parser.add_argument('--indexes', nargs='*')
+  parser.add_argument('--kind')
   args = parser.parse_args()
 
   tr = db.create_transaction()
@@ -204,4 +208,4 @@ def main():
         print_data(tr, section_dir)
 
       if section_id == 'indexes':
-        print_indexes(tr, section_dir, args.indexes)
+        print_indexes(tr, section_dir, args.indexes, args.kind)
