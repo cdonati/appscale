@@ -843,6 +843,7 @@ class CompositeIndex(Index):
         subspace = subspace.subspace((encoded_value,))
         continue
 
+      logger.debug('filters: {}'.format(filter_prop.filters))
       for op, value in filter_prop.filters:
         encoded_value = encoder(value)
         logger.debug('value: {}'.format(value))
