@@ -411,6 +411,7 @@ class MainHandler(tornado.web.RequestHandler):
     try:
       yield datastore_access._dynamic_run_query(query, clone_qr_pb)
     except dbconstants.BadRequest as error:
+      logger.exception('BadRequest')
       raise gen.Return( ('', datastore_pb.Error.BAD_REQUEST, str(error)))
     except zktransaction.ZKBadRequest as error:
       logger.exception(
