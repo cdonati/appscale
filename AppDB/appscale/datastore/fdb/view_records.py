@@ -4,10 +4,11 @@ import struct
 import sys
 
 import fdb
+import six
 import tabulate
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.fdb.codecs import unpack_value
+from appscale.datastore.fdb.codecs import decode_str, unpack_value
 from appscale.datastore.fdb.indexes import (
   KindIndex, KindlessIndex, SinglePropIndex)
 
@@ -38,7 +39,10 @@ def format_path(path):
   while index < len(path):
     kind = path[index]
     id_or_name = path[index + 1]
-    elements.append(':'.join([kind, str(id_or_name)]))
+    if isinstance(id_or_name, int):
+      id_or_name = six.text_type(id_or_name)
+
+    elements.append(':'.join([kind, id_or_name]))
     index += 2
 
   return '|'.join(elements)
