@@ -642,11 +642,11 @@ class SinglePropIndex(Index):
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
     if cursor is not None:
-      encoded_path = self.encode_path(cursor.key().path())
       prop = next(prop for prop in cursor.property_list()
                   if prop.name() == self.prop_name)
       encoded_value = encode_value(prop.value())
-      encoded_cursor = (encoded_path, encoded_value)
+      encoded_path = self.encode_path(cursor.key().path())
+      encoded_cursor = (encoded_value, encoded_path)
       if reverse:
         stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
                                     subspace.pack(encoded_cursor))

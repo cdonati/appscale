@@ -169,7 +169,9 @@ class FDBDatastore(object):
       remainder = rpc_limit - entries_fetched
       iter_offset = max(query.offset() - entries_fetched, 0)
       entries, more_iterator_results = yield iterator.next_page()
-      logger.debug('entries: {}'.format(entries))
+      if entries:
+        logger.debug('entries: {}'.format(entries))
+
       entries_fetched += len(entries)
       if not entries and more_iterator_results:
         continue
