@@ -826,6 +826,7 @@ class CompositeIndex(Index):
         continue
 
     for filter_prop in ordered_filter_props:
+      logger.debug('processing {}'.format(filter_prop.name))
       index_direction = next(direction for name, direction in self.order_info
                              if name == filter_prop.name)
       reverse = index_direction == Query_Order.DESCENDING
