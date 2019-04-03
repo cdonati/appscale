@@ -52,7 +52,6 @@ class FilterProperty(object):
 
   @property
   def equality(self):
-    logger.debug('filters: %r' % (self.filters,))
     return all(op == Query_Filter.EQUAL for op, _ in self.filters)
 
   def __repr__(self):
@@ -944,7 +943,8 @@ class IndexManager(object):
         tmp_filter_props = []
         for filter_prop in filter_props:
           if filter_prop.name == equality_prop.name:
-            tmp_filter_props.append(FilterProperty(filter_prop.name, filter_))
+            tmp_filter_props.append(
+              FilterProperty(filter_prop.name, [filter_]))
           else:
             tmp_filter_props.append(filter_prop)
 
