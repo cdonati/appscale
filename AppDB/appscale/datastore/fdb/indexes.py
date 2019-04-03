@@ -947,6 +947,7 @@ class IndexManager(object):
           else:
             tmp_filter_props.append(filter_prop)
 
+        logger.debug('tmp_filter_props: {!r}'.format(tmp_filter_props))
         desired_slice = index.get_slice(
           tmp_filter_props, ancestor_path, last_result, reverse)
         iterators.append(
