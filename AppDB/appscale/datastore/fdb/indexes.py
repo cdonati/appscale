@@ -954,7 +954,7 @@ class IndexManager(object):
           IndexIterator(tr, self._tornado_fdb, index, desired_slice,
                         fetch_limit, reverse, read_vs, snapshot=True))
 
-      return MultipleRangeIterator(iterators)
+      return MultipleRangeIterator(iterators, fetch_limit)
 
     desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
                                     reverse)
