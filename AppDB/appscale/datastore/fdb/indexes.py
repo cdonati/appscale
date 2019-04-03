@@ -971,9 +971,11 @@ class IndexManager(object):
         index = SinglePropIndex.from_cache(
           project_id, namespace, decode_str(query.kind()), filter_prop.name,
           self._directory_cache)
-        slice = index.get_slice((filter_prop,), ancestor_path, last_result)
-        value = filter_prop.filters[0][1]
-        indexes.append([index, slice, filter_prop.name, value])
+        for op, value in filter_prop.filters:
+          tmp_filter_prop = FilterProperty(filter_prop.name, [(op, value)])
+          slice = index.get_slice((tmp_filter_prop,), ancestor_path,
+                                  last_result)
+          indexes.append([index, slice, filter_prop.name, value])
 
       return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
                                fetch_limit, read_vs, snapshot=True)
