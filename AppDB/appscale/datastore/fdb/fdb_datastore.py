@@ -244,7 +244,11 @@ class FDBDatastore(object):
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
-    read_vs, xg, lookups, queried_groups, mutations = tx_metadata
+    read_vs, lookups, queried_groups, mutations = tx_metadata
+    logger.debug('read_vs: {!r}'.format(read_vs))
+    logger.debug('lookups: {!r}'.format(lookups))
+    logger.debug('queried_groups: {!r}'.format(queried_groups))
+    logger.debug('mutations: {!r}'.format(mutations))
 
     group_update_futures = [
       self._data_manager.last_commit(tr, project_id, namespace, group_path)
@@ -281,6 +285,7 @@ class FDBDatastore(object):
 
     for key in lookups:
       latest_commit_vs = yield futures[key.Encode()]
+      logger.debug('lastest commit_vs for {}: {!r}'.format(key, latest_commit_vs))
       if isinstance(latest_commit_vs, tuple):
         latest_commit_vs = latest_commit_vs[-1]
 

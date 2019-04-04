@@ -208,4 +208,4 @@ class TransactionManager(object):
     if len(tx_groups) > max_groups:
       raise TooManyGroupsException('Too many groups in transaction')
 
-    raise gen.Return((read_vs, xg, lookups, queried_groups, mutations))
+    raise gen.Return((read_vs, lookups, queried_groups, mutations))
