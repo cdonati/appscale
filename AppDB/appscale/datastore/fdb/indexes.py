@@ -688,6 +688,7 @@ class SinglePropIndex(Index):
 
   def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
                 reverse=False):
+    logger.debug('filter_props in get_slice: {}'.format(filter_props))
     subspace = self.directory
     start = None
     stop = None
@@ -742,12 +743,12 @@ class SinglePropIndex(Index):
 
       encoded_path = self.encode_path(cursor.key().path())
       encoded_cursor = (encoded_value, encoded_path)
-      if reverse:
-        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
-                                    subspace.pack(encoded_cursor))
-      else:
+      if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack(encoded_cursor))
+      else:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
@@ -925,12 +926,12 @@ class CompositeIndex(Index):
 
       encoded_cursor = ((ancestor_path,) + tuple(encoded_values) +
                         (remaining_path,))
-      if reverse:
-        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
-                                    subspace.pack(encoded_cursor))
-      else:
+      if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack(encoded_cursor))
+      else:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
