@@ -87,10 +87,8 @@ class FDBDatastore(object):
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      logger.debug('versionstamp_future type: {}'.format(type(versionstamp_future)))
-      gc_versionstamp = versionstamp_future.wait()
-      logger.debug('gc_versionstamp: {!r}'.format(gc_versionstamp))
-      logger.debug('gc_versionstamp type: {}'.format(type(gc_versionstamp)))
+      gc_versionstamp = fdb.tuple.Versionstamp(versionstamp_future.wait())
+      logger.debug('gc_versionstamp: {!r}'.format(gc_versionstamp.to_bytes()))
 
     for key, old_entity, new_version in writes:
       put_response.add_key().CopyFrom(key)
