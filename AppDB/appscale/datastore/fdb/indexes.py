@@ -688,7 +688,7 @@ class SinglePropIndex(Index):
 
   def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
                 reverse=False):
-    logger.debug('filter_props in get_slice: {}'.format(filter_props))
+    logger.debug('filter_props in get_slice ({}): {}'.format(self.prop_name, filter_props))
     subspace = self.directory
     start = None
     stop = None
@@ -753,6 +753,8 @@ class SinglePropIndex(Index):
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
     stop = stop or selector(subspace.range().stop)
+    logger.debug('start: {!r}'.format(start.key))
+    logger.debug('stop: {!r}'.format(stop.key))
     return slice(start, stop)
 
 
