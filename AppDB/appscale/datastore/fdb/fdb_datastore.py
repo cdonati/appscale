@@ -105,6 +105,9 @@ class FDBDatastore(object):
       futures.append(self._data_manager.get_latest(tr, key, read_vs))
 
     results = yield futures
+
+    yield self._tornado_fdb.commit(tr)
+
     for key, encoded_entity, version, _ in results:
       response_entity = get_response.add_entity()
       response_entity.mutable_key().CopyFrom(key)
@@ -207,6 +210,8 @@ class FDBDatastore(object):
       results = [encoded_entity for version, encoded_entity in entity_results]
     else:
       results = [result.Encode() for result in results]
+
+    yield self._tornado_fdb.commit(tr)
 
     query_result.result_list().extend(results)
     # TODO: Figure out how ndb multi queries use compiled cursors.
