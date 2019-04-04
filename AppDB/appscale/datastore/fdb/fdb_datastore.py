@@ -80,14 +80,14 @@ class FDBDatastore(object):
       writes = yield futures
 
     old_entities = [write[1] for write in writes if write[1] is not None]
-    versionstamp_future = None
+    vs_future = None
     if old_entities:
-      versionstamp_future = tr.get_versionstamp()
+      vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      gc_versionstamp = fdb.tuple.Versionstamp(versionstamp_future.wait())
+      gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
       logger.debug('gc_versionstamp: {!r}'.format(gc_versionstamp.to_bytes()))
 
     for key, old_entity, new_version in writes:
