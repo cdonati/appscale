@@ -909,9 +909,9 @@ class CompositeIndex(Index):
 
       logger.debug('unpacked_key: {!r}'.format(unpacked_key))
       if self.ancestor:
-        unpacked_values = unpacked_key[1:-2]
+        unpacked_values = unpacked_key[1:]
       else:
-        unpacked_values = unpacked_key[:-2]
+        unpacked_values = unpacked_key[:]
 
       logger.debug('unpacked_values: {!r}'.format(unpacked_values))
       full_path = encode_path(cursor.key().path())
