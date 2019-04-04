@@ -12,7 +12,6 @@ transactions: transaction metadata
 import logging
 import sys
 
-import six
 from tornado import gen
 from tornado.ioloop import IOLoop
 
@@ -21,7 +20,8 @@ from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
 from appscale.datastore.fdb.codecs import decode_str
 from appscale.datastore.fdb.data import DataManager
-from appscale.datastore.fdb.indexes import IndexManager
+from appscale.datastore.fdb.indexes import (
+  get_order_info, IndexManager, KEY_PROP)
 from appscale.datastore.fdb.transactions import TransactionManager
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, DirectoryCache, fdb, next_entity_version, ScatteredAllocator,
@@ -209,10 +209,13 @@ class FDBDatastore(object):
       results = [result.Encode() for result in results]
 
     query_result.result_list().extend(results)
+    # TODO: Figure out how ndb multi queries use compiled cursors.
     if query.compile():
+      ordered_props = tuple(prop_name for prop_name, _ in get_order_info(query)
+                            if prop_name != KEY_PROP)
       mutable_cursor = query_result.mutable_compiled_cursor()
       if cursor is not None:
-        mutable_cursor.MergeFrom(cursor.cursor_result())
+        mutable_cursor.MergeFrom(cursor.cursor_result(ordered_props))
 
     more_results = check_more_results and entries_fetched > rpc_limit
     query_result.set_more_results(more_results)

@@ -125,7 +125,8 @@ def get_order_info(query):
 
   filter_prop_names = [prop.name for prop in filter_props]
   order_info.extend(
-    [(order.property(), order.direction()) for order in relevant_orders
+    [(decode_str(order.property()), order.direction())
+     for order in relevant_orders
      if order.property() not in filter_prop_names])
 
   return tuple(order_info)
@@ -204,7 +205,7 @@ class IndexEntry(object):
     entity.mutable_entity_group()
     return entity
 
-  def cursor_result(self):
+  def cursor_result(self, ordered_props):
     compiled_cursor = datastore_pb.CompiledCursor()
     position = compiled_cursor.add_position()
     position.mutable_key().MergeFrom(self.key)
@@ -238,14 +239,16 @@ class PropertyEntry(IndexEntry):
     prop.mutable_value().MergeFrom(self.value)
     return entity
 
-  def cursor_result(self):
+  def cursor_result(self, ordered_props):
     compiled_cursor = datastore_pb.CompiledCursor()
     position = compiled_cursor.add_position()
     position.mutable_key().MergeFrom(self.key)
     position.set_start_inclusive(False)
-    index_value = position.add_indexvalue()
-    index_value.set_property(self.prop_name)
-    index_value.mutable_value().MergeFrom(self.value)
+    if self.prop_name in ordered_props:
+      index_value = position.add_indexvalue()
+      index_value.set_property(self.prop_name)
+      index_value.mutable_value().MergeFrom(self.value)
+
     return compiled_cursor
 
 
@@ -277,12 +280,15 @@ class CompositeEntry(IndexEntry):
 
     return entity
 
-  def cursor_result(self):
+  def cursor_result(self, ordered_props):
     compiled_cursor = datastore_pb.CompiledCursor()
     position = compiled_cursor.add_position()
     position.mutable_key().MergeFrom(self.key)
     position.set_start_inclusive(False)
     for prop_name, value in self.properties:
+      if prop_name not in ordered_props:
+        continue
+
       index_value = position.add_indexvalue()
       index_value.set_property(prop_name)
       index_value.mutable_value().MergeFrom(value)
@@ -719,9 +725,20 @@ class SinglePropIndex(Index):
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
     if cursor is not None:
-      prop = next(prop for prop in cursor.property_list()
-                  if prop.name() == self.prop_name)
-      encoded_value = encode_value(prop.value())
+      if not reverse and start is not None:
+        unpacked_key = self.directory.unpack(start.key)
+      elif reverse and stop is not None:
+        unpacked_key = self.directory.unpack(stop.key)
+      else:
+        unpacked_key = self.directory.unpack(subspace.rawPrefix)
+
+      cursor_prop = next((prop for prop in cursor.property_list()
+                         if prop.name() == self.prop_name), None)
+      if cursor_prop is None:
+        encoded_value = unpacked_key[0]
+      else:
+        encoded_value = encode_value(cursor_prop.value())
+
       encoded_path = self.encode_path(cursor.key().path())
       encoded_cursor = (encoded_value, encoded_path)
       if reverse:
@@ -874,19 +891,36 @@ class CompositeIndex(Index):
           start = selector
         elif ((op in STOP_FILTERS and not reverse) or
               (op in START_FILTERS and reverse)):
-          stop = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
+          stop = selector
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
     if cursor is not None:
+      if not reverse and start is not None:
+        unpacked_key = self.directory.unpack(start.key)
+      elif reverse and stop is not None:
+        unpacked_key = self.directory.unpack(stop.key)
+      else:
+        unpacked_key = self.directory.unpack(subspace.rawPrefix)
+
+      if self.ancestor:
+        unpacked_values = unpacked_key[1:-2]
+      else:
+        unpacked_values = unpacked_key[:-2]
+
       full_path = encode_path(cursor.key().path())
       remaining_path = self.encode_path(full_path[len(ancestor_path):])
       encoded_values = []
-      for prop_name, index_direction in self.order_info:
-        prop = next(prop for prop in cursor.property_list()
-                    if prop.name() == prop_name)
-        reverse = index_direction == Query_Order.DESCENDING
-        encoded_values.append(encode_value(prop.value(), reverse))
+      for i, (prop_name, index_direction) in enumerate(self.order_info):
+        cursor_prop = next((prop for prop in cursor.property_list()
+                            if prop.name() == prop_name), None)
+        if cursor_prop is None:
+          encoded_value = unpacked_values[i]
+        else:
+          reverse_encode = index_direction == Query_Order.DESCENDING
+          encoded_value = encode_value(cursor_prop.value(), reverse_encode)
+
+        encoded_values.append(encoded_value)
 
       encoded_cursor = ((ancestor_path,) + tuple(encoded_values) +
                         (remaining_path,))

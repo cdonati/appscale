@@ -93,3 +93,5 @@ updated index value (need to exclude whole value instead of just key)
 clean up merge join iterator. handle ancestors and cursors there.
 what's up with the cursor for every result? (pb response from sdk and gae)
 TestCursorWithZigZagMergeHandler doesn't seem to actually use a cursor
+entity groups not in all results
+wtf is up with defining an offset + a cursor?
