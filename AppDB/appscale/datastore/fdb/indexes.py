@@ -929,8 +929,12 @@ class CompositeIndex(Index):
 
         encoded_values.append(encoded_value)
 
-      encoded_cursor = ((ancestor_path,) + tuple(encoded_values) +
-                        (remaining_path,))
+      if self.ancestor:
+        encoded_cursor = ((ancestor_path,) + tuple(encoded_values) +
+                          (remaining_path,))
+      else:
+        encoded_cursor = (tuple(encoded_values) + (remaining_path,))
+
       if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      self.directory.pack(encoded_cursor))
