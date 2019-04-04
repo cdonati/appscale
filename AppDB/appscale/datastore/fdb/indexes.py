@@ -688,7 +688,6 @@ class SinglePropIndex(Index):
 
   def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
                 reverse=False):
-    logger.debug('filter_props in get_slice ({}): {}'.format(self.prop_name, filter_props))
     subspace = self.directory
     start = None
     stop = None
@@ -743,15 +742,13 @@ class SinglePropIndex(Index):
         encoded_value = encode_value(cursor_prop.value())
 
       encoded_path = self.encode_path(cursor.key().path())
-      logger.debug('encoded_value: {}'.format(encoded_value))
       encoded_cursor = (encoded_value, encoded_path)
-      logger.debug('encoded_cursor: {}'.format(encoded_cursor))
       if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
-                                     subspace.pack(encoded_cursor))
+                                     self.directory.pack(encoded_cursor))
       else:
         stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
-                                    subspace.pack(encoded_cursor))
+                                    self.directory.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
@@ -933,10 +930,10 @@ class CompositeIndex(Index):
                         (remaining_path,))
       if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
-                                     subspace.pack(encoded_cursor))
+                                     self.directory.pack(encoded_cursor))
       else:
         stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
-                                    subspace.pack(encoded_cursor))
+                                    self.directory.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
