@@ -907,15 +907,18 @@ class CompositeIndex(Index):
       else:
         unpacked_key = self.directory.unpack(subspace.rawPrefix)
 
+      logger.debug('unpacked_key: {!r}'.format(unpacked_key))
       if self.ancestor:
         unpacked_values = unpacked_key[1:-2]
       else:
         unpacked_values = unpacked_key[:-2]
 
+      logger.debug('unpacked_values: {!r}'.format(unpacked_values))
       full_path = encode_path(cursor.key().path())
       remaining_path = self.encode_path(full_path[len(ancestor_path):])
       encoded_values = []
       for i, (prop_name, index_direction) in enumerate(self.order_info):
+        logger.debug('prop_name: {}'.format(prop_name))
         cursor_prop = next((prop for prop in cursor.property_list()
                             if prop.name() == prop_name), None)
         if cursor_prop is None:
