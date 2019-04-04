@@ -261,6 +261,7 @@ def next_entity_version(old_version):
 
 
 def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
+  logger.debug('putting chunks. subspace: {}'.format(subspace))
   chunk_indexes = [(n, n + chunk_size)
                    for n in xrange(0, len(chunk), chunk_size)]
   for start, end in chunk_indexes:
