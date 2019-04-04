@@ -726,6 +726,7 @@ class SinglePropIndex(Index):
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
+    logger.debug('cursor: {}'.format(cursor))
     if cursor is not None:
       if not reverse and start is not None:
         unpacked_key = self.directory.unpack(start.key)
@@ -742,7 +743,9 @@ class SinglePropIndex(Index):
         encoded_value = encode_value(cursor_prop.value())
 
       encoded_path = self.encode_path(cursor.key().path())
+      logger.debug('encoded_value: {}'.format(encoded_value))
       encoded_cursor = (encoded_value, encoded_path)
+      logger.debug('encoded_cursor: {}'.format(encoded_cursor))
       if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack(encoded_cursor))
