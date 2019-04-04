@@ -132,7 +132,6 @@ class TransactionManager(object):
   def get_metadata(self, tr, project_id, txid):
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
     metadata_subspace = tx_dir.subspace((txid,))
-    logger.debug('metadata_subspace: {}'.format(metadata_subspace))
 
     read_vs = None
     xg = None
@@ -150,7 +149,6 @@ class TransactionManager(object):
       for kv in kvs:
         key_parts = metadata_subspace.unpack(kv.key)
         metadata_key = key_parts[0]
-        logger.debug('metadata_key: {!r}'.format(metadata_key))
         if metadata_key == MetadataKeys.READ_VS:
           read_vs = fdb.tuple.Versionstamp(kv.value)
           continue

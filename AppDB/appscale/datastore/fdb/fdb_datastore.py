@@ -266,7 +266,6 @@ class FDBDatastore(object):
              else mutation.key())
       require_data.add(key.Encode())
 
-    logger.debug('fetching versionstamps')
     # Start fetching versionstamps for lookups first to invalidate sooner.
     futures = {}
     for key in lookups:
@@ -276,7 +275,6 @@ class FDBDatastore(object):
       else:
         futures[encoded_key] = self._data_manager.latest_vs(tr, key)
 
-    logger.debug('fetching remaining entities')
     # Fetch remaining entities that were mutated.
     for mutation in mutations:
       key = (mutation if isinstance(mutation, entity_pb.Reference)
@@ -285,7 +283,6 @@ class FDBDatastore(object):
       if encoded_key not in futures:
         futures[encoded_key] = self._data_manager.get_latest(tr, key)
 
-    logger.debug('checking group updates')
     group_updates = yield group_update_futures
     if any(commit_vs > read_vs for commit_vs in group_updates):
       raise ConcurrentModificationException(
@@ -293,9 +290,11 @@ class FDBDatastore(object):
 
     for key in lookups:
       latest_commit_vs = yield futures[key.Encode()]
-      logger.debug('lastest commit_vs for {}: {!r}'.format(key, latest_commit_vs))
       if isinstance(latest_commit_vs, tuple):
         latest_commit_vs = latest_commit_vs[-1]
+
+      if isinstance(latest_commit_vs, int) and latest_commit_vs == 0:
+        continue
 
       if latest_commit_vs > read_vs:
         raise ConcurrentModificationException(

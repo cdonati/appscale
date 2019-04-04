@@ -238,7 +238,6 @@ class KVIterator(object):
     kvs, count, more = yield self._tornado_fdb.get_range(
       self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
       self._iteration, self._reverse, self._snapshot)
-    logger.debug('kvs: {}'.format(kvs))
     self._fetched += count
     self._iteration += 1
 
@@ -262,7 +261,6 @@ def next_entity_version(old_version):
 
 
 def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
-  logger.debug('putting chunks. subspace: {}'.format(subspace))
   chunk_indexes = [(n, n + chunk_size)
                    for n in xrange(0, len(chunk), chunk_size)]
   for start, end in chunk_indexes:
