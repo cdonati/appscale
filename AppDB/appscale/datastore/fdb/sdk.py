@@ -215,14 +215,13 @@ class ListCursor(BaseCursor):
         position = compiled_cursor.position(0)
 
         remaining_properties = self.__order_property_names.copy()
-        logger.debug('remaining_properties: {!r}'.format(remaining_properties))
         cursor_entity = datastore_pb.EntityProto()
         cursor_entity.mutable_key().CopyFrom(position.key())
         for indexvalue in position.indexvalue_list():
             property = cursor_entity.add_property()
             property.set_name(indexvalue.property())
             property.mutable_value().CopyFrom(indexvalue.value())
-            remaining_properties.discard(indexvalue.property())
+            remaining_properties.remove(indexvalue.property())
 
         Check(not remaining_properties,
               'Cursor does not match query: missing values for %r' %

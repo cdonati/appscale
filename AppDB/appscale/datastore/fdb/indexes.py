@@ -377,6 +377,7 @@ class MultipleRangeIterator(object):
 class MergeJoinIterator(object):
   def __init__(self, tr, tornado_fdb, filter_props, indexes, fetch_limit,
                read_vs=None, snapshot=False):
+    logger.debug('indexes: {}'.format(indexes))
     self.indexes = indexes
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
