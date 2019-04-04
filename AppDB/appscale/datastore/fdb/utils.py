@@ -238,6 +238,7 @@ class KVIterator(object):
     kvs, count, more = yield self._tornado_fdb.get_range(
       self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
       self._iteration, self._reverse, self._snapshot)
+    logger.debug('kvs: {}'.format(kvs))
     self._fetched += count
     self._iteration += 1
 
