@@ -1,0 +1,274 @@
+from __future__ import division
+
+import logging
+import time
+import uuid
+
+from fdb.directory_impl import DirectorySubspace
+
+
+from tornado import gen
+from tornado.ioloop import IOLoop
+from tornado.locks import Event
+
+from appscale.datastore.dbconstants import MAX_TX_DURATION
+from appscale.datastore.fdb.utils import (
+  fdb, MAX_FDB_TX_DURATION, KVIterator)
+
+logger = logging.getLogger(__name__)
+
+
+@gen.coroutine
+def list_subdirectories(self, tr, directory):
+  subdirectories = []
+  more_results = True
+  iteration = 1
+  while more_results:
+    kvs, count, more_results = yield self.get_range(
+      tr, subdirs_subspace(directory).range(), iteration=iteration)
+    subdirectories.extend([kv_to_dir(directory, kv) for kv in kvs])
+    iteration += 1
+
+  raise gen.Return(subdirectories)
+
+def subdirs_subspace(directory):
+  """ Returns the subspace that the directory layer uses to keep track of
+      child directories.
+
+  Args:
+    directory: The parent DirectorySubspace object.
+
+  Returns:
+    A Subspace.
+  """
+  dir_layer = directory._directory_layer
+  parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
+  return parent_subspace.subspace((dir_layer.SUBDIRS,))
+
+
+def kv_to_dir(parent, kv):
+  name = subdirs_subspace(parent).unpack(kv.key)[0]
+  path = parent.get_path() + (name,)
+  return DirectorySubspace(path, kv.value)
+
+
+class PollingLock(object):
+  """ Acquires a lock by writing to a key. This is suitable for a leader
+      election in cases where some downtime and initial acquisition delay is
+      acceptable.
+
+      Unlike ZooKeeper and etcd, FoundationDB does not have a way
+      to specify that a key should be automatically deleted if a client does
+      not heartbeat at a regular interval. This implementation requires the
+      leader to update the key at regular intervals to indicate that it is
+      still alive. All the other lock candidates check at a longer interval to
+      see if the leader has stopped updating the key.
+
+      Since client timestamps are unreliable, candidates do not know the
+      absolute time the key was updated. Therefore, they each wait for the full
+      timeout interval before checking the key again.
+  """
+  # The number of seconds to wait before trying to claim the lease.
+  _LEASE_TIMEOUT = 60
+
+  # The number of seconds to wait before updating the lease.
+  _HEARTBEAT_INTERVAL = int(_LEASE_TIMEOUT / 10)
+
+  def __init__(self, db, tornado_fdb, key):
+    self.key = key
+    self._db = db
+    self._tornado_fdb = tornado_fdb
+
+    self._client_id = uuid.uuid4()
+    self._owner = None
+    self._op_id = None
+    self._deadline = None
+    self._event = Event()
+
+  @property
+  def acquired(self):
+    if self._deadline is None:
+      return False
+
+    return self._owner == self._client_id and time.time() < self._deadline
+
+  @gen.coroutine
+  def start(self):
+    IOLoop.current().spawn_callback(self._run)
+
+  @gen.coroutine
+  def acquire(self):
+    # Since there is no automatic event timeout, the condition is checked
+    # before every acquisition.
+    if not self.acquired:
+      self._event.clear()
+
+    yield self._event.wait()
+
+  @gen.coroutine
+  def _run(self):
+    while True:
+      try:
+        yield self._acquire_lease()
+      except Exception:
+        logger.exception('Unable to acquire lease')
+        yield gen.sleep(10)
+
+  @gen.coroutine
+  def _acquire_lease(self):
+    tr = self._db.create_transaction()
+    lease_value = yield self._tornado_fdb.get(tr, self.key)
+
+    if lease_value.present():
+      self._owner, new_op_id = fdb.tuple.unpack(lease_value)
+      if new_op_id != self._op_id:
+        self._deadline = time.time() + self._LEASE_TIMEOUT
+        self._op_id = new_op_id
+    else:
+      self._owner = None
+
+    can_acquire = self._owner is None or time.time() > self._deadline
+    if can_acquire or self._owner == self._client_id:
+      op_id = uuid.uuid4()
+      tr[self.key] = fdb.tuple.pack((self._client_id, op_id))
+      yield self._tornado_fdb.commit(tr)
+      self._owner = self._client_id
+      self._op_id = op_id
+      self._deadline = time.time() + self._LEASE_TIMEOUT
+      self._event.set()
+      if can_acquire:
+        logger.info('Acquired lock for {}'.format(repr(self.key)))
+
+      yield gen.sleep(self._HEARTBEAT_INTERVAL)
+      return
+
+    # Since another candidate holds the lock, wait until it might expire.
+    yield gen.sleep(max(self._deadline - time.time(), 0))
+
+
+class GarbageCollector(object):
+  _DELETED_DIR = ('garbage', 'deleted_versions')
+
+  LOCK_KEY = '_gc_lock'
+
+  def __init__(self, db, tornado_fdb, lock, directory_cache):
+    self._db = db
+    self._tornado_fdb = tornado_fdb
+    self._lock = lock
+    self._directory_cache = directory_cache
+
+  def start(self):
+    IOLoop.current().spawn_callback(self._run_under_lock)
+
+  def index_deleted_version(self, tr, project_id, namespace, path, version,
+                            op_id=0):
+    # op_id allows multiple versions to be deleted in a single transaction.
+    deleted_dir = self._directory_cache.get((project_id,) + self._DELETED_DIR)
+    key = deleted_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
+    value = fdb.tuple.pack((project_id, namespace) + path + (version,))
+    tr.set_versionstamped_key(key, value)
+
+  @gen.coroutine
+  def clear_version(self, project_id, version_prefixes, gc_keys, tr=None):
+    create_transaction = tr is None
+    if create_transaction:
+      tr = self._db.create_transaction()
+
+    for version_prefix in version_prefixes:
+      version_range = fdb.Subspace(rawPrefix=version_prefix).range()
+      del tr[version_range]
+
+    for gc_key in gc_keys:
+      del tr[gc_key]
+
+    if create_transaction:
+      yield self._tornado_fdb.commit(tr)
+
+  def clear_later(self, project_id, namespace, path, version, gc_versionstamp):
+    if not isinstance(gc_versionstamp, fdb.tuple.Versionstamp):
+      gc_versionstamp = fdb.tuple.Versionstamp(str(gc_versionstamp))
+
+    IOLoop.current().call_later(
+      MAX_TX_DURATION, self.clear_version, namespace, path, version,
+      gc_versionstamp)
+
+  @gen.coroutine
+  def _run_under_lock(self):
+    while True:
+      try:
+        yield self._lock.acquire()
+        yield self._clean_garbage()
+      except Exception:
+        logger.exception('Unable to clean garbage')
+        yield gen.sleep(10)
+
+  @gen.coroutine
+  def _get_disposable_ranges(self):
+    """ Fetches key ranges that will be disposable after a safe time period.
+
+    Returns:
+      A list of (namespace, range) tuples that can be cleared later.
+    """
+    disposable_ranges = []
+    ds_dir = self._directory_cache.root
+    tr = self._db.create_transaction()
+    project_dirs = yield self._tornado_fdb.list_subdirectories(tr, ds_dir)
+    for project_dir in project_dirs:
+      namespace_dirs = yield self._tornado_fdb.list_subdirectories(
+        tr, project_dir)
+      for namespace_dir in namespace_dirs:
+        namespace = namespace_dir.get_path()[-2:]
+        gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
+        kvs, count, more_results = yield self._tornado_fdb.get_range(
+          tr, gc_dir.range(), limit=1, reverse=True, snapshot=True)
+        if not count:
+          continue
+
+        disposable_range = slice(
+          gc_dir.range().start, fdb.KeySelector.first_greater_than(kvs[0].key))
+        disposable_ranges.append((namespace, disposable_range))
+
+    raise gen.Return(disposable_ranges)
+
+  @gen.coroutine
+  def _clear_ranges(self, disposable_ranges):
+    versions_deleted = 0
+    for namespace, disposable_range in disposable_ranges:
+      gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
+      work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
+      tr = self._db.create_transaction()
+      iterator = KVIterator(self._tornado_fdb, tr, disposable_range)
+      while True:
+        kv = yield iterator.next()
+        if kv is None:
+          break
+
+        path_with_version = fdb.tuple.unpack(kv.value)
+        path = path_with_version[:-1]
+        version = path_with_version[-1]
+        gc_versionstamp, op_id = gc_dir.unpack(kv.key)
+
+        yield self.clear_version(namespace, path, version, gc_versionstamp,
+                                 op_id, tr)
+        versions_deleted += 1
+        if time.time() > work_cutoff:
+          break
+
+      yield self._tornado_fdb.commit(tr)
+      if versions_deleted:
+        logger.info('Removed {} old entity versions'.format(versions_deleted))
+
+  @gen.coroutine
+  def _clean_garbage(self):
+    disposable_ranges = yield self._get_disposable_ranges()
+    if not disposable_ranges:
+      yield gen.sleep(MAX_TX_DURATION)
+      return
+
+    # Wait until any existing transactions to expire before removing the
+    # deleted versions.
+    yield gen.sleep(MAX_TX_DURATION)
+    if not self._lock.acquired:
+      return
+
+    yield self._clear_ranges(disposable_ranges)

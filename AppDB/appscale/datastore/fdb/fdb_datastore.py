@@ -79,9 +79,20 @@ class FDBDatastore(object):
 
       writes = yield futures
 
+    old_entities = [write[1] for write in writes if write[1] is not None]
+    versionstamp_future = None
+    if old_entities:
+      versionstamp_future = tr.get_versionstamp()
+
     yield self._tornado_fdb.commit(tr)
 
-    for key, old_version, new_version in writes:
+    if old_entities:
+      logger.debug('versionstamp_future type: {}'.format(type(versionstamp_future)))
+      gc_versionstamp = versionstamp_future.wait()
+      logger.debug('gc_versionstamp: {!r}'.format(gc_versionstamp))
+      logger.debug('gc_versionstamp type: {}'.format(type(gc_versionstamp)))
+
+    for key, old_entity, new_version in writes:
       put_response.add_key().CopyFrom(key)
       if new_version is not None:
         put_response.add_version(new_version)
@@ -360,7 +371,7 @@ class FDBDatastore(object):
     self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
     self.index_manager.put_entries(tr, old_entity, old_vs, entity)
 
-    raise gen.Return((entity.key(), old_version, new_version))
+    raise gen.Return((entity.key(), old_entity, new_version))
 
   @gen.coroutine
   def _delete(self, tr, key):
