@@ -84,18 +84,19 @@ class FDBDatastore(object):
 
       writes = yield futures
 
-    old_entities = [write[1] for write in writes if write[1] is not None]
-    vs_future = None
-    if old_entities:
-      vs_future = tr.get_versionstamp()
+    old_entities = [(old_entity, old_vs) for _, old_entity, old_vs, _ in writes
+                    if old_entity is not None]
+    # vs_future = None
+    # if old_entities:
+    #   vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities, gc_versionstamp)
+      # gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities)
 
-    for key, old_entity, new_version in writes:
+    for key, _, _, new_version in writes:
       put_response.add_key().CopyFrom(key)
       if new_version is not None:
         put_response.add_version(new_version)
@@ -148,19 +149,20 @@ class FDBDatastore(object):
 
       deletes = yield futures
 
-    old_entities = [delete[0] for delete in deletes if delete[0] is not None]
-    vs_future = None
-    if old_entities:
-      vs_future = tr.get_versionstamp()
+    old_entities = [(old_entity, old_vs) for old_entity, old_vs, _ in deletes
+                    if old_entity is not None]
+    # vs_future = None
+    # if old_entities:
+    #   vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities, gc_versionstamp)
+      # gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities)
 
     # TODO: Once the Cassandra backend is removed, populate a delete response.
-    for old_version, new_version in deletes:
+    for old_entity, old_vs, new_version in deletes:
       logger.debug('new_version: {}'.format(new_version))
 
   @gen.coroutine
@@ -332,7 +334,7 @@ class FDBDatastore(object):
       old_encoded, old_version, old_vs = old_entity_response[1:]
       if old_encoded:
         old_entity = entity_pb.EntityProto(old_encoded)
-        old_entities.append(old_entity)
+        old_entities.append((old_entity, old_vs))
       else:
         old_entity = None
 
@@ -342,15 +344,15 @@ class FDBDatastore(object):
       new_entity = mutation if op == 'put' else None
       self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 
-    vs_future = None
-    if old_entities:
-      vs_future = tr.get_versionstamp()
+    # vs_future = None
+    # if old_entities:
+    #   vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities, gc_versionstamp)
+      # gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities)
 
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
@@ -393,7 +395,7 @@ class FDBDatastore(object):
     self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
     self.index_manager.put_entries(tr, old_entity, old_vs, entity)
 
-    raise gen.Return((entity.key(), old_entity, new_version))
+    raise gen.Return((entity.key(), old_entity, old_vs, new_version))
 
   @gen.coroutine
   def _delete(self, tr, key):
@@ -401,11 +403,11 @@ class FDBDatastore(object):
       tr, key)
 
     if old_encoded is None:
-      raise gen.Return((None, None))
+      raise gen.Return((None, old_vs, None))
 
     old_entity = entity_pb.EntityProto(old_encoded)
     new_version = next_entity_version(old_version)
     self._data_manager.put(tr, key, new_version, '')
     self.index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
-    raise gen.Return((old_entity, new_version))
+    raise gen.Return((old_entity, old_vs, new_version))

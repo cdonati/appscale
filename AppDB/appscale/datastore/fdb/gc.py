@@ -19,10 +19,10 @@ class GarbageCollector(object):
   def start(self):
     IOLoop.current().spawn_callback(self._run_forever)
 
-  def clear_later(self, entities, gc_versionstamp):
+  def clear_later(self, entities):
     safe_time = time.time() + 60
-    for entity in entities:
-      self._queue.append((safe_time, entity, gc_versionstamp))
+    for old_entity, old_vs in entities:
+      self._queue.append((safe_time, old_entity, old_vs))
 
   @gen.coroutine
   def _run_forever(self):
@@ -48,9 +48,9 @@ class GarbageCollector(object):
         yield gen.sleep(61)
         break
 
-      safe_time, entity, gc_versionstamp = self._queue.popleft()
+      safe_time, old_entity, old_vs = self._queue.popleft()
       if safe_time > current_time:
-        self._queue.appendleft((safe_time, entity, gc_versionstamp))
+        self._queue.appendleft((safe_time, old_entity, old_vs))
         if tr is not None:
           yield self._tornado_fdb.commit(tr)
 
@@ -60,8 +60,8 @@ class GarbageCollector(object):
       if tr is None:
         tr = self._db.create_transaction()
 
-      self._data_manager.hard_delete(tr, entity.key(), gc_versionstamp)
-      self._index_manager.hard_delete_entries(tr, entity, gc_versionstamp)
+      self._data_manager.hard_delete(tr, old_entity.key(), old_vs)
+      self._index_manager.hard_delete_entries(tr, old_entity, old_vs)
 
       if time.time() > tx_deadline:
         yield self._tornado_fdb.commit(tr)
