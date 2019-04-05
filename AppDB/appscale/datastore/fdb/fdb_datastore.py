@@ -20,6 +20,7 @@ from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
 from appscale.datastore.fdb.codecs import decode_str
 from appscale.datastore.fdb.data import DataManager
+from appscale.datastore.fdb.gc import GarbageCollector
 from appscale.datastore.fdb.indexes import (
   get_order_info, IndexManager, KEY_PROP)
 from appscale.datastore.fdb.transactions import TransactionManager
@@ -46,6 +47,7 @@ class FDBDatastore(object):
     self._scattered_allocator = ScatteredAllocator()
     self._tornado_fdb = None
     self._tx_manager = None
+    self._gc = None
 
   def start(self):
     self._db = fdb.open()
@@ -57,6 +59,9 @@ class FDBDatastore(object):
                                       self._tornado_fdb, self._data_manager)
     self._tx_manager = TransactionManager(self._directory_cache,
                                           self._tornado_fdb)
+    self._gc = GarbageCollector(self._db, self._tornado_fdb,
+                                self._data_manager, self.index_manager)
+    self._gc.start()
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
@@ -88,7 +93,7 @@ class FDBDatastore(object):
 
     if old_entities:
       gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      logger.debug('gc_versionstamp: {!r}'.format(gc_versionstamp.to_bytes()))
+      self._gc.clear_later(old_entities, gc_versionstamp)
 
     for key, old_entity, new_version in writes:
       put_response.add_key().CopyFrom(key)
@@ -143,7 +148,16 @@ class FDBDatastore(object):
 
       deletes = yield futures
 
+    old_entities = [delete[0] for delete in deletes if delete[0] is not None]
+    vs_future = None
+    if old_entities:
+      vs_future = tr.get_versionstamp()
+
     yield self._tornado_fdb.commit(tr)
+
+    if old_entities:
+      gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities, gc_versionstamp)
 
     # TODO: Once the Cassandra backend is removed, populate a delete response.
     for old_version, new_version in deletes:
@@ -310,13 +324,15 @@ class FDBDatastore(object):
           'An entity was modified after this transaction was started.')
 
     # Apply mutations.
+    old_entities = []
     for mutation in mutations:
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
-      old_entities = yield futures[key.Encode()]
-      old_encoded, old_version, old_vs = old_entities[1:]
+      old_entity_response = yield futures[key.Encode()]
+      old_encoded, old_version, old_vs = old_entity_response[1:]
       if old_encoded:
         old_entity = entity_pb.EntityProto(old_encoded)
+        old_entities.append(old_entity)
       else:
         old_entity = None
 
@@ -326,7 +342,15 @@ class FDBDatastore(object):
       new_entity = mutation if op == 'put' else None
       self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 
+    vs_future = None
+    if old_entities:
+      vs_future = tr.get_versionstamp()
+
     yield self._tornado_fdb.commit(tr)
+
+    if old_entities:
+      gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities, gc_versionstamp)
 
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
@@ -377,11 +401,11 @@ class FDBDatastore(object):
       tr, key)
 
     if old_encoded is None:
-      raise gen.Return((old_version, old_version))
+      raise gen.Return((None, None))
 
     old_entity = entity_pb.EntityProto(old_encoded)
     new_version = next_entity_version(old_version)
     self._data_manager.put(tr, key, new_version, '')
     self.index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
-    raise gen.Return((old_version, new_version))
+    raise gen.Return((old_entity, new_version))

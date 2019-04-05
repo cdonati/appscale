@@ -967,6 +967,10 @@ class IndexManager(object):
       for key in self._get_index_keys(new_entity):
         tr.set_versionstamped_key(key, b'')
 
+  def hard_delete_entries(self, tr, old_entity, old_vs):
+    for key in self._get_index_keys(old_entity, old_vs):
+      del tr[key]
+
   def rpc_limit(self, query):
     check_more_results = False
     limit = None

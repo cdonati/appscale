@@ -14,7 +14,6 @@ along with an example key-value:
     used for enforcing consistency.
 """
 import logging
-import six
 from tornado import gen
 
 from appscale.datastore.dbconstants import InternalError
@@ -98,6 +97,12 @@ class DataManager(object):
                                     encoded_entity))
     put_chunks(tr, encoded_value, path_subspace, add_vs=True)
     tr.set_versionstamped_value(self._group_key(key), b'\x00' * 14)
+
+  def hard_delete(self, tr, key, commit_vs):
+    """ Only the GC should use this. """
+    path_subspace = self._subspace_from_key(key)
+    version_subspace = path_subspace.subspace((commit_vs,))
+    del tr[version_subspace.range()]
 
   def _group_key(self, key):
     project_id = decode_str(key.app())
