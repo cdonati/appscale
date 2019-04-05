@@ -75,7 +75,7 @@ class FDBDatastore(object):
 
     if put_request.has_transaction():
       self._tx_manager.log_rpc(tr, project_id, put_request)
-      writes = [(entity.key(), None, None)
+      writes = [(entity.key(), None, None, None)
                 for entity in put_request.entity_list()]
     else:
       futures = []
@@ -141,7 +141,7 @@ class FDBDatastore(object):
 
     if delete_request.has_transaction():
       self._tx_manager.log_rpc(tr, project_id, delete_request)
-      deletes = [(None, None) for _ in delete_request.key_list()]
+      deletes = [(None, None, None) for _ in delete_request.key_list()]
     else:
       futures = []
       for key in delete_request.key_list():
@@ -357,7 +357,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
     project_id = decode_str(project_id)
-    logger.info(
+    logger.debug(
       u'Doing a rollback on transaction {} for {}'.format(txid, project_id))
 
     tr = self._db.create_transaction()
