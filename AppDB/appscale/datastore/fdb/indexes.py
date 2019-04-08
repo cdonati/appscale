@@ -1167,6 +1167,7 @@ class IndexManager(object):
       all_keys.append(index.encode(prop.value(), path, commit_vs))
 
     scatter_val = self._get_scatter_val(path)
+    logger.debug('scatter_val: {}'.format(scatter_val))
     if scatter_val is not None:
       index = SinglePropIndex.from_cache(
         project_id, namespace, kind, SCATTER_PROP, self._directory_cache)
@@ -1186,6 +1187,7 @@ class IndexManager(object):
     full_hash = mmh3.hash(hashable_path)
     hash_bytes = struct.pack('i', full_hash)[0:2]
     hash_int = struct.unpack('H', hash_bytes)[0]
+    logger.debug('hash_int: {}'.format(hash_int))
     if hash_int >= SCATTER_PROPORTION:
       return None
 
