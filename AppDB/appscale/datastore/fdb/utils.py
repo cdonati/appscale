@@ -24,6 +24,8 @@ ABSENT_VERSION = 1
 # The max number of bytes for each FDB value.
 CHUNK_SIZE = 10000
 
+SCATTER_PROP = u'__scatter__'
+
 
 class EncodedTypes(object):
   ENTITY_V3 = b'\x00'

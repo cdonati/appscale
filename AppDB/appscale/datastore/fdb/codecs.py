@@ -227,7 +227,11 @@ def unpack_value(value):
 
 
 def encode_value(value, reverse=False):
-  encoded_type, value = unpack_value(value)
+  if isinstance(value, int):
+    encoded_type = V3Types.INT64
+  else:
+    encoded_type, value = unpack_value(value)
+
   if reverse:
     encoded_type = V3Types.reverse(encoded_type)
 

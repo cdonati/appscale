@@ -13,9 +13,11 @@ from __future__ import division
 
 import itertools
 import logging
+import struct
 import sys
 import time
 
+import mmh3
 import six
 from tornado import gen
 
@@ -24,8 +26,10 @@ from appscale.datastore.fdb.codecs import (
   decode_element, decode_path, decode_str, decode_value, encode_ancestor_range,
   encode_path, encode_value)
 from appscale.datastore.fdb.sdk import ListCursor
-from appscale.datastore.fdb.utils import fdb, MAX_FDB_TX_DURATION, KVIterator
-from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.fdb.utils import (
+  fdb, MAX_FDB_TX_DURATION, KVIterator, SCATTER_PROP)
+from appscale.datastore.dbconstants import (
+  BadRequest, InternalError, SCATTER_PROPORTION)
 from appscale.datastore.index_manager import IndexInaccessible
 from appscale.datastore.utils import _FindIndexToUse
 
@@ -1162,6 +1166,12 @@ class IndexManager(object):
         project_id, namespace, kind, prop_name, self._directory_cache)
       all_keys.append(index.encode(prop.value(), path, commit_vs))
 
+    scatter_val = self._get_scatter_val(path)
+    if scatter_val is not None:
+      index = SinglePropIndex.from_cache(
+        project_id, namespace, kind, SCATTER_PROP, self._directory_cache)
+      all_keys.append(index.encode(scatter_val, path, commit_vs))
+
     for index in composite_indexes:
       if not all(index_prop_name in entity_prop_names
                  for index_prop_name in index.prop_names):
@@ -1170,6 +1180,16 @@ class IndexManager(object):
       all_keys.extend(index.encode(entity.property_list(), path, commit_vs))
 
     return all_keys
+
+  def _get_scatter_val(self, path):
+    hashable_path = u''.join([decode_str(element) for element in path])
+    full_hash = mmh3.hash(hashable_path)
+    hash_bytes = struct.pack('i', full_hash)[0:2]
+    hash_int = struct.unpack('H', hash_bytes)[0]
+    if hash_int >= SCATTER_PROPORTION:
+      return None
+
+    return hash_int
 
   def _get_perfect_index(self, query):
     project_id = decode_str(query.app())
