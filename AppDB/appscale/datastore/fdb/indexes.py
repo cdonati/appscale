@@ -1183,7 +1183,7 @@ class IndexManager(object):
     return all_keys
 
   def _get_scatter_val(self, path):
-    hashable_path = u''.join([decode_str(element) for element in path])
+    hashable_path = u''.join([six.text_type(element) for element in path])
     full_hash = mmh3.hash(hashable_path)
     hash_bytes = struct.pack('i', full_hash)[0:2]
     hash_int = struct.unpack('H', hash_bytes)[0]
