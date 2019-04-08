@@ -531,8 +531,8 @@ class Index(object):
   def encode_path(self, path):
     raise NotImplementedError()
 
-  def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
-                reverse=False):
+  def get_slice(self, filter_props, ancestor_path=tuple(), start_cursor=None,
+                end_cursor=None, reverse=False):
     subspace = self.directory
     start = None
     stop = None
@@ -557,14 +557,23 @@ class Index(object):
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
-    if cursor is not None:
-      encoded_path = self.encode_path(cursor.key().path())
+    if start_cursor is not None:
+      encoded_path = self.encode_path(start_cursor.key().path())
       if reverse:
         stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
                                     subspace.pack((encoded_path,)))
       else:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack((encoded_path,)))
+
+    if end_cursor is not None:
+      encoded_path = self.encode_path(start_cursor.key().path())
+      if reverse:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+                                     subspace.pack((encoded_path,)))
+      else:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack((encoded_path,)))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
@@ -686,8 +695,8 @@ class SinglePropIndex(Index):
     return PropertyEntry(self.project_id, self.namespace, path, self.prop_name,
                          value, commit_vs, deleted_vs)
 
-  def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
-                reverse=False):
+  def get_slice(self, filter_props, ancestor_path=tuple(), start_cursor=None,
+                end_cursor=None, reverse=False):
     subspace = self.directory
     start = None
     stop = None
@@ -725,8 +734,7 @@ class SinglePropIndex(Index):
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
-    logger.debug('cursor: {}'.format(cursor))
-    if cursor is not None:
+    if start_cursor is not None:
       if not reverse and start is not None:
         unpacked_key = self.directory.unpack(start.key)
       elif reverse and stop is not None:
@@ -734,14 +742,14 @@ class SinglePropIndex(Index):
       else:
         unpacked_key = self.directory.unpack(subspace.rawPrefix)
 
-      cursor_prop = next((prop for prop in cursor.property_list()
+      cursor_prop = next((prop for prop in start_cursor.property_list()
                          if prop.name() == self.prop_name), None)
       if cursor_prop is None:
         encoded_value = unpacked_key[0]
       else:
         encoded_value = encode_value(cursor_prop.value())
 
-      encoded_path = self.encode_path(cursor.key().path())
+      encoded_path = self.encode_path(start_cursor.key().path())
       encoded_cursor = (encoded_value, encoded_path)
       if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
@@ -750,11 +758,33 @@ class SinglePropIndex(Index):
         stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
                                     self.directory.pack(encoded_cursor))
 
+    if end_cursor is not None:
+      if not reverse and stop is not None:
+        unpacked_key = self.directory.unpack(stop.key)
+      elif reverse and start is not None:
+        unpacked_key = self.directory.unpack(start.key)
+      else:
+        unpacked_key = self.directory.unpack(subspace.rawPrefix)
+
+      cursor_prop = next((prop for prop in end_cursor.property_list()
+                         if prop.name() == self.prop_name), None)
+      if cursor_prop is None:
+        encoded_value = unpacked_key[0]
+      else:
+        encoded_value = encode_value(cursor_prop.value())
+
+      encoded_path = self.encode_path(end_cursor.key().path())
+      encoded_cursor = (encoded_value, encoded_path)
+      if not reverse:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    self.directory.pack(encoded_cursor))
+      else:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+                                     self.directory.pack(encoded_cursor))
+
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
     stop = stop or selector(subspace.range().stop)
-    logger.debug('start: {!r}'.format(start.key))
-    logger.debug('stop: {!r}'.format(stop.key))
     return slice(start, stop)
 
 
@@ -842,8 +872,8 @@ class CompositeIndex(Index):
     return CompositeEntry(self.project_id, self.namespace, path, properties,
                           commit_vs, deleted_vs)
 
-  def get_slice(self, filter_props, ancestor_path=tuple(), cursor=None,
-                reverse=False):
+  def get_slice(self, filter_props, ancestor_path=tuple(), start_cursor=None,
+                end_cursor=None, reverse=False):
     subspace = self.directory
     if ancestor_path:
       subspace = subspace.subspace((ancestor_path,))
@@ -853,7 +883,6 @@ class CompositeIndex(Index):
 
     ordered_filter_props = []
     for prop_name in self.prop_names + (KEY_PROP,):
-      logger.debug('prop_name: {}'.format(prop_name))
       try:
         filter_prop = next(filter_prop for filter_prop in filter_props
                            if filter_prop.name == prop_name)
@@ -862,7 +891,6 @@ class CompositeIndex(Index):
         continue
 
     for filter_prop in ordered_filter_props:
-      logger.debug('processing {}'.format(filter_prop.name))
       index_direction = next(
         (direction for name, direction in self.order_info
          if name == filter_prop.name), Query_Order.ASCENDING)
@@ -876,19 +904,15 @@ class CompositeIndex(Index):
 
       if filter_prop.equality:
         encoded_value = encoder(filter_prop.filters[0][1])
-        logger.debug('encoded_value: {}'.format(encoded_value))
         subspace = subspace.subspace((encoded_value,))
         continue
 
-      logger.debug('filters: {}'.format(filter_prop.filters))
       for op, value in filter_prop.filters:
         if filter_prop.name == KEY_PROP:
           encoded_value = self.encode_path(value)
         else:
           encoded_value = encoder(value)
 
-        logger.debug('value: {}'.format(value))
-        logger.debug('encoded value: {}'.format(encoded_value))
         selector = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
         if ((op in START_FILTERS and not reverse) or
             (op in STOP_FILTERS and reverse)):
@@ -899,7 +923,7 @@ class CompositeIndex(Index):
         else:
           raise BadRequest(u'Unexpected filter operation: {}'.format(op))
 
-    if cursor is not None:
+    if start_cursor is not None:
       if not reverse and start is not None:
         unpacked_key = self.directory.unpack(start.key)
       elif reverse and stop is not None:
@@ -907,19 +931,16 @@ class CompositeIndex(Index):
       else:
         unpacked_key = self.directory.unpack(subspace.rawPrefix)
 
-      logger.debug('unpacked_key: {!r}'.format(unpacked_key))
       if self.ancestor:
         unpacked_values = unpacked_key[1:]
       else:
         unpacked_values = unpacked_key[:]
 
-      logger.debug('unpacked_values: {!r}'.format(unpacked_values))
-      full_path = encode_path(cursor.key().path())
+      full_path = encode_path(start_cursor.key().path())
       remaining_path = self.encode_path(full_path[len(ancestor_path):])
       encoded_values = []
       for i, (prop_name, index_direction) in enumerate(self.order_info):
-        logger.debug('prop_name: {}'.format(prop_name))
-        cursor_prop = next((prop for prop in cursor.property_list()
+        cursor_prop = next((prop for prop in start_cursor.property_list()
                             if prop.name() == prop_name), None)
         if cursor_prop is None:
           encoded_value = unpacked_values[i]
@@ -941,6 +962,46 @@ class CompositeIndex(Index):
       else:
         stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
                                     self.directory.pack(encoded_cursor))
+
+    if end_cursor is not None:
+      if not reverse and stop is not None:
+        unpacked_key = self.directory.unpack(stop.key)
+      elif reverse and start is not None:
+        unpacked_key = self.directory.unpack(start.key)
+      else:
+        unpacked_key = self.directory.unpack(subspace.rawPrefix)
+
+      if self.ancestor:
+        unpacked_values = unpacked_key[1:]
+      else:
+        unpacked_values = unpacked_key[:]
+
+      full_path = encode_path(end_cursor.key().path())
+      remaining_path = self.encode_path(full_path[len(ancestor_path):])
+      encoded_values = []
+      for i, (prop_name, index_direction) in enumerate(self.order_info):
+        cursor_prop = next((prop for prop in end_cursor.property_list()
+                            if prop.name() == prop_name), None)
+        if cursor_prop is None:
+          encoded_value = unpacked_values[i]
+        else:
+          reverse_encode = index_direction == Query_Order.DESCENDING
+          encoded_value = encode_value(cursor_prop.value(), reverse_encode)
+
+        encoded_values.append(encoded_value)
+
+      if self.ancestor:
+        encoded_cursor = ((ancestor_path,) + tuple(encoded_values) +
+                          (remaining_path,))
+      else:
+        encoded_cursor = (tuple(encoded_values) + (remaining_path,))
+
+      if not reverse:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    self.directory.pack(encoded_cursor))
+      else:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+                                     self.directory.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
@@ -1006,22 +1067,27 @@ class IndexManager(object):
   def get_iterator(self, tr, query, read_vs=None):
     project_id = decode_str(query.app())
     namespace = decode_str(query.name_space())
-    index = self._get_perfect_index(query)
     filter_props = group_filters(query)
     ancestor_path = tuple()
     if query.has_ancestor():
       ancestor_path = encode_path(query.ancestor().path())
 
-    reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
-    last_result = None
+    start_cursor = None
     if query.has_compiled_cursor():
-      cursor = ListCursor(query)
-      last_result = cursor._GetLastResult()
+      start_cursor = ListCursor(query)._GetLastResult()
+
+    end_cursor = None
+    if query.has_end_compiled_cursor():
+      end_compiled = query.end_compiled_cursor()
+      end_cursor = ListCursor(query)._DecodeCompiledCursor(end_compiled)[0]
 
     rpc_limit, check_more_results = self.rpc_limit(query)
     fetch_limit = rpc_limit
     if check_more_results:
       fetch_limit += 1
+
+    index = self._get_perfect_index(query)
+    reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
 
     if index is None:
       if not all(prop.equality for prop in filter_props):
@@ -1035,7 +1101,7 @@ class IndexManager(object):
         for op, value in filter_prop.filters:
           tmp_filter_prop = FilterProperty(filter_prop.name, [(op, value)])
           slice = index.get_slice((tmp_filter_prop,), ancestor_path,
-                                  last_result)
+                                  start_cursor, end_cursor)
           indexes.append([index, slice, filter_prop.name, value])
 
       return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
@@ -1057,14 +1123,14 @@ class IndexManager(object):
             tmp_filter_props.append(filter_prop)
 
         desired_slice = index.get_slice(
-          tmp_filter_props, ancestor_path, last_result, reverse)
+          tmp_filter_props, ancestor_path, start_cursor, end_cursor, reverse)
         indexes.append([index, desired_slice, equality_prop.name, value])
 
       return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
                                fetch_limit, read_vs, snapshot=True)
 
-    desired_slice = index.get_slice(filter_props, ancestor_path, last_result,
-                                    reverse)
+    desired_slice = index.get_slice(filter_props, ancestor_path, start_cursor,
+                                    end_cursor, reverse)
 
     iterator = IndexIterator(tr, self._tornado_fdb, index, desired_slice,
                              fetch_limit, reverse, read_vs, snapshot=True)
