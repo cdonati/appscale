@@ -559,21 +559,21 @@ class Index(object):
 
     if start_cursor is not None:
       encoded_path = self.encode_path(start_cursor.key().path())
-      if reverse:
-        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
-                                    subspace.pack((encoded_path,)))
-      else:
+      if not reverse:
         start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
                                      subspace.pack((encoded_path,)))
+      else:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+                                    subspace.pack((encoded_path,)))
 
     if end_cursor is not None:
       encoded_path = self.encode_path(start_cursor.key().path())
-      if reverse:
-        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
-                                     subspace.pack((encoded_path,)))
-      else:
-        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+      if not reverse:
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN_OR_EQUAL,
                                     subspace.pack((encoded_path,)))
+      else:
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN_OR_EQUAL,
+                                     subspace.pack((encoded_path,)))
 
     selector = fdb.KeySelector.first_greater_or_equal
     start = start or selector(subspace.range().start)
@@ -776,10 +776,10 @@ class SinglePropIndex(Index):
       encoded_path = self.encode_path(end_cursor.key().path())
       encoded_cursor = (encoded_value, encoded_path)
       if not reverse:
-        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN_OR_EQUAL,
                                     self.directory.pack(encoded_cursor))
       else:
-        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN_OR_EQUAL,
                                      self.directory.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
@@ -997,10 +997,10 @@ class CompositeIndex(Index):
         encoded_cursor = (tuple(encoded_values) + (remaining_path,))
 
       if not reverse:
-        stop = get_fdb_key_selector(Query_Filter.LESS_THAN,
+        stop = get_fdb_key_selector(Query_Filter.LESS_THAN_OR_EQUAL,
                                     self.directory.pack(encoded_cursor))
       else:
-        start = get_fdb_key_selector(Query_Filter.GREATER_THAN,
+        start = get_fdb_key_selector(Query_Filter.GREATER_THAN_OR_EQUAL,
                                      self.directory.pack(encoded_cursor))
 
     selector = fdb.KeySelector.first_greater_or_equal
