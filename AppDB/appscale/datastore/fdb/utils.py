@@ -3,8 +3,12 @@ import random
 import time
 
 import fdb
+import mmh3
+import six
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
+
+from appscale.datastore.dbconstants import SCATTER_CHANCE
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -25,6 +29,10 @@ ABSENT_VERSION = 1
 CHUNK_SIZE = 10000
 
 SCATTER_PROP = u'__scatter__'
+
+MAX_32 = 256 ** 4
+
+SCATTER_PROPORTION = int(MAX_32 * SCATTER_CHANCE)
 
 
 class EncodedTypes(object):
@@ -273,3 +281,12 @@ def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
     else:
       key = subspace.pack((start,))
       tr[key] = value
+
+
+def get_scatter_val(path):
+  hashable_path = u''.join([six.text_type(element) for element in path])
+  val = mmh3.hash(hashable_path, signed=False)
+  if val >= SCATTER_PROPORTION:
+    return None
+
+  return val

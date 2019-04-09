@@ -74,10 +74,11 @@ class Datastore(object):
       [Entity.FromPb(entity) for entity in results_pb.result_list()])
 
   @gen.coroutine
-  def put(self, entity, txid=None):
+  def put(self, entities, txid=None):
     request = datastore_pb.PutRequest()
-    req_entity = request.add_entity()
-    req_entity.MergeFrom(entity.ToPb())
+    for entity in entities:
+      req_entity = request.add_entity()
+      req_entity.MergeFrom(entity.ToPb())
 
     if txid is not None:
       req_tx = request.mutable_transaction()

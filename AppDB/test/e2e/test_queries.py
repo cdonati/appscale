@@ -37,12 +37,12 @@ class TestMergeJoinQueries(AsyncTestCase):
     create_time = datetime.datetime.now()
     entity['content'] = None
     entity['create_time'] = create_time
-    yield self.datastore.put(entity)
+    yield self.datastore.put([entity])
 
     entity = Entity('Greeting', _app=PROJECT_ID)
     entity['content'] = 'hi'
     entity['create_time'] = create_time
-    yield self.datastore.put(entity)
+    yield self.datastore.put([entity])
 
     query = Query('Greeting', {'content =': None, 'create_time =': create_time},
                   _app=PROJECT_ID)
@@ -59,7 +59,7 @@ class TestMergeJoinQueries(AsyncTestCase):
     create_time = datetime.datetime.utcnow()
     entity['color'] = 'red'
     entity['create_time'] = create_time
-    yield self.datastore.put(entity)
+    yield self.datastore.put([entity])
 
     query = Query('Greeting', {'color =': 'red', 'create_time =': create_time},
                   _app=PROJECT_ID)
@@ -78,11 +78,59 @@ class TestMergeJoinQueries(AsyncTestCase):
     # path.
     entity = Entity('Invalid:Kind', _app=PROJECT_ID)
     try:
-      yield self.datastore.put(entity)
+      yield self.datastore.put([entity])
     except BadRequest:
       pass
     else:
       raise Exception('Expected BadRequest. No error was thrown.')
+
+
+class TestScatterProp(AsyncTestCase):
+  TOTAL_ENTITIES = 1000
+
+  BATCH_SIZE = 20
+
+  SCATTER_CHANCE = .0078
+
+  EXPECTED_ENTRIES = TOTAL_ENTITIES * SCATTER_CHANCE
+
+  def setUp(self):
+    super(TestScatterProp, self).setUp()
+    locations = os.environ['DATASTORE_LOCATIONS'].split()
+    self.datastore = Datastore(locations, PROJECT_ID)
+
+  def tearDown(self):
+    self.tear_down_helper()
+    super(TestScatterProp, self).tearDown()
+
+  @gen_test
+  def tear_down_helper(self):
+    query = Query('Greeting', _app=PROJECT_ID)
+    results = yield self.datastore.run_query(query)
+    for entity in results:
+      yield self.datastore.delete([entity.key()])
+
+  @gen_test
+  def test_cassandra_page_size(self):
+    entities = []
+    total_inserted = 0
+    while True:
+      entities.append(Entity('Greeting', _app=PROJECT_ID))
+      remaining = self.TOTAL_ENTITIES - total_inserted
+      if len(entities) == min(self.BATCH_SIZE, remaining):
+        yield self.datastore.put(entities)
+        total_inserted += len(entities)
+        entities = []
+
+      if total_inserted == self.TOTAL_ENTITIES:
+        break
+
+    query = Query('Greeting', _app=PROJECT_ID)
+    query.Order('__scatter__')
+    results = yield self.datastore.run_query(query)
+    tolerance = self.EXPECTED_ENTRIES * .3
+    self.assertGreater(len(results), self.EXPECTED_ENTRIES - tolerance)
+    self.assertLess(len(results), self.EXPECTED_ENTRIES + tolerance)
 
 
 class TestQueryLimit(AsyncTestCase):
@@ -109,9 +157,8 @@ class TestQueryLimit(AsyncTestCase):
     entity_count = self.CASSANDRA_PAGE_SIZE + 1
     for _ in range(entity_count):
       entity = Entity('Greeting', _app=PROJECT_ID)
-      yield self.datastore.put(entity)
+      yield self.datastore.put([entity])
 
     query = Query('Greeting', _app=PROJECT_ID)
     results = yield self.datastore.run_query(query)
     self.assertEqual(len(results), entity_count)
-    self.assertTrue(True)
