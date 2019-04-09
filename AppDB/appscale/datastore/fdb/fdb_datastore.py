@@ -267,7 +267,6 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
     txid = yield self._tx_manager.create(tr, project_id, is_xg)
     yield self._tornado_fdb.commit(tr)
-    logger.debug('created txid: {}'.format(txid))
     raise gen.Return(txid)
 
   @gen.coroutine
@@ -276,10 +275,6 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
     tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
     read_vs, lookups, queried_groups, mutations = tx_metadata
-    logger.debug('read_vs: {!r}'.format(read_vs))
-    logger.debug('lookups: {!r}'.format(lookups))
-    logger.debug('queried_groups: {!r}'.format(queried_groups))
-    logger.debug('mutations: {!r}'.format(mutations))
 
     group_update_futures = [
       self._data_manager.last_commit(tr, project_id, namespace, group_path)

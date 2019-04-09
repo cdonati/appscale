@@ -97,3 +97,4 @@ entity groups not in all results
 wtf is up with defining an offset + a cursor?
 refine data layer: commit_vs shouldn't equal 0 when entity doesn't exist
 fix fdb python bug with encoding versionstamp for fdb.impl.Value
+transactional tasks

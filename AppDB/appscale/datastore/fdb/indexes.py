@@ -377,7 +377,7 @@ class MultipleRangeIterator(object):
 
 class MergeJoinIterator(object):
   def __init__(self, tr, tornado_fdb, filter_props, indexes, fetch_limit,
-               read_vs=None, snapshot=False):
+               read_vs=None, ancestor_path=None, snapshot=False):
     logger.debug('indexes: {}'.format(indexes))
     self.indexes = indexes
     if read_vs is None:
@@ -393,6 +393,7 @@ class MergeJoinIterator(object):
     self._done = False
     self._candidate_path = None
     self._candidate_entries = []
+    self._ancestor_path = ancestor_path
 
   @property
   def prop_names(self):
@@ -491,7 +492,8 @@ class MergeJoinIterator(object):
       tmp_filter_props.append(
         FilterProperty(KEY_PROP, [(next_index_op, usable_entry.path)]))
 
-      new_slice = next_index.get_slice(tmp_filter_props)
+      new_slice = next_index.get_slice(tmp_filter_props,
+                                       ancestor_path=self._ancestor_path)
       encoded_value = encode_value(next_value)
       logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_slice.start.key))
       self.indexes[next_index_i][1] = new_slice
@@ -1106,7 +1108,8 @@ class IndexManager(object):
           indexes.append([index, slice, filter_prop.name, value])
 
       return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
-                               fetch_limit, read_vs, snapshot=True)
+                               fetch_limit, read_vs, ancestor_path,
+                               snapshot=True)
 
     logger.debug('using index: {}'.format(index))
     equality_prop = next(
@@ -1128,7 +1131,8 @@ class IndexManager(object):
         indexes.append([index, desired_slice, equality_prop.name, value])
 
       return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
-                               fetch_limit, read_vs, snapshot=True)
+                               fetch_limit, read_vs, ancestor_path,
+                               snapshot=True)
 
     desired_slice = index.get_slice(filter_props, ancestor_path, start_cursor,
                                     end_cursor, reverse)
