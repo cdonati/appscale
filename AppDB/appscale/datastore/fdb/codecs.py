@@ -227,7 +227,7 @@ def unpack_value(value):
 
 
 def encode_value(value, reverse=False):
-  if isinstance(value, int):
+  if isinstance(value, six.integer_types):
     encoded_type = V3Types.INT64
   else:
     encoded_type, value = unpack_value(value)
