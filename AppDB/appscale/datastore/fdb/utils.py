@@ -285,7 +285,7 @@ def put_chunks(tr, chunk, subspace, add_vs, chunk_size=CHUNK_SIZE):
 
 def get_scatter_val(path):
   hashable_path = u''.join([six.text_type(element) for element in path])
-  val = mmh3.hash(hashable_path, signed=False)
+  val = mmh3.hash(hashable_path.encode('utf-8'), signed=False)
   if val >= SCATTER_PROPORTION:
     return None
 
