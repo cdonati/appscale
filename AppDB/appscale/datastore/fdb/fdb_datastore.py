@@ -123,6 +123,8 @@ class FDBDatastore(object):
 
       read_vs = yield read_vs_future
       last_gc_versionstamps = yield last_gc_futures
+      logger.debug('read_vs: {}'.format(read_vs))
+      logger.debug('last_gc_versionstamps: {}'.format(last_gc_versionstamps))
       if any(deleted_vs > read_vs for deleted_vs in last_gc_versionstamps):
         raise BadRequest(u'The specified transaction has expired')
 
@@ -282,6 +284,7 @@ class FDBDatastore(object):
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     txid = yield self._tx_manager.create(tr, project_id, is_xg)
+    logger.debug('txid: {}'.format(txid))
     yield self._tornado_fdb.commit(tr)
     raise gen.Return(txid)
 
