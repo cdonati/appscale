@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 from tornado.testing import AsyncTestCase, gen_test
 
@@ -34,7 +35,12 @@ class TestBasicOperations(AsyncTestCase):
   @gen_test
   def test_put(self):
     entity = Entity('Greeting', name='test', _app=PROJECT_ID)
+    entity['content'] = 'test'
     yield self.datastore.put(entity)
+    txid = yield self.datastore.begin_transaction()
+    yield self.datastore.delete([entity.key()])
+    time.sleep(65)
+    yield self.datastore.get(entity.key(), txid)
     # entity = Entity('Greeting', _app=PROJECT_ID)
     # entity = Entity('Greeting', name='long', _app=PROJECT_ID)
     # parent_key = Key.from_path('Guestbook', '1', _app=PROJECT_ID)

@@ -1,4 +1,5 @@
 import logging
+import six
 import time
 from collections import deque
 
@@ -6,16 +7,24 @@ import mmh3
 from tornado import gen
 from tornado.ioloop import IOLoop
 
-from appscale.datastore.fdb.codecs import decode_str
+from appscale.datastore.fdb.codecs import decode_str, encode_path
+from appscale.datastore.fdb.utils import fdb
 
 logger = logging.getLogger(__name__)
 
 
-def group_hash()
+def group_hash(key):
+  group_path = encode_path(key.path())[:2]
+  hashable_path = u''.join([six.text_type(element) for element in group_path])
+  val = mmh3.hash(hashable_path.encode('utf-8'), signed=False)
+  byte_array = bytearray((val % 256,))
+  return bytes(byte_array)
 
 
 class GarbageCollector(object):
   DELETED_VERSIONS_DIR = u'deleted_versions'
+
+  LAST_GC_DIR = u'last_group_gc'
 
   def __init__(self, db, tornado_fdb, data_manager, index_manager,
                directory_cache):
@@ -33,6 +42,14 @@ class GarbageCollector(object):
     safe_time = time.time() + 60
     for old_entity, old_vs in entities:
       self._queue.append((safe_time, old_entity, old_vs))
+
+  @gen.coroutine
+  def last_group_gc(self, tr, key):
+    project_id = decode_str(key.app())
+    last_gc_dir = self._directory_cache.get((project_id, self.LAST_GC_DIR))
+    last_gc_key = last_gc_dir.rawPrefix + group_hash(key)
+    vs = yield self._tornado_fdb.get(tr, last_gc_key, snapshot=True)
+    raise gen.Return(fdb.tuple.Versionstamp(vs))
 
   # def index_deleted_versions(self, entities):
   #   deleted_dir =
@@ -59,7 +76,6 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def _process_queue(self):
-    logger.debug('processing queue')
     current_time = time.time()
     tx_deadline = current_time + 2.5
     tr = None
@@ -85,6 +101,12 @@ class GarbageCollector(object):
 
       self._data_manager.hard_delete(tr, old_entity.key(), old_vs)
       self._index_manager.hard_delete_entries(tr, old_entity, old_vs)
+
+      # Keep track of the newest version in the group that was deleted.
+      project_id = decode_str(old_entity.key().app())
+      last_gc_dir = self._directory_cache.get((project_id, self.LAST_GC_DIR))
+      last_gc_key = last_gc_dir.rawPrefix + group_hash(old_entity.key())
+      tr.byte_max(last_gc_key, old_vs.tr_version)
 
       if time.time() > tx_deadline:
         yield self._tornado_fdb.commit(tr)

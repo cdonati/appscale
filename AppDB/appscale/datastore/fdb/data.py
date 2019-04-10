@@ -87,7 +87,7 @@ class DataManager(object):
   def last_commit(self, tr, project_id, namespace, group_path):
     group_ns_dir = self._directory_cache.get(
       (project_id, self.GROUP_UPDATES_DIR, namespace))
-    group_key = group_ns_dir.pack((project_id, namespace) + group_path)
+    group_key = group_ns_dir.pack(group_path)
     last_updated_vs = yield self._tornado_fdb.get(tr, group_key)
     raise gen.Return(last_updated_vs)
 
@@ -110,7 +110,7 @@ class DataManager(object):
     group_path = encode_path(key.path())[:2]
     group_ns_dir = self._directory_cache.get(
       (project_id, self.GROUP_UPDATES_DIR, namespace))
-    return group_ns_dir.pack((project_id, namespace) + group_path)
+    return group_ns_dir.pack(group_path)
 
   def _subspace_from_key(self, key):
     project_id = decode_str(key.app())

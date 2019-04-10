@@ -137,11 +137,15 @@ class TornadoFDB(object):
     commit_future.on_ready(callback)
     return tornado_future
 
-  def get(self, tr, key):
+  def get(self, tr, key, snapshot=False):
+    tx_reader = tr
+    if snapshot:
+      tx_reader = tr.snapshot
+
     tornado_future = TornadoFuture()
     callback = lambda fdb_future: self._handle_fdb_result(
       fdb_future, tornado_future)
-    get_future = tr.get(key)
+    get_future = tx_reader.get(key)
     get_future.on_ready(callback)
     return tornado_future
 

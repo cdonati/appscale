@@ -112,9 +112,19 @@ class FDBDatastore(object):
 
     read_vs = None
     if get_request.has_transaction():
-      read_vs = yield self._tx_manager.get_read_vs(
+      read_vs_future = self._tx_manager.get_read_vs(
         tr, project_id, get_request.transaction().handle())
       self._tx_manager.log_rpc(tr, project_id, get_request)
+
+      # Ensure the GC hasn't cleaned up an entity written after the tx start.
+      last_gc_futures = []
+      for key in get_request.key_list():
+        last_gc_futures.append(self._gc.last_group_gc(tr, key))
+
+      read_vs = yield read_vs_future
+      last_gc_versionstamps = yield last_gc_futures
+      if any(deleted_vs > read_vs for deleted_vs in last_gc_versionstamps):
+        raise BadRequest(u'The specified transaction has expired')
 
     futures = []
     for key in get_request.key_list():
@@ -173,9 +183,15 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
     read_vs = None
     if query.has_transaction():
-      read_vs = yield self._tx_manager.get_read_vs(
+      read_vs_future = self._tx_manager.get_read_vs(
         tr, project_id, query.transaction().handle())
       self._tx_manager.log_query(tr, project_id, query)
+
+      # Ensure the GC hasn't cleaned up an entity written after the tx start.
+      deleted_vs = yield self._gc.last_group_gc(tr, query.ancestor())
+      read_vs = yield read_vs_future
+      if deleted_vs > read_vs:
+        raise BadRequest(u'The specified transaction has expired')
 
     fetch_data = self.index_manager.include_data(query)
     rpc_limit, check_more_results = self.index_manager.rpc_limit(query)
