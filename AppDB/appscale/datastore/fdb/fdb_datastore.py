@@ -122,8 +122,6 @@ class FDBDatastore(object):
       safe_read_stamps = [safe_vs for safe_vs in safe_read_stamps
                           if safe_vs is not None]
       read_vs = yield read_vs_future
-      logger.debug('read_vs: {}'.format(read_vs))
-      logger.debug('safe_read_stamps: {}'.format(safe_read_stamps))
       if any(safe_vs > read_vs for safe_vs in safe_read_stamps):
         raise BadRequest(u'The specified transaction has expired')
 
@@ -198,7 +196,6 @@ class FDBDatastore(object):
     rpc_limit, check_more_results = self.index_manager.rpc_limit(query)
 
     iterator = self.index_manager.get_iterator(tr, query, read_vs)
-    logger.debug('iterator: {}'.format(iterator))
     for prop_name in query.property_name_list():
       prop_name = decode_str(prop_name)
       if prop_name not in iterator.prop_names:
@@ -215,9 +212,6 @@ class FDBDatastore(object):
       remainder = rpc_limit - entries_fetched
       iter_offset = max(query.offset() - entries_fetched, 0)
       entries, more_iterator_results = yield iterator.next_page()
-      if entries:
-        logger.debug('entries: {}'.format(entries))
-
       entries_fetched += len(entries)
       if not entries and more_iterator_results:
         continue
@@ -274,6 +268,7 @@ class FDBDatastore(object):
     if query.keys_only():
       query_result.set_keys_only(True)
 
+    logger.debug('{} results'.format(len(query_result.result_list())))
     logger.debug('query_result: {}'.format(query_result))
     for encoded_entity in query_result.result_list():
       logger.debug('entity: {}'.format(entity_pb.EntityProto(encoded_entity)))
@@ -371,8 +366,7 @@ class FDBDatastore(object):
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
     project_id = decode_str(project_id)
-    logger.debug(
-      u'Doing a rollback on transaction {} for {}'.format(txid, project_id))
+    logger.debug(u'Rolling back {}:{}'.format(project_id, txid))
 
     tr = self._db.create_transaction()
     self._tx_manager.delete(tr, project_id, txid)

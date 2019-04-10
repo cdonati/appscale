@@ -39,7 +39,7 @@ class TestBasicOperations(AsyncTestCase):
     yield self.datastore.put([entity])
     txid = yield self.datastore.begin_transaction()
     yield self.datastore.delete([entity.key()])
-    time.sleep(80)
+    time.sleep(40)
     yield self.datastore.get(entity.key(), txid)
     # entity = Entity('Greeting', _app=PROJECT_ID)
     # entity = Entity('Greeting', name='long', _app=PROJECT_ID)

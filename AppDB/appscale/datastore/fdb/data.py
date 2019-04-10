@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def from_chunks(chunks):
   version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
   if encoding != EncodedTypes.ENTITY_V3:
-    raise InternalError('Unknown entity type')
+    raise InternalError(u'Unknown entity type')
 
   return version, encoded_entity
 

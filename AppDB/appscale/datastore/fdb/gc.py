@@ -13,18 +13,27 @@ from appscale.datastore.fdb.utils import fdb
 logger = logging.getLogger(__name__)
 
 
-def group_hash(key):
-  group_path = encode_path(key.path())[:2]
-  hashable_path = u''.join([six.text_type(element) for element in group_path])
-  val = mmh3.hash(hashable_path.encode('utf-8'), signed=False)
+def hash_tuple(value):
+  hashable_value = u''.join([six.text_type(element) for element in value])
+  val = mmh3.hash(hashable_value.encode('utf-8'), signed=False)
   byte_array = bytearray((val % 256,))
   return bytes(byte_array)
 
 
-class GarbageCollector(object):
-  DELETED_VERSIONS_DIR = u'deleted_versions'
+def group_hash(key):
+  group_path = encode_path(key.path())[:2]
+  return hash_tuple(group_path)
 
-  SAFE_READ_DIR = u'safe_read'
+
+def path_hash(key):
+  path = encode_path(key.path())
+  return hash_tuple(path)
+
+
+class GarbageCollector(object):
+  DELETED_VERSIONS_DIR = u'deleted-versions'
+
+  SAFE_READ_DIR = u'safe-read'
 
   def __init__(self, db, tornado_fdb, data_manager, index_manager,
                directory_cache):
@@ -54,18 +63,25 @@ class GarbageCollector(object):
 
     raise gen.Return(fdb.tuple.Versionstamp(vs.value))
 
-  # def index_deleted_versions(self, entities):
-  #   deleted_dir =
-  #   for old_entity, old_vs in entities:
-  #     deleted_dir = self._directory_cache.get((project_id,) + self._DELETED_DIR)
-  #     key = deleted_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-  #     value = fdb.tuple.pack((project_id, namespace) + path + (version,))
-  #     tr.set_versionstamped_key(key, value)
-  #
-  # def _deleted_index_key(self, entity):
-  #   project_id = decode_str(entity.key().app())
-  #   namespace = decode_str(entity.key().name_space())
+  def index_deleted_versions(self, tr, entities):
+    op_id = 0
+    for old_entity, old_vs in entities:
+      project_id = decode_str(old_entity.key().app())
+      namespace = decode_str(old_entity.key().name_space())
+      encoded_path = encode_path(old_entity.key().path())
+      deleted_dir = self._directory_cache.get(
+        (project_id, self.DELETED_VERSIONS_DIR))
+      # The entity path is hashed in order to scatter the writes.
+      key = deleted_dir.pack_with_versionstamp(
+        (path_hash(old_entity.key()), fdb.tuple.Versionstamp(), op_id))
+      value = fdb.tuple.pack(
+        (project_id, namespace) + encoded_path + (old_vs,))
+      tr.set_versionstamped_key(key, value)
+      op_id += 1
 
+  def _deleted_index_key(self, entity):
+    project_id = decode_str(entity.key().app())
+    namespace = decode_str(entity.key().name_space())
 
   @gen.coroutine
   def _run_forever(self):
@@ -102,7 +118,6 @@ class GarbageCollector(object):
       if tr is None:
         tr = self._db.create_transaction()
 
-      logger.debug('hard deleting {}'.format(old_entity.key()))
       self._data_manager.hard_delete(tr, old_entity.key(), old_vs)
       self._index_manager.hard_delete_entries(tr, old_entity, old_vs)
 

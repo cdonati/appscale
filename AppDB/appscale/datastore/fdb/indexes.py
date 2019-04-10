@@ -301,16 +301,6 @@ class IndexIterator(object):
   def __init__(self, tr, tornado_fdb, index, key_slice, fetch_limit, reverse,
                read_vs=None, snapshot=False):
     self.index = index
-    if isinstance(key_slice.start, fdb.KeySelector):
-      logger.debug('start: {!r}'.format(key_slice.start.key))
-    else:
-      logger.debug('start: {!r}'.format(key_slice.start))
-
-    if isinstance(key_slice.stop, fdb.KeySelector):
-      logger.debug('stop: {!r}'.format(key_slice.stop.key))
-    else:
-      logger.debug('stop: {!r}'.format(key_slice.stop))
-
     self._kv_iterator = KVIterator(
       tr, tornado_fdb, key_slice, fetch_limit, reverse, snapshot=snapshot)
     if read_vs is None:
@@ -378,7 +368,6 @@ class MultipleRangeIterator(object):
 class MergeJoinIterator(object):
   def __init__(self, tr, tornado_fdb, filter_props, indexes, fetch_limit,
                read_vs=None, ancestor_path=None, snapshot=False):
-    logger.debug('indexes: {}'.format(indexes))
     self.indexes = indexes
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
@@ -410,7 +399,6 @@ class MergeJoinIterator(object):
 
     result = None
     for i, (index, key_slice, prop_name, value) in enumerate(self.indexes):
-      logger.debug('prop_name: {}, value: {!r}'.format(prop_name, encode_value(value)))
       usable_entry = None
       # TODO: Keep cache of ranges to reduce unnecessary lookups.
       index_exhausted = False
@@ -419,7 +407,6 @@ class MergeJoinIterator(object):
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
           snapshot=self._snapshot)
         if not count:
-          logger.debug('no more results')
           index_exhausted = True
           break
 
@@ -438,7 +425,6 @@ class MergeJoinIterator(object):
         self._done = True
         break
 
-      logger.debug('usable entry: {}'.format(usable_entry))
       if usable_entry.path == self._candidate_path:
         self._candidate_entries.append(usable_entry)
       else:
@@ -494,14 +480,11 @@ class MergeJoinIterator(object):
 
       new_slice = next_index.get_slice(tmp_filter_props,
                                        ancestor_path=self._ancestor_path)
-      encoded_value = encode_value(next_value)
-      logger.debug('changing {} from {!r} to {!r}'.format(encoded_value, next_slice.start.key, new_slice.start.key))
       self.indexes[next_index_i][1] = new_slice
 
     results = [result] if result is not None else []
     self._fetched += len(results)
     if self._fetched == self._fetch_limit:
-      logger.debug('done with limit')
       self._done = True
 
     raise gen.Return((results, not self._done))
@@ -1111,7 +1094,6 @@ class IndexManager(object):
                                fetch_limit, read_vs, ancestor_path,
                                snapshot=True)
 
-    logger.debug('using index: {}'.format(index))
     equality_prop = next(
       (filter_prop for filter_prop in filter_props if filter_prop.equality),
       None)
