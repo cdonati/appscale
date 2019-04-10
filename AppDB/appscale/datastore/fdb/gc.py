@@ -24,7 +24,7 @@ def group_hash(key):
 class GarbageCollector(object):
   DELETED_VERSIONS_DIR = u'deleted_versions'
 
-  LAST_GC_DIR = u'last_group_gc'
+  SAFE_READ_DIR = u'safe_read'
 
   def __init__(self, db, tornado_fdb, data_manager, index_manager,
                directory_cache):
@@ -38,18 +38,21 @@ class GarbageCollector(object):
   def start(self):
     IOLoop.current().spawn_callback(self._run_forever)
 
-  def clear_later(self, entities):
+  def clear_later(self, entities, new_vs):
     safe_time = time.time() + 60
     for old_entity, old_vs in entities:
-      self._queue.append((safe_time, old_entity, old_vs))
+      self._queue.append((safe_time, old_entity, old_vs, new_vs))
 
   @gen.coroutine
-  def last_group_gc(self, tr, key):
+  def safe_read_vs(self, tr, key):
     project_id = decode_str(key.app())
-    last_gc_dir = self._directory_cache.get((project_id, self.LAST_GC_DIR))
-    last_gc_key = last_gc_dir.rawPrefix + group_hash(key)
-    vs = yield self._tornado_fdb.get(tr, last_gc_key, snapshot=True)
-    raise gen.Return(fdb.tuple.Versionstamp(vs))
+    safe_read_dir = self._directory_cache.get((project_id, self.SAFE_READ_DIR))
+    safe_read_key = safe_read_dir.rawPrefix + group_hash(key)
+    vs = yield self._tornado_fdb.get(tr, safe_read_key, snapshot=True)
+    if not vs.present():
+      raise gen.Return(None)
+
+    raise gen.Return(fdb.tuple.Versionstamp(vs.value))
 
   # def index_deleted_versions(self, entities):
   #   deleted_dir =
@@ -87,9 +90,9 @@ class GarbageCollector(object):
         yield gen.sleep(61)
         break
 
-      safe_time, old_entity, old_vs = self._queue.popleft()
+      safe_time, old_entity, old_vs, new_vs = self._queue.popleft()
       if safe_time > current_time:
-        self._queue.appendleft((safe_time, old_entity, old_vs))
+        self._queue.appendleft((safe_time, old_entity, old_vs, new_vs))
         if tr is not None:
           yield self._tornado_fdb.commit(tr)
 
@@ -105,9 +108,10 @@ class GarbageCollector(object):
 
       # Keep track of the newest version in the group that was deleted.
       project_id = decode_str(old_entity.key().app())
-      last_gc_dir = self._directory_cache.get((project_id, self.LAST_GC_DIR))
-      last_gc_key = last_gc_dir.rawPrefix + group_hash(old_entity.key())
-      tr.byte_max(last_gc_key, old_vs.tr_version)
+      safe_read_dir = self._directory_cache.get(
+        (project_id, self.SAFE_READ_DIR))
+      safe_read_key = safe_read_dir.rawPrefix + group_hash(old_entity.key())
+      tr.byte_max(safe_read_key, new_vs.tr_version)
 
       if time.time() > tx_deadline:
         yield self._tornado_fdb.commit(tr)

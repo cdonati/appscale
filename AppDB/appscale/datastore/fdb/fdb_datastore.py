@@ -87,15 +87,15 @@ class FDBDatastore(object):
 
     old_entities = [(old_entity, old_vs) for _, old_entity, old_vs, _ in writes
                     if old_entity is not None]
-    # vs_future = None
-    # if old_entities:
-    #   vs_future = tr.get_versionstamp()
+    vs_future = None
+    if old_entities:
+      vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      # gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities)
+      new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities, new_vs)
 
     for key, _, _, new_version in writes:
       put_response.add_key().CopyFrom(key)
@@ -117,15 +117,14 @@ class FDBDatastore(object):
       self._tx_manager.log_rpc(tr, project_id, get_request)
 
       # Ensure the GC hasn't cleaned up an entity written after the tx start.
-      last_gc_futures = []
-      for key in get_request.key_list():
-        last_gc_futures.append(self._gc.last_group_gc(tr, key))
-
+      safe_read_stamps = yield [self._gc.safe_read_vs(tr, key)
+                                for key in get_request.key_list()]
+      safe_read_stamps = [safe_vs for safe_vs in safe_read_stamps
+                          if safe_vs is not None]
       read_vs = yield read_vs_future
-      last_gc_versionstamps = yield last_gc_futures
       logger.debug('read_vs: {}'.format(read_vs))
-      logger.debug('last_gc_versionstamps: {}'.format(last_gc_versionstamps))
-      if any(deleted_vs > read_vs for deleted_vs in last_gc_versionstamps):
+      logger.debug('safe_read_stamps: {}'.format(safe_read_stamps))
+      if any(safe_vs > read_vs for safe_vs in safe_read_stamps):
         raise BadRequest(u'The specified transaction has expired')
 
     futures = []
@@ -164,15 +163,15 @@ class FDBDatastore(object):
 
     old_entities = [(old_entity, old_vs) for old_entity, old_vs, _ in deletes
                     if old_entity is not None]
-    # vs_future = None
-    # if old_entities:
-    #   vs_future = tr.get_versionstamp()
+    vs_future = None
+    if old_entities:
+      vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      # gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities)
+      new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities, new_vs)
 
     # TODO: Once the Cassandra backend is removed, populate a delete response.
     for old_entity, old_vs, new_version in deletes:
@@ -190,9 +189,9 @@ class FDBDatastore(object):
       self._tx_manager.log_query(tr, project_id, query)
 
       # Ensure the GC hasn't cleaned up an entity written after the tx start.
-      deleted_vs = yield self._gc.last_group_gc(tr, query.ancestor())
+      safe_vs = yield self._gc.safe_read_vs(tr, query.ancestor())
       read_vs = yield read_vs_future
-      if deleted_vs > read_vs:
+      if safe_vs is not None and safe_vs > read_vs:
         raise BadRequest(u'The specified transaction has expired')
 
     fetch_data = self.index_manager.include_data(query)
@@ -359,15 +358,15 @@ class FDBDatastore(object):
       new_entity = mutation if op == 'put' else None
       self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
 
-    # vs_future = None
-    # if old_entities:
-    #   vs_future = tr.get_versionstamp()
+    vs_future = None
+    if old_entities:
+      vs_future = tr.get_versionstamp()
 
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      # gc_versionstamp = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities)
+      new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
+      self._gc.clear_later(old_entities, new_vs)
 
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
