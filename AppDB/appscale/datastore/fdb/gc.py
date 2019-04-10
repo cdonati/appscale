@@ -11,6 +11,9 @@ from appscale.datastore.fdb.codecs import decode_str
 logger = logging.getLogger(__name__)
 
 
+def group_hash()
+
+
 class GarbageCollector(object):
   DELETED_VERSIONS_DIR = u'deleted_versions'
 
