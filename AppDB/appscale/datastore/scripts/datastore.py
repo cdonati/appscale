@@ -692,6 +692,8 @@ class MainHandler(tornado.web.RequestHandler):
     getresp_pb = datastore_pb.GetResponse()
     try:
       yield datastore_access.dynamic_get(app_id, getreq_pb, getresp_pb)
+    except dbconstants.BadRequest as error:
+      raise gen.Return(('', datastore_pb.Error.BAD_REQUEST, str(error)))
     except zktransaction.ZKBadRequest as error:
       logger.exception('Illegal argument during {}'.format(getreq_pb))
       raise gen.Return(('', datastore_pb.Error.BAD_REQUEST, str(error)))
