@@ -99,6 +99,7 @@ class GarbageCollector(object):
       if tr is None:
         tr = self._db.create_transaction()
 
+      logger.debug('hard deleting {}'.format(old_entity.key()))
       self._data_manager.hard_delete(tr, old_entity.key(), old_vs)
       self._index_manager.hard_delete_entries(tr, old_entity, old_vs)
 

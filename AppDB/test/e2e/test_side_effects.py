@@ -36,10 +36,10 @@ class TestBasicOperations(AsyncTestCase):
   def test_put(self):
     entity = Entity('Greeting', name='test', _app=PROJECT_ID)
     entity['content'] = 'test'
-    yield self.datastore.put(entity)
+    yield self.datastore.put([entity])
     txid = yield self.datastore.begin_transaction()
     yield self.datastore.delete([entity.key()])
-    time.sleep(65)
+    time.sleep(80)
     yield self.datastore.get(entity.key(), txid)
     # entity = Entity('Greeting', _app=PROJECT_ID)
     # entity = Entity('Greeting', name='long', _app=PROJECT_ID)
