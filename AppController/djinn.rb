@@ -134,7 +134,7 @@ INVALID_VERSION_EXIT_CODE = 64
 # be hosting, and exposes these methods via a SOAP interface (as is provided
 # in DjinnServer).
 class Djinn
-  # An Array of DjinnJobData objects, each of which containing information about
+  # An Array of NodeInfo objects, each of which containing information about
   # a node in the currently running AppScale deployment.
   attr_accessor :nodes
 
@@ -535,6 +535,7 @@ class Djinn
     @total_req_seen = {}
     @current_req_rate = {}
     @average_req_rate = {}
+    @curr_sessions_list = []
     @last_sampling_time = {}
     @last_scaling_time = Time.now.to_i
     @app_upload_reservations = {}
@@ -718,10 +719,10 @@ class Djinn
   #     informations (IPs, roles, instance ID etc...). These are the nodes
   #     specified in the AppScalefile at startup time.
   #   keyname: the key of this deployment, needed to initialize
-  #     DjinnJobData.
+  #     NodeInfo.
   #
   # Returns:
-  #   A DjinnJobData array suitale to be used in @nodes.
+  #   A NodeInfo array suitale to be used in @nodes.
   #
   # Exception:
   #   AppScaleException: returns a message if the layout is not valid.
@@ -750,23 +751,23 @@ class Djinn
         Djinn.log_error(msg)
         raise AppScaleException.new(msg)
       end
-      if !node['public_ip'] || !node['private_ip'] || !node['jobs'] ||
+      if !node['public_ip'] || !node['private_ip'] || !node['roles'] ||
         !node['instance_id']
         msg = "Error: node layout is missing information #{node}."
         Djinn.log_error(msg)
         raise AppScaleException.new(msg)
       elsif node['public_ip'].empty? || node['private_ip'].empty? ||
-         node['jobs'].empty? || node['instance_id'].empty?
+         node['roles'].empty? || node['instance_id'].empty?
         msg = "Error: node layout is missing information #{node}."
         Djinn.log_error(msg)
         raise AppScaleException.new(msg)
       end
-      if node['jobs'].class == String
-        all_roles << node['jobs']
-      elsif node['jobs'].class == Array
-        all_roles += node['jobs']
+      if node['roles'].class == String
+        all_roles << node['roles']
+      elsif node['roles'].class == Array
+        all_roles += node['roles']
       else
-        msg = "Error: node jobs is not String or Array for #{node}."
+        msg = "Error: node roles is not String or Array for #{node}."
         Djinn.log_error(msg)
         raise AppScaleException.new(msg)
       end
@@ -775,8 +776,8 @@ class Djinn
     # Now we can check if we have the needed roles to start the
     # deployment.
     all_roles.uniq!
-    ['compute', 'shadow', 'load_balancer', 'login', 'zookeeper',
-      'memcache', 'db_master', 'taskqueue_master'].each { |role|
+    ['compute', 'shadow', 'load_balancer', 'zookeeper', 'memcache',
+     'db_master', 'taskqueue_master'].each { |role|
       unless all_roles.include?(role)
         msg = "Error: layout is missing role #{role}."
         Djinn.log_error(msg)
@@ -784,7 +785,7 @@ class Djinn
       end
     }
 
-    # Transform the hash into DjinnJobData and return it.
+    # Transform the hash into NodeInfo and return it.
     nodes = Djinn.convert_location_array_to_class(locations, keyname)
     return nodes
   end
@@ -815,7 +816,7 @@ class Djinn
         begin
           Djinn.log_warn("Removing unknown parameter '" + key.to_s + "'.")
         rescue
-          Djinn.log_warn("Removing unknown paramete.")
+          Djinn.log_warn("Removing unknown parameter.")
         end
         next
       end
@@ -1153,8 +1154,9 @@ class Djinn
       if ip == my_node.private_ip
         begin
           new_stats << JSON.load(get_node_stats_json(@@secret))
-        rescue SOAP::FaultError
-          Djinn.log_warn("Failed to get local status update.")
+        rescue FailedNodeException => exception
+          Djinn.log_warn("Failed to get local status update because: " \
+            "#{exception.message}")
         end
       else
         threads << Thread.new {
@@ -1730,6 +1732,10 @@ class Djinn
     # We reset the kill signal received since we are starting now.
     @kill_sig_received = false
 
+    # If we have uncommitted changes, we rebuild/reinstall the
+    # corresponding packages to ensure we are using the latest code.
+    build_uncommitted_changes
+
     # From here on we have the basic local state that allows to operate.
     # In particular we know our roles, and the deployment layout. Let's
     # start attaching any permanent disk we may have associated with us.
@@ -1740,9 +1746,11 @@ class Djinn
     write_database_info
     update_firewall
 
-    # If we have uncommitted changes, we rebuild/reinstall the
-    # corresponding packages to ensure we are using the latest code.
-    build_uncommitted_changes
+    # Let's account for the autoscaled nodes differently since we don't
+    # have to wait for them (they could have been downscaled).
+    skip_nodes = get_autoscaled_nodes
+    nodes_to_wait = []
+    @state_change_lock.synchronize { nodes_to_wait = @nodes - skip_nodes }
 
     # If we are the headnode, we may need to start/setup all other nodes.
     # Better do it early on, since it may take some time for the other
@@ -1750,7 +1758,9 @@ class Djinn
     if my_node.is_shadow?
       configure_ejabberd_cert
       Djinn.log_info("Preparing other nodes for this deployment.")
-      @state_change_lock.synchronize { initialize_nodes_in_parallel(@nodes) }
+      @state_change_lock.synchronize {
+        initialize_nodes_in_parallel(nodes_to_wait, skip_nodes)
+      }
     end
 
     # Initialize the current server and starts all the API and essential
@@ -1767,7 +1777,9 @@ class Djinn
 
     pick_zookeeper(@zookeeper_data)
     write_our_node_info
-    @state_change_lock.synchronize { wait_for_nodes_to_finish_loading(@nodes) }
+
+    # We wait only for non autoscaled nodes.
+    wait_for_nodes_to_finish_loading(nodes_to_wait)
 
     # Check that services are up before proceeding into the duty cycle.
     check_api_services
@@ -1808,7 +1820,7 @@ class Djinn
       # We save the current @options and roles to check if
       # restore_appcontroller_state modifies them.
       old_options = @options.clone
-      old_jobs = my_node.jobs
+      old_roles = my_node.roles
       my_versions_loaded = []
       APPS_LOCK.synchronize {
         my_versions_loaded = @versions_loaded.clone if my_node.is_load_balancer?
@@ -1829,7 +1841,7 @@ class Djinn
       end
 
       # We act here if options or roles for this node changed.
-      check_role_change(old_options, old_jobs)
+      check_role_change(old_options, old_roles)
 
       # The master node has more work to do.
       if my_node.is_shadow?
@@ -2041,15 +2053,13 @@ class Djinn
   # a SOAP interface by which we can dynamically add and remove nodes in this
   # AppScale deployment.
   def start_infrastructure_manager
-    iaas_script = "#{APPSCALE_HOME}/InfrastructureManager/infrastructure_manager_service.py"
-    start_cmd = "#{PYTHON27} #{iaas_script}"
-    env = {
-      'APPSCALE_HOME' => APPSCALE_HOME,
-      'EC2_HOME' => ENV['EC2_HOME'],
-      'JAVA_HOME' => ENV['JAVA_HOME']
-    }
+    script = `which appscale-infrastructure`.chomp
+    service_port = 17444
+    start_cmd = "#{script} -p #{service_port}"
+    start_cmd << ' --autoscaler' if my_node.is_shadow?
+    start_cmd << ' --verbose' if @options['verbose'].downcase == 'true'
 
-    MonitInterface.start(:iaas_manager, start_cmd, nil, env)
+    MonitInterface.start(:iaas_manager, start_cmd)
     Djinn.log_info("Started InfrastructureManager successfully!")
   end
 
@@ -2114,7 +2124,7 @@ class Djinn
       @nodes.each { |node|
         if node.is_open?
           Djinn.log_debug("New roles #{roles} will be assumed by open node #{node}.")
-          node.jobs = roles
+          node.roles = roles
           return true
         end
       }
@@ -2189,7 +2199,7 @@ class Djinn
         found = false
         node_roles.each { |node|
           if node['private_ip'] == ip
-            node.jobs << role
+            node.roles << role
             found = true
             break
           end
@@ -2198,7 +2208,7 @@ class Djinn
           node_roles << {
             "public_ip" => ip,
             "private_ip" => ip,
-            "jobs" => role,
+            "roles" => role,
             "disk" => nil
           }
         end
@@ -2237,7 +2247,7 @@ class Djinn
       disks = Array.new(new_nodes_roles.length, nil)
       imc = InfrastructureManagerClient.new(@@secret)
       begin
-        new_nodes_info = imc.spawn_vms(new_nodes_roles.length, @options,
+        new_nodes_info = imc.run_instances(new_nodes_roles.length, @options,
            new_nodes_roles.values, disks)
       rescue FailedNodeException, AppScaleException => exception
         Djinn.log_error("Couldn't spawn #{new_nodes_roles.length} VMs " \
@@ -2257,8 +2267,8 @@ class Djinn
         delete_index = nil
         new_nodes_info.each_with_index { |new_node, index|
           if new_node['private_ip'] == node.private_ip
-            Djinn.log_info("Node at #{node.private_ip} changed role to #{new_node['jobs']}.")
-            node.jobs = new_node['jobs']
+            Djinn.log_info("Node at #{node.private_ip} changed role to #{new_node['roles']}.")
+            node.roles = new_node['roles']
             delete_index = index
             break
           end
@@ -2293,7 +2303,7 @@ class Djinn
     Djinn.log_debug("Changed nodes to #{@nodes}")
 
     update_firewall
-    initialize_nodes_in_parallel(new_nodes)
+    initialize_nodes_in_parallel(new_nodes, [])
     update_hosts_info
   end
 
@@ -2405,13 +2415,13 @@ class Djinn
   end
 
   # This method converts an Array of Strings (where each String contains all the
-  # information about a single node) to an Array of DjinnJobData objects, which
+  # information about a single node) to an Array of NodeInfo objects, which
   # provide convenience methods that make them easier to operate on than just
   # raw String objects.
   def self.convert_location_array_to_class(nodes, keyname)
     array_of_nodes = []
     nodes.each { |node|
-      converted = DjinnJobData.new(node, keyname)
+      converted = NodeInfo.new(node, keyname)
       array_of_nodes << converted
     }
 
@@ -2420,7 +2430,7 @@ class Djinn
 
   # This method is the opposite of the previous method, and is needed when an
   # AppController wishes to pass node information to other AppControllers via
-  # SOAP (as SOAP accepts Arrays and Strings but not DjinnJobData objects).
+  # SOAP (as SOAP accepts Arrays and Strings but not NodeInfo objects).
   def self.convert_location_class_to_json(layout)
     if layout.class != Array
       @state = "Locations is not an Array, but a #{layout.class}."
@@ -2739,11 +2749,11 @@ class Djinn
   # Args:
   #   old_options: this is a clone of @options. We will compare it with
   #     the current value.
-  #   old_jobs: this is a list of roles. It will be compared against the
-  #     current list of jobs for this node.
-  def check_role_change(old_options, old_jobs)
-    if old_jobs != my_node.jobs
-      Djinn.log_info("Roles for this node are now: #{my_node.jobs}.")
+  #   old_roles: this is a list of roles. It will be compared against the
+  #     current list of roles for this node.
+  def check_role_change(old_options, old_roles)
+    if old_roles != my_node.roles
+      Djinn.log_info("Roles for this node are now: #{my_node.roles}.")
       start_stop_api_services
     end
 
@@ -3156,7 +3166,7 @@ class Djinn
       db_master = nil
       @state_change_lock.synchronize {
         @nodes.each { |node|
-          db_master = node.private_ip if node.jobs.include?('db_master')
+          db_master = node.private_ip if node.roles.include?('db_master')
         }
       }
       setup_db_config_files(db_master)
@@ -3648,6 +3658,20 @@ class Djinn
     Djinn.log_info('Finished building AdminServer.')
   end
 
+  def build_infrastructure_manager
+    Djinn.log_info('Building uncommitted InfrastructureManager changes')
+    unless system('pip install --upgrade --no-deps ' +
+                  "#{APPSCALE_HOME}/InfrastructureManager > /dev/null 2>&1")
+      Djinn.log_error('Unable to build InfrastructureManager (install failed).')
+      return
+    end
+    unless system("pip install #{APPSCALE_HOME}/InfrastructureManager > /dev/null 2>&1")
+      Djinn.log_error('Unable to build InfrastructureManager (install dependencies failed).')
+      return
+    end
+    Djinn.log_info('Finished building InfrastructureManager.')
+  end
+
   def build_java_appserver
     Djinn.log_info('Building uncommitted Java AppServer changes')
 
@@ -3723,6 +3747,7 @@ class Djinn
     build_taskqueue if status.include?('AppTaskQueue')
     build_datastore if status.include?('AppDB')
     build_common if status.include?('common')
+    build_infrastructure_manager if status.include?('InfrastructureManager')
     build_java_appserver if status.include?('AppServer_Java')
     build_hermes if status.include?('Hermes')
     build_api_server if status.include?('APIServer')
@@ -3743,17 +3768,34 @@ class Djinn
     end
   end
 
-  def initialize_nodes_in_parallel(node_info)
+  def initialize_nodes_in_parallel(must_have, nice_have)
     threads = []
-    node_info.each { |slave|
+    must_have.each { |slave|
       next if slave.private_ip == my_node.private_ip
       threads << Thread.new {
         initialize_node(slave)
       }
     }
 
+    # If we cannot reconnect with autoscaled nodes, we will have to clean
+    # up the state.
+    nice_have.each { |slave|
+      next if slave.private_ip == my_node.private_ip
+      Thread.new {
+        Djinn.log_info("Trying to initialize scaled node #{slave}.")
+        begin
+          Timeout.timeout(SCALEDOWN_THRESHOLD * DUTY_CYCLE * SMALL_WAIT) {
+            initialize_node(slave)
+          }
+        rescue Timeout::Error
+          Djinn.log_warn("Couldn't initialize #{slave} in time.")
+          terminate_node_from_deployment(slave)
+        end
+      }
+    }
+
     threads.each { |t| t.join }
-    Djinn.log_info("Done initializing nodes.")
+    Djinn.log_info("Done initializing must have nodes.")
   end
 
   def initialize_node(node)
@@ -3895,7 +3937,8 @@ class Djinn
       locations_json = "#{APPSCALE_CONFIG_DIR}/locations-#{@options['keyname']}.json"
       loop {
         break if File.exists?(locations_json)
-        Djinn.log_warn("Locations JSON file does not exist on head node yet, #{dest_node.private_ip} is waiting ")
+        Djinn.log_warn('Locations JSON file does not exist on head node' \
+                       " yet, #{dest_node.private_ip} is waiting ")
         Kernel.sleep(SMALL_WAIT)
       }
       Djinn.log_info("Copying locations.json to #{dest_node.private_ip}")
@@ -4262,7 +4305,7 @@ HOSTS
   # machine.
   #
   # Args:
-  # - node: A DjinnJobData that represents the machine where the given commands
+  # - node: A NodeInfo that represents the machine where the given commands
   #   should be executed.
   def run_user_commands(node)
     if @options['user_commands'].class == String
@@ -4299,7 +4342,7 @@ HOSTS
     stop_cmd = "#{service} appscale-controller stop"
     pidfile = '/var/run/appscale/controller.pid'
 
-    # Let's make sure we don't have 2 jobs monitoring the controller.
+    # Let's make sure we don't have 2 roles monitoring the controller.
     FileUtils.rm_rf("/etc/monit/conf.d/controller-17443.cfg")
 
     begin
@@ -4374,7 +4417,7 @@ HOSTS
     start_cmd << ' --verbose' if @options['verbose'].downcase == 'true'
     MonitInterface.start(:admin_server, start_cmd, nil,
                          {'PATH' => ENV['PATH']})
-    if my_node.is_shadow?
+    if my_node.is_load_balancer?
       Nginx.add_service_location('appscale-administration', my_node.private_ip,
                                  service_port, nginx_port, '/')
     end
@@ -4468,7 +4511,7 @@ HOSTS
             "AdminServer was unable to deploy dashboard: #{response.body}")
         end
         break
-      rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT => error
+      rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, Net::ReadTimeout => error
         Djinn.log_warn(
           "Error when deploying dashboard: #{error.message}. Trying again.")
         sleep(SMALL_WAIT)
@@ -4492,7 +4535,7 @@ HOSTS
         Djinn.log_warn(
           "Error updating dashboard cron: #{response.body}. Trying again.")
         sleep(SMALL_WAIT)
-      rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT => error
+      rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, Net::ReadTimeout => error
         Djinn.log_warn(
           "Error updating dashboard cron: #{error.message}. Trying again.")
         sleep(SMALL_WAIT)
@@ -4937,7 +4980,7 @@ HOSTS
           # compute role, so we check specifically for that during downscaling
           # to make sure we only downscale the new machines added.
           node_to_remove = nil
-          if node.jobs == ['compute']
+          if node.roles == ['compute']
             Djinn.log_info("Removing node #{node}")
             node_to_remove = node
           end
@@ -4964,19 +5007,22 @@ HOSTS
       return 0
     end
 
-    imc = InfrastructureManagerClient.new(@@secret)
-    begin
-      imc.terminate_instances(@options, node_to_remove.instance_id)
-    rescue FailedNodeException
-      Djinn.log_warn("Failed to call terminate_instances")
-      return 0
-    rescue AppScaleException
-      Djinn.log_warn("Failed to terminate #{node_to_remove}. Not removing it.")
-      return 0
+    # Terminate instance if we are in cloud.
+    if is_cloud?
+      imc = InfrastructureManagerClient.new(@@secret)
+      begin
+        imc.terminate_instances(@options, node_to_remove.instance_id)
+      rescue FailedNodeException
+        Djinn.log_warn("Failed to call terminate_instances")
+        return 0
+      rescue AppScaleException
+        Djinn.log_warn("Failed to terminate #{node_to_remove}. Not removing it.")
+        return 0
+      end
     end
 
+    # And then clean up the internal state.
     remove_node_from_local_and_zookeeper(node_to_remove.private_ip)
-
     to_remove = {}
     @app_info_map.each { |version_key, info|
       next if info['appservers'].nil?
@@ -5113,8 +5159,17 @@ HOSTS
       return max - num_appservers
     end
 
+    # We have seen the current_sessions to amply fluctuate from reading to
+    # reading, so we smooth it out picking the max we have seen over the
+    # last 10 reads.
+    @curr_sessions_list.delete_at(0)  if @curr_sessions_list.length >= 10
+    @curr_sessions_list << current_sessions
+    scale_sessions = @curr_sessions_list.max
+    Djinn.log_debug("Using #{scale_sessions} as current_sessions value " \
+                    "for scaling #{version_key}.")
+
     allow_concurrency = version_details.fetch('threadsafe', true)
-    current_load = calculate_current_load(num_appservers, current_sessions,
+    current_load = calculate_current_load(num_appservers, scale_sessions,
                                           allow_concurrency)
     if current_load >= MAX_LOAD_THRESHOLD
       if num_appservers == max
@@ -5123,7 +5178,7 @@ HOSTS
         return 0
       end
       appservers_to_scale = calculate_appservers_needed(
-          num_appservers, current_sessions, allow_concurrency)
+          num_appservers, scale_sessions, allow_concurrency)
 
       # Let's make sure we don't get over the user define maximum.
       if num_appservers + appservers_to_scale > max
@@ -5143,7 +5198,7 @@ HOSTS
         return 0
       end
       appservers_to_scale = calculate_appservers_needed(
-          num_appservers, current_sessions, allow_concurrency)
+          num_appservers, scale_sessions, allow_concurrency)
       Djinn.log_debug("The deployment is below its minimum load threshold " \
                       "for #{version_key} - Advising that we scale down " \
                       "#{appservers_to_scale.abs} AppServers.")
@@ -5810,7 +5865,7 @@ HOSTS
     node_stats['is_loaded'] = @done_loading
     node_stats['public_ip'] = my_node.public_ip
     node_stats['private_ip'] = my_node.private_ip
-    node_stats['roles'] = my_node.jobs || ['none']
+    node_stats['roles'] = my_node.roles || ['none']
 
     JSON.dump(node_stats)
   end
