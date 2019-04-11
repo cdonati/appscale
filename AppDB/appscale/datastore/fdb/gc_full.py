@@ -8,8 +8,8 @@ from fdb.directory_impl import DirectorySubspace
 
 
 from tornado import gen
-from tornado.ioloop import IOLoop
-from tornado.locks import Event
+
+
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
 from appscale.datastore.fdb.utils import (
@@ -52,100 +52,6 @@ def kv_to_dir(parent, kv):
   return DirectorySubspace(path, kv.value)
 
 
-class PollingLock(object):
-  """ Acquires a lock by writing to a key. This is suitable for a leader
-      election in cases where some downtime and initial acquisition delay is
-      acceptable.
-
-      Unlike ZooKeeper and etcd, FoundationDB does not have a way
-      to specify that a key should be automatically deleted if a client does
-      not heartbeat at a regular interval. This implementation requires the
-      leader to update the key at regular intervals to indicate that it is
-      still alive. All the other lock candidates check at a longer interval to
-      see if the leader has stopped updating the key.
-
-      Since client timestamps are unreliable, candidates do not know the
-      absolute time the key was updated. Therefore, they each wait for the full
-      timeout interval before checking the key again.
-  """
-  # The number of seconds to wait before trying to claim the lease.
-  _LEASE_TIMEOUT = 60
-
-  # The number of seconds to wait before updating the lease.
-  _HEARTBEAT_INTERVAL = int(_LEASE_TIMEOUT / 10)
-
-  def __init__(self, db, tornado_fdb, key):
-    self.key = key
-    self._db = db
-    self._tornado_fdb = tornado_fdb
-
-    self._client_id = uuid.uuid4()
-    self._owner = None
-    self._op_id = None
-    self._deadline = None
-    self._event = Event()
-
-  @property
-  def acquired(self):
-    if self._deadline is None:
-      return False
-
-    return self._owner == self._client_id and time.time() < self._deadline
-
-  @gen.coroutine
-  def start(self):
-    IOLoop.current().spawn_callback(self._run)
-
-  @gen.coroutine
-  def acquire(self):
-    # Since there is no automatic event timeout, the condition is checked
-    # before every acquisition.
-    if not self.acquired:
-      self._event.clear()
-
-    yield self._event.wait()
-
-  @gen.coroutine
-  def _run(self):
-    while True:
-      try:
-        yield self._acquire_lease()
-      except Exception:
-        logger.exception('Unable to acquire lease')
-        yield gen.sleep(10)
-
-  @gen.coroutine
-  def _acquire_lease(self):
-    tr = self._db.create_transaction()
-    lease_value = yield self._tornado_fdb.get(tr, self.key)
-
-    if lease_value.present():
-      self._owner, new_op_id = fdb.tuple.unpack(lease_value)
-      if new_op_id != self._op_id:
-        self._deadline = time.time() + self._LEASE_TIMEOUT
-        self._op_id = new_op_id
-    else:
-      self._owner = None
-
-    can_acquire = self._owner is None or time.time() > self._deadline
-    if can_acquire or self._owner == self._client_id:
-      op_id = uuid.uuid4()
-      tr[self.key] = fdb.tuple.pack((self._client_id, op_id))
-      yield self._tornado_fdb.commit(tr)
-      self._owner = self._client_id
-      self._op_id = op_id
-      self._deadline = time.time() + self._LEASE_TIMEOUT
-      self._event.set()
-      if can_acquire:
-        logger.info('Acquired lock for {}'.format(repr(self.key)))
-
-      yield gen.sleep(self._HEARTBEAT_INTERVAL)
-      return
-
-    # Since another candidate holds the lock, wait until it might expire.
-    yield gen.sleep(max(self._deadline - time.time(), 0))
-
-
 class GarbageCollector(object):
   _DELETED_DIR = ('garbage', 'deleted_versions')
 
@@ -159,14 +65,6 @@ class GarbageCollector(object):
 
   def start(self):
     IOLoop.current().spawn_callback(self._run_under_lock)
-
-  def index_deleted_version(self, tr, project_id, namespace, path, version,
-                            op_id=0):
-    # op_id allows multiple versions to be deleted in a single transaction.
-    deleted_dir = self._directory_cache.get((project_id,) + self._DELETED_DIR)
-    key = deleted_dir.pack_with_versionstamp((fdb.tuple.Versionstamp(), op_id))
-    value = fdb.tuple.pack((project_id, namespace) + path + (version,))
-    tr.set_versionstamped_key(key, value)
 
   @gen.coroutine
   def clear_version(self, project_id, version_prefixes, gc_keys, tr=None):
@@ -183,14 +81,6 @@ class GarbageCollector(object):
 
     if create_transaction:
       yield self._tornado_fdb.commit(tr)
-
-  def clear_later(self, project_id, namespace, path, version, gc_versionstamp):
-    if not isinstance(gc_versionstamp, fdb.tuple.Versionstamp):
-      gc_versionstamp = fdb.tuple.Versionstamp(str(gc_versionstamp))
-
-    IOLoop.current().call_later(
-      MAX_TX_DURATION, self.clear_version, namespace, path, version,
-      gc_versionstamp)
 
   @gen.coroutine
   def _run_under_lock(self):
