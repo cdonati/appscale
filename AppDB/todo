@@ -99,3 +99,4 @@ refine data layer: commit_vs shouldn't equal 0 when entity doesn't exist
 fix fdb python bug with encoding versionstamp for fdb.impl.Value
 transactional tasks
 custom encoding for TRVersion objects (save two bytes)
+add test committing a tx with no mutations

@@ -203,6 +203,7 @@ class TransactionManager(object):
 
       group_path = encode_path(key.path())[:2]
       mutated_groups.add((key.name_space(), group_path))
+
     tx_groups = queried_groups | lookup_groups | mutated_groups
     max_groups = MAX_GROUPS_FOR_XG if xg else 1
     if len(tx_groups) > max_groups:

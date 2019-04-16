@@ -301,73 +301,11 @@ class FDBDatastore(object):
     tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
     read_vs, lookups, queried_groups, mutations = tx_metadata
 
-    group_update_futures = [
-      self._data_manager.last_commit(tr, project_id, namespace, group_path)
-      for namespace, group_path in queried_groups]
-
-    # Index keys that require a full lookup rather than a versionstamp.
-    require_data = set()
-    for mutation in mutations:
-      key = (mutation if isinstance(mutation, entity_pb.Reference)
-             else mutation.key())
-      require_data.add(key.Encode())
-
-    # Start fetching versionstamps for lookups first to invalidate sooner.
-    futures = {}
-    for key in lookups:
-      encoded_key = key.Encode()
-      if encoded_key in require_data:
-        futures[encoded_key] = self._data_manager.get_latest(tr, key)
-      else:
-        futures[encoded_key] = self._data_manager.latest_vs(tr, key)
-
-    # Fetch remaining entities that were mutated.
-    for mutation in mutations:
-      key = (mutation if isinstance(mutation, entity_pb.Reference)
-             else mutation.key())
-      encoded_key = key.Encode()
-      if encoded_key not in futures:
-        futures[encoded_key] = self._data_manager.get_latest(tr, key)
-
-    group_updates = yield group_update_futures
-    present_group_updates = [vs for vs in group_updates if vs is not None]
-    if any(commit_vs > read_vs for commit_vs in present_group_updates):
-      raise ConcurrentModificationException(
-        'A queried group was modified after this transaction was started.')
-
-    for key in lookups:
-      latest_commit_vs = yield futures[key.Encode()]
-      if isinstance(latest_commit_vs, tuple):
-        latest_commit_vs = latest_commit_vs[-1]
-
-      if isinstance(latest_commit_vs, int) and latest_commit_vs == 0:
-        continue
-
-      if latest_commit_vs > read_vs:
-        logger.debug('key: {}'.format(encode_path(key.path())))
-        logger.debug('latest_commit_vs: {}'.format(latest_commit_vs))
-        logger.debug('read_vs: {}'.format(read_vs))
-        raise ConcurrentModificationException(
-          'An entity was modified after this transaction was started.')
-
-    # Apply mutations.
-    old_entities = []
-    for mutation in mutations:
-      op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
-      key = mutation if op == 'delete' else mutation.key()
-      old_entity_response = yield futures[key.Encode()]
-      old_encoded, old_version, old_vs = old_entity_response[1:]
-      if old_encoded:
-        old_entity = entity_pb.EntityProto(old_encoded)
-        old_entities.append((old_entity, old_vs))
-      else:
-        old_entity = None
-
-      new_version = next_entity_version(old_version)
-      new_encoded = mutation.Encode() if op == 'put' else ''
-      self._data_manager.put(tr, key, new_version, new_encoded)
-      new_entity = mutation if op == 'put' else None
-      self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
+    try:
+      old_entities = yield self._apply_mutations(
+        tr, project_id, queried_groups, mutations, lookups, read_vs)
+    finally:
+      self._tx_manager.delete(tr, project_id, txid)
 
     vs_future = None
     if old_entities:
@@ -437,3 +375,77 @@ class FDBDatastore(object):
     self.index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
 
     raise gen.Return((old_entity, old_vs, new_version))
+
+  @gen.coroutine
+  def _apply_mutations(self, tr, project_id, queried_groups, mutations,
+                       lookups, read_vs):
+    # TODO: Check if transactional tasks count as a side effect.
+    if not mutations:
+      raise gen.Return([])
+
+    group_update_futures = [
+      self._data_manager.last_commit(tr, project_id, namespace, group_path)
+      for namespace, group_path in queried_groups]
+
+    # Index keys that require a full lookup rather than a versionstamp.
+    require_data = set()
+    for mutation in mutations:
+      key = (mutation if isinstance(mutation, entity_pb.Reference)
+             else mutation.key())
+      require_data.add(key.Encode())
+
+    # Start fetching versionstamps for lookups first to invalidate sooner.
+    futures = {}
+    for key in lookups:
+      encoded_key = key.Encode()
+      if encoded_key in require_data:
+        futures[encoded_key] = self._data_manager.get_latest(tr, key)
+      else:
+        futures[encoded_key] = self._data_manager.latest_vs(tr, key)
+
+    # Fetch remaining entities that were mutated.
+    for mutation in mutations:
+      key = (mutation if isinstance(mutation, entity_pb.Reference)
+             else mutation.key())
+      encoded_key = key.Encode()
+      if encoded_key not in futures:
+        futures[encoded_key] = self._data_manager.get_latest(tr, key)
+
+    group_updates = yield group_update_futures
+    present_group_updates = [vs for vs in group_updates if vs is not None]
+    if any(commit_vs > read_vs for commit_vs in present_group_updates):
+      raise ConcurrentModificationException(
+        'A queried group was modified after this transaction was started.')
+
+    for key in lookups:
+      latest_commit_vs = yield futures[key.Encode()]
+      if isinstance(latest_commit_vs, tuple):
+        latest_commit_vs = latest_commit_vs[-1]
+
+      if isinstance(latest_commit_vs, int) and latest_commit_vs == 0:
+        continue
+
+      if latest_commit_vs > read_vs:
+        raise ConcurrentModificationException(
+          'An entity was modified after this transaction was started.')
+
+    # Apply mutations.
+    old_entities = []
+    for mutation in mutations:
+      op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
+      key = mutation if op == 'delete' else mutation.key()
+      old_entity_response = yield futures[key.Encode()]
+      old_encoded, old_version, old_vs = old_entity_response[1:]
+      if old_encoded:
+        old_entity = entity_pb.EntityProto(old_encoded)
+        old_entities.append((old_entity, old_vs))
+      else:
+        old_entity = None
+
+      new_version = next_entity_version(old_version)
+      new_encoded = mutation.Encode() if op == 'put' else ''
+      self._data_manager.put(tr, key, new_version, new_encoded)
+      new_entity = mutation if op == 'put' else None
+      self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
+
+    raise gen.Return(old_entities)
