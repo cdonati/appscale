@@ -18,7 +18,7 @@ from tornado.ioloop import IOLoop
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
-from appscale.datastore.fdb.codecs import decode_str
+from appscale.datastore.fdb.codecs import decode_str, encode_path
 from appscale.datastore.fdb.data import DataManager
 from appscale.datastore.fdb.gc import GarbageCollector
 from appscale.datastore.fdb.indexes import (
@@ -66,7 +66,10 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
-    logger.debug('put_request:\n{}'.format(put_request))
+    #logger.debug('put_request:\n{}'.format(put_request))
+    paths = [encode_path(entity.key().path())
+             for entity in put_request.entity_list()]
+    logger.debug('put_request: {}'.format(paths))
     project_id = decode_str(project_id)
 
     if put_request.auto_id_policy() != put_request.CURRENT:
@@ -75,6 +78,7 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
 
     if put_request.has_transaction():
+      logger.debug('put in tx: {}'.format(put_request.transaction().handle()))
       self._tx_manager.log_rpc(tr, project_id, put_request)
       writes = [(entity.key(), None, None, None)
                 for entity in put_request.entity_list()]
@@ -102,16 +106,20 @@ class FDBDatastore(object):
       if new_version is not None:
         put_response.add_version(new_version)
 
-    logger.debug('put_response:\n{}'.format(put_response))
+    logger.debug('success')
+    #logger.debug('put_response:\n{}'.format(put_response))
 
   @gen.coroutine
   def dynamic_get(self, project_id, get_request, get_response):
-    logger.debug('get_request:\n{}'.format(get_request))
+    #logger.debug('get_request:\n{}'.format(get_request))
+    paths = [encode_path(key.path()) for key in get_request.key_list()]
+    logger.debug('get_request: {}'.format(paths))
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
 
     read_vs = None
     if get_request.has_transaction():
+      logger.debug('get in tx: {}'.format(get_request.transaction().handle()))
       read_vs_future = self._tx_manager.get_read_vs(
         tr, project_id, get_request.transaction().handle())
       self._tx_manager.log_rpc(tr, project_id, get_request)
@@ -133,15 +141,18 @@ class FDBDatastore(object):
 
     yield self._tornado_fdb.commit(tr)
 
+    paths = []
     for key, encoded_entity, version, _ in results:
       response_entity = get_response.add_entity()
       response_entity.mutable_key().CopyFrom(key)
       response_entity.set_version(version)
       if encoded_entity:
+        paths.append(encode_path(key.path()))
         entity = entity_pb.EntityProto(encoded_entity)
         response_entity.mutable_entity().CopyFrom(entity)
 
-    logger.debug('get_response:\n{}'.format(get_response))
+    #logger.debug('get_response:\n{}'.format(get_response))
+    logger.debug('get_response: {}'.format(paths))
 
   @gen.coroutine
   def dynamic_delete(self, project_id, delete_request):
@@ -284,6 +295,7 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def apply_txn_changes(self, project_id, txid):
+    logger.debug('applying {}:{}'.format(project_id, txid))
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
