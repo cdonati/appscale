@@ -425,6 +425,7 @@ class MergeJoinIterator(object):
         self._done = True
         break
 
+      logger.debug('usable_entry: {}'.format(usable_entry))
       if usable_entry.path == self._candidate_path:
         self._candidate_entries.append(usable_entry)
       else:
