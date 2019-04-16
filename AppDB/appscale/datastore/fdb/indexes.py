@@ -402,6 +402,10 @@ class MergeJoinIterator(object):
       usable_entry = None
       # TODO: Keep cache of ranges to reduce unnecessary lookups.
       index_exhausted = False
+      logger.debug('index: {}'.format(index))
+      logger.debug('key_slice: {}'.format(key_slice))
+      logger.debug('prop_name: {}'.format(prop_name))
+      logger.debug('value: {}'.format(value))
       while True:
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
