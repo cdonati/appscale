@@ -372,6 +372,7 @@ class MergeJoinIterator(object):
     if read_vs is None:
       read_vs = fdb.tuple.Versionstamp()
 
+    logger.debug('merge join inter filter props: {}'.format(filter_props))
     self._filter_props = filter_props
     self._read_vs = read_vs
     self._tr = tr
@@ -712,6 +713,7 @@ class SinglePropIndex(Index):
         continue
 
       for op, value in filter_prop.filters:
+        logger.debug('about to encode: {}'.format(value))
         encoded_value = encoder(value)
         if op in START_FILTERS:
           start = get_fdb_key_selector(op, subspace.pack((encoded_value,)))
