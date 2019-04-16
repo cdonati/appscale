@@ -318,7 +318,8 @@ class FDBDatastore(object):
         futures[encoded_key] = self._data_manager.get_latest(tr, key)
 
     group_updates = yield group_update_futures
-    if any(commit_vs > read_vs for commit_vs in group_updates):
+    present_group_updates = [vs for vs in group_updates if vs is not None]
+    if any(commit_vs > read_vs for commit_vs in present_group_updates):
       raise ConcurrentModificationException(
         'A queried group was modified after this transaction was started.')
 

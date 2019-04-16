@@ -89,7 +89,10 @@ class DataManager(object):
       (project_id, self.GROUP_UPDATES_DIR, namespace))
     group_key = group_ns_dir.pack(group_path)
     last_updated_vs = yield self._tornado_fdb.get(tr, group_key)
-    raise gen.Return(last_updated_vs)
+    if not last_updated_vs.present():
+      return
+
+    raise gen.Return(fdb.tuple.Versionstamp(last_updated_vs))
 
   def put(self, tr, key, version, encoded_entity):
     path_subspace = self._subspace_from_key(key)
