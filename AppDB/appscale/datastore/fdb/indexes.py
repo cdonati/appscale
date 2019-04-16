@@ -1086,7 +1086,7 @@ class IndexManager(object):
       if len(equality_props) > 1:
         raise BadRequest(u'Only one equality key filter is supported')
 
-      equality_prop = next(equality_props, None)
+      equality_prop = next(iter(equality_props), None)
       other_props = [filter_prop for filter_prop in filter_props
                      if filter_prop.name != KEY_PROP]
       for filter_prop in other_props:
