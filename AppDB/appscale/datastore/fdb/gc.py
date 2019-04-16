@@ -138,43 +138,43 @@ class GarbageCollector(object):
         yield self._tornado_fdb.commit(tr)
         break
 
-  @gen.coroutine
-  def _groom_projects(self):
-    while True:
-      try:
-        yield self._lock.acquire()
-        for project_id in self._directory_cache.root.list(self._db):
-          yield self._groom_project(project_id)
-      except Exception:
-        logger.exception(u'Unexpected error while grooming projects')
-        yield gen.sleep(10)
+  # @gen.coroutine
+  # def _groom_projects(self):
+  #   while True:
+  #     try:
+  #       yield self._lock.acquire()
+  #       for project_id in self._directory_cache.root.list(self._db):
+  #         yield self._groom_project(project_id)
+  #     except Exception:
+  #       logger.exception(u'Unexpected error while grooming projects')
+  #       yield gen.sleep(10)
 
-  @gen.coroutine
-  def _newest_vs(self, project_id):
-    tr = self._db.create_transaction()
-    deleted_dir = self._directory_cache.get(
-      (project_id, self.DELETED_VERSIONS_DIR))
-
-    def future_for_range(byte_num):
-      scatter_byte = bytes(bytearray([scatter_byte_num]))
-      hash_range = deleted_dir.range((scatter_byte,))
-      return self._tornado_fdb.get_range(tr, hash_range, limit=1, reverse=True,
-                                         snapshot=True)
-
-    # Fetch in 4 batches of 64.
-    for quadrant in range(4):
-      futures = []
-      for scatter_byte_num in range(quadrant * 64, (quadrant + 1) * 64):
-        scatter_byte = bytes(bytearray([scatter_byte_num]))
-        hash_range = deleted_dir.range((scatter_byte,))
-        futures.append()
-        if commit_vs.is_complete():
-          pack = deleted_dir.pack
-        else:
-          pack = deleted_dir.pack_with_versionstamp
-
-        # The entity path is prefixed with a hash in order to scatter the writes.
-        return pack((hash_tuple(path), commit_vs, namespace, path, old_vs))
-        scatter_byte =
-    futures = []
-    for scatter_byte in range(64)
+  # @gen.coroutine
+  # def _newest_vs(self, project_id):
+  #   tr = self._db.create_transaction()
+  #   deleted_dir = self._directory_cache.get(
+  #     (project_id, self.DELETED_VERSIONS_DIR))
+  #
+  #   def future_for_range(byte_num):
+  #     scatter_byte = bytes(bytearray([scatter_byte_num]))
+  #     hash_range = deleted_dir.range((scatter_byte,))
+  #     return self._tornado_fdb.get_range(tr, hash_range, limit=1, reverse=True,
+  #                                        snapshot=True)
+  #
+  #   # Fetch in 4 batches of 64.
+  #   for quadrant in range(4):
+  #     futures = []
+  #     for scatter_byte_num in range(quadrant * 64, (quadrant + 1) * 64):
+  #       scatter_byte = bytes(bytearray([scatter_byte_num]))
+  #       hash_range = deleted_dir.range((scatter_byte,))
+  #       futures.append()
+  #       if commit_vs.is_complete():
+  #         pack = deleted_dir.pack
+  #       else:
+  #         pack = deleted_dir.pack_with_versionstamp
+  #
+  #       # The entity path is prefixed with a hash in order to scatter the writes.
+  #       return pack((hash_tuple(path), commit_vs, namespace, path, old_vs))
+  #       scatter_byte =
+  #   futures = []
+  #   for scatter_byte in range(64)
