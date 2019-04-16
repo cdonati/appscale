@@ -700,6 +700,7 @@ class SinglePropIndex(Index):
       start, stop = encode_ancestor_range(subspace, ancestor_path)
 
     for filter_prop in filter_props:
+      logger.debug('processing {}'.format(filter_prop))
       if filter_prop.name == self.prop_name:
         encoder = encode_value
       elif filter_prop.name == KEY_PROP:
