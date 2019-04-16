@@ -402,10 +402,6 @@ class MergeJoinIterator(object):
       usable_entry = None
       # TODO: Keep cache of ranges to reduce unnecessary lookups.
       index_exhausted = False
-      logger.debug('index: {}'.format(index))
-      logger.debug('key_slice: {}'.format(key_slice))
-      logger.debug('prop_name: {}'.format(prop_name))
-      logger.debug('value: {}'.format(value))
       while True:
         kvs, count, more = yield self._tornado_fdb.get_range(
           self._tr, key_slice, 0, fdb.StreamingMode.small, 1,
@@ -704,10 +700,10 @@ class SinglePropIndex(Index):
       start, stop = encode_ancestor_range(subspace, ancestor_path)
 
     for filter_prop in filter_props:
-      if filter_prop.name == KEY_PROP:
-        encoder = self.encode_path
-      elif filter_prop.name == self.prop_name:
+      if filter_prop.name == self.prop_name:
         encoder = encode_value
+      elif filter_prop.name == KEY_PROP:
+        encoder = self.encode_path
       else:
         raise BadRequest(u'Unexpected filter: {}'.format(filter_prop.name))
 
@@ -1085,13 +1081,26 @@ class IndexManager(object):
         raise BadRequest(u'Query not supported')
 
       indexes = []
-      for filter_prop in filter_props:
+      equality_props = [filter_prop for filter_prop in filter_props
+                        if filter_prop.name == KEY_PROP]
+      if len(equality_props) > 1:
+        raise BadRequest(u'Only one equality key filter is supported')
+
+      equality_prop = next(equality_props, None)
+      other_props = [filter_prop for filter_prop in filter_props
+                     if filter_prop.name != KEY_PROP]
+      for filter_prop in other_props:
         index = SinglePropIndex.from_cache(
           project_id, namespace, decode_str(query.kind()), filter_prop.name,
           self._directory_cache)
         for op, value in filter_prop.filters:
           tmp_filter_prop = FilterProperty(filter_prop.name, [(op, value)])
-          slice = index.get_slice((tmp_filter_prop,), ancestor_path,
+          if equality_prop is not None:
+            tmp_filter_props = (tmp_filter_prop, equality_prop)
+          else:
+            tmp_filter_props = (tmp_filter_prop,)
+
+          slice = index.get_slice(tmp_filter_props, ancestor_path,
                                   start_cursor, end_cursor)
           indexes.append([index, slice, filter_prop.name, value])
 
