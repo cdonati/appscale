@@ -344,6 +344,9 @@ class FDBDatastore(object):
         continue
 
       if latest_commit_vs > read_vs:
+        logger.debug('key: {}'.format(encode_path(key.path())))
+        logger.debug('latest_commit_vs: {}'.format(latest_commit_vs))
+        logger.debug('read_vs: {}'.format(read_vs))
         raise ConcurrentModificationException(
           'An entity was modified after this transaction was started.')
 
@@ -375,6 +378,8 @@ class FDBDatastore(object):
     if old_entities:
       new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
       self._gc.clear_later(old_entities, new_vs)
+
+    logger.debug('success')
 
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
