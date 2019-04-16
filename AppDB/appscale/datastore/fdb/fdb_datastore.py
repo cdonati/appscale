@@ -67,9 +67,6 @@ class FDBDatastore(object):
   @gen.coroutine
   def dynamic_put(self, project_id, put_request, put_response):
     #logger.debug('put_request:\n{}'.format(put_request))
-    paths = [encode_path(entity.key().path())
-             for entity in put_request.entity_list()]
-    logger.debug('put_request: {}'.format(paths))
     project_id = decode_str(project_id)
 
     if put_request.auto_id_policy() != put_request.CURRENT:
