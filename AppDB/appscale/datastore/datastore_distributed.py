@@ -27,6 +27,7 @@ from appscale.datastore.cassandra_env.utils import deletions_for_entity
 from appscale.datastore.cassandra_env.utils import mutations_for_entity
 from appscale.datastore.index_manager import IndexInaccessible
 from appscale.datastore.taskqueue_client import EnqueueError, TaskQueueClient
+from appscale.datastore.utils import _FindIndexToUse
 from appscale.datastore.utils import clean_app_id
 from appscale.datastore.utils import decode_path
 from appscale.datastore.utils import encode_entity_table_key
@@ -47,8 +48,7 @@ from appscale.datastore.zkappscale import zktransaction
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api import datastore_errors
-from google.appengine.api.datastore_distributed import (
-  _FindIndexToUse, _MAX_ACTIONS_PER_TXN)
+from google.appengine.api.datastore_distributed import _MAX_ACTIONS_PER_TXN
 from google.appengine.datastore import appscale_stub_util
 from google.appengine.datastore import datastore_pb
 from google.appengine.datastore import datastore_index
@@ -1552,7 +1552,8 @@ class DatastoreDistributed():
 
     if query.has_ancestor():
       if len(order_info) > 0:
-        raise BadRequest('Ordered ancestor queries require an index')
+        # Ordered ancestor queries require an index.
+        return
 
       result = yield self.ancestor_query(query, filter_info)
       raise gen.Return(result)
@@ -2115,15 +2116,21 @@ class DatastoreDistributed():
 
   @staticmethod
   @gen.coroutine
-  def _common_refs_from_ranges(ranges, limit):
+  def _common_refs_from_ranges(ranges, limit, path=None):
     """ Find common entries across multiple index ranges.
 
     Args:
       ranges: A list of RangeIterator objects.
       limit: An integer specifying the maximum number of references to find.
+      path: An entity_pb.Path object that restricts the query to a single key.
     Returns:
       A dictionary mapping entity references to index entries.
     """
+    if path is not None:
+      limit = 1
+      for range_ in ranges:
+        range_.set_cursor(path, inclusive=True)
+
     reference_hash = {}
     min_common_path = ranges[0].get_cursor()
     entries_exhausted = False
@@ -2200,9 +2207,24 @@ class DatastoreDistributed():
     # We only use references from the ascending property table.
     direction = datastore_pb.Query_Order.ASCENDING
 
+    prop_filters = [filter_ for filter_ in query.filter_list()
+                    if filter_.property(0).name() != '__key__']
     ranges = [RangeIterator.from_filter(self.datastore_batch, app_id,
                                         query.name_space(), kind, filter_)
-              for filter_ in query.filter_list()]
+              for filter_ in prop_filters]
+
+    # Check if the query is restricted to a single key.
+    path = None
+    key_filters = [filter_ for filter_ in query.filter_list()
+                   if filter_.property(0).name() == '__key__']
+    if len(key_filters) > 1:
+      raise BadRequest('Queries can only specify one key')
+
+    if key_filters:
+      path = entity_pb.Path()
+      ref_val = key_filters[0].property(0).value().referencevalue()
+      for element in ref_val.pathelement_list():
+        path.add_element().MergeFrom(element)
 
     if query.has_ancestor():
       for range_ in ranges:
@@ -2216,7 +2238,7 @@ class DatastoreDistributed():
 
     entities = []
     while True:
-      reference_hash = yield self._common_refs_from_ranges(ranges, limit)
+      reference_hash = yield self._common_refs_from_ranges(ranges, limit, path)
       new_entities = yield self.__fetch_and_validate_entity_set(
         reference_hash, limit, app_id, direction)
       entities.extend(new_entities)
@@ -2233,17 +2255,6 @@ class DatastoreDistributed():
     results = entities[:limit]
     self.logger.debug('Returning {} results'.format(len(results)))
     raise gen.Return(results)
-
-  def does_composite_index_exist(self, query):
-    """ Checks to see if the query has a composite index that can implement
-    the given query.
-
-    Args:
-      query: A datastore_pb.Query.
-    Returns:
-      True if the composite exists, False otherwise.
-    """
-    return query.composite_index_size() > 0
 
   def get_range_composite_query(self, query, filter_info, composite_index):
     """ Gets the start and end key of a composite query.
@@ -2447,7 +2458,7 @@ class DatastoreDistributed():
     return start_key, end_key
 
   @gen.coroutine
-  def composite_v2(self, query, filter_info):
+  def composite_v2(self, query, filter_info, composite_index):
     """Performs composite queries using a range query against
        the composite table. Faster than in-memory filters, but requires
        indexes to be built upon each put.
@@ -2456,23 +2467,11 @@ class DatastoreDistributed():
       query: The query to run.
       filter_info: dictionary mapping property names to tuples of
         filter operators and values.
+      composite_index: An entity_pb.CompositeIndex object to use for the query.
     Returns:
       List of entities retrieved from the given query.
     """
     self.logger.debug('Composite Query:\n{}'.format(query))
-
-    app_id = clean_app_id(query.app())
-    if query.composite_index_list():
-      given_index = query.composite_index(0)
-      try:
-        composite_index = next(index for index in self.get_indexes(app_id)
-                               if index.id() == given_index.id())
-      except StopIteration:
-        raise dbconstants.BadRequest('The given index was not found')
-    else:
-      composite_index = _FindIndexToUse(query, self.get_indexes(app_id))
-      if composite_index is None:
-        raise dbconstants.NeedsIndex('This composite query requires an index')
 
     if composite_index.state() != entity_pb.CompositeIndex.READ_WRITE:
       raise dbconstants.NeedsIndex(
@@ -2851,28 +2850,6 @@ class DatastoreDistributed():
       distinct_checker.append(distinct_str)
     return entities
 
-  @gen.coroutine
-  def __composite_query(self, query, filter_info, _):
-    """Performs Composite queries which is a combination of
-       multiple properties to query on.
-
-    Args:
-      query: The query to run.
-      filter_info: dictionary mapping property names to tuples of
-        filter operators and values.
-    Returns:
-      List of entities retrieved from the given query.
-    """
-    if self.does_composite_index_exist(query):
-      result = yield self.composite_v2(query, filter_info)
-      raise gen.Return(result)
-
-    self.logger.error('No composite ID was found for query:\n{}.'.
-      format(query))
-    raise apiproxy_errors.ApplicationError(
-      datastore_pb.Error.NEED_INDEX,
-      'No composite index provided')
-
   # These are the three different types of queries attempted. Queries
   # can be identified by their filters and orderings.
   # TODO: Queries have hints which help in picking which strategy to do first.
@@ -2918,10 +2895,9 @@ class DatastoreDistributed():
     filter_info = self.generate_filter_info(filters)
     order_info = self.generate_order_info(orders)
 
-    # We do the composite check first because its easy to determine if a query
-    # has a composite index.
-    if query.composite_index_size() > 0:
-      result = yield self.__composite_query(query, filter_info, order_info)
+    index_to_use = _FindIndexToUse(query, self.get_indexes(app_id))
+    if index_to_use is not None:
+      result = yield self.composite_v2(query, filter_info, index_to_use)
       raise gen.Return(result)
 
     for strategy in DatastoreDistributed._QUERY_STRATEGIES:
@@ -2929,14 +2905,8 @@ class DatastoreDistributed():
       if results or results == []:
         raise gen.Return(results)
 
-    # The client may not have given a composite index, but there may be one
-    # that still works.
-    index_to_use = _FindIndexToUse(query, self.get_indexes(app_id))
-    if index_to_use is not None:
-      result = yield self.__composite_query(query, filter_info, order_info)
-      raise gen.Return(result)
-
-    raise BadRequest('The query cannot be satisfied')
+    raise dbconstants.NeedsIndex(
+      'An additional index is required to satisfy the query')
 
   @gen.coroutine
   def _dynamic_run_query(self, query, query_result):
