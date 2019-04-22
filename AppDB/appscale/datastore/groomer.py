@@ -871,8 +871,8 @@ class DatastoreGroomer(threading.Thread):
     Returns:
       A distributed_datastore.DatastoreDistributed object.
     """
-    ds_distributed = datastore_distributed.DatastoreDistributed(app_id,
-      self.datastore_path, require_indexes=False)
+    ds_distributed = datastore_distributed.DatastoreDistributed(
+      app_id, self.datastore_path)
     apiproxy_stub_map.apiproxy.RegisterStub('datastore_v3', ds_distributed)
     apiproxy_stub_map.apiproxy.RegisterStub('memcache',
       memcache_distributed.MemcacheService())
@@ -1129,7 +1129,7 @@ class DatastoreGroomer(threading.Thread):
 
     self.update_groomer_state([])
 
-    timestamp = datetime.datetime.utcnow()
+    timestamp = datetime.datetime.utcnow().replace(microsecond=0)
 
     self.update_statistics(timestamp)
     self.update_namespaces(timestamp)

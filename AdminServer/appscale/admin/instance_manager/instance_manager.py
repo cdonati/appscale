@@ -1,4 +1,5 @@
 """ Fulfills AppServer instance assignments from the scheduler. """
+import hashlib
 import logging
 import math
 import json
@@ -11,14 +12,15 @@ from tornado import gen
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.locks import Lock as AsyncLock
 
-from appscale.admin.constants import UNPACK_ROOT
+from appscale.admin.constants import CONTROLLER_STATE_NODE, UNPACK_ROOT
 from appscale.admin.instance_manager.constants import (
   API_SERVER_LOCATION, API_SERVER_PREFIX, APP_LOG_SIZE, BACKOFF_TIME,
   BadConfigurationException, DASHBOARD_LOG_SIZE, DASHBOARD_PROJECT_ID,
-  DEFAULT_MAX_APPSERVER_MEMORY, FETCH_PATH, GO_SDK, INSTANCE_CLASSES,
-  JAVA_APPSERVER_CLASS, MAX_API_SERVER_PORT, MAX_INSTANCE_RESPONSE_TIME,
-  MONIT_INSTANCE_PREFIX, NoRedirection, PIDFILE_TEMPLATE, PYTHON_APPSERVER,
-  START_APP_TIMEOUT, STARTING_INSTANCE_PORT, VERSION_REGISTRATION_NODE)
+  DEFAULT_MAX_APPSERVER_MEMORY, FETCH_PATH, GO_SDK, HEALTH_CHECK_TIMEOUT,
+  INSTANCE_CLASSES, JAVA_APPSERVER_CLASS, MAX_API_SERVER_PORT,
+  MAX_INSTANCE_RESPONSE_TIME, MONIT_INSTANCE_PREFIX, NoRedirection,
+  PIDFILE_TEMPLATE, PYTHON_APPSERVER, START_APP_TIMEOUT,
+  STARTING_INSTANCE_PORT, VERSION_REGISTRATION_NODE)
 from appscale.admin.instance_manager.instance import (
   create_java_app_env, create_java_start_cmd, create_python_app_env,
   create_python27_start_cmd, get_login_server, Instance)
@@ -78,9 +80,6 @@ class InstanceManager(object):
   # The seconds to wait between performing health checks.
   HEALTH_CHECK_INTERVAL = 60
 
-  # The ZooKeeper node that keeps track of the head node's state.
-  CONTROLLER_STATE_NODE = '/appcontroller/state'
-
   def __init__(self, zk_client, monit_operator, routing_client,
                projects_manager, deployment_config, source_manager,
                syslog_server, thread_pool, private_ip):
@@ -130,7 +129,7 @@ class InstanceManager(object):
 
     # Subscribe to changes in controller state, which includes assignments and
     # the 'login' property.
-    self._zk_client.DataWatch(self.CONTROLLER_STATE_NODE,
+    self._zk_client.DataWatch(CONTROLLER_STATE_NODE,
                               self._controller_state_watch)
 
     # Subscribe to changes in project configuration, including relevant
@@ -212,6 +211,9 @@ class InstanceManager(object):
     logger.info("Start command: " + str(start_cmd))
     logger.info("Environment variables: " + str(env_vars))
 
+    base_version = version.revision_key.rsplit(VERSION_PATH_SEPARATOR, 1)[0]
+    log_tag = "app_{}".format(hashlib.sha1(base_version).hexdigest()[:28])
+
     monit_app_configuration.create_config_file(
       watch,
       start_cmd,
@@ -221,7 +223,9 @@ class InstanceManager(object):
       max_memory,
       self._syslog_server,
       check_port=True,
-      kill_exceeded_memory=True)
+      kill_exceeded_memory=True,
+      log_tag=log_tag,
+    )
 
     full_watch = '{}-{}'.format(watch, port)
 
@@ -388,7 +392,7 @@ class InstanceManager(object):
     while retries > 0:
       try:
         opener = urllib2.build_opener(NoRedirection)
-        response = opener.open(url)
+        response = opener.open(url, timeout=HEALTH_CHECK_TIMEOUT)
         if response.code != HTTPCodes.OK:
           logger.warning('{} returned {}. Headers: {}'.
                           format(url, response.code, response.headers.headers))
@@ -667,7 +671,7 @@ class InstanceManager(object):
         state.
     """
     persistent_update_controller_state = retry_data_watch_coroutine(
-      self.CONTROLLER_STATE_NODE, self._update_controller_state)
+      CONTROLLER_STATE_NODE, self._update_controller_state)
     IOLoop.instance().add_callback(
       persistent_update_controller_state, encoded_controller_state)
 

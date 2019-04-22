@@ -19,7 +19,6 @@ except ImportError:
 
 import requests_unixsocket
 
-from appscale.appcontroller_client import AppControllerException
 from appscale.common import appscale_info
 from appscale.common.constants import (
   HTTPCodes,
@@ -62,6 +61,7 @@ from .constants import (
   VALID_RUNTIMES,
   VersionNotChanged
 )
+from .controller_state import ControllerState
 from .operation import (
   DeleteServiceOperation,
   CreateVersionOperation,
@@ -71,6 +71,7 @@ from .operation import (
 from .operations_cache import OperationsCache
 from .push_worker_manager import GlobalPushWorkerManager
 from .resource_validator import validate_resource, ResourceValidationError
+from .routing.routing_manager import RoutingManager
 from .service_manager import ServiceManager, ServiceManagerHandler
 from .summary import get_combined_services
 
@@ -124,11 +125,12 @@ def wait_for_port_to_open(http_port, operation_id, deadline):
 
 
 @gen.coroutine
-def wait_for_deploy(operation_id):
+def wait_for_deploy(operation_id, controller_state):
   """ Tracks the progress of a deployment.
 
   Args:
     operation_id: A string specifying the operation ID.
+    controller_state: A ControllerState object.
   Raises:
     OperationTimeout if the deadline is exceeded.
   """
@@ -143,7 +145,11 @@ def wait_for_deploy(operation_id):
   http_port = operation.version['appscaleExtensions']['httpPort']
   yield wait_for_port_to_open(http_port, operation_id, deadline)
 
-  url = 'http://{}:{}'.format(options.login_ip, http_port)
+  login_host = options.login_ip
+  if controller_state.options is not None:
+    login_host = controller_state.options.get('login', login_host)
+
+  url = 'http://{}:{}'.format(login_host, http_port)
   operation.finish(url)
 
   logger.info('Finished operation {}'.format(operation_id))
@@ -477,19 +483,24 @@ class VersionsHandler(BaseHandler):
   # Reserved names for version IDs.
   RESERVED_VERSION_IDS = ('^default$', '^latest$', '^ah-.*$')
 
-  def initialize(self, ua_client, zk_client, version_update_lock, thread_pool):
+  def initialize(self, acc, ua_client, zk_client, version_update_lock,
+                 thread_pool, controller_state):
     """ Defines required resources to handle requests.
 
     Args:
+      acc: An AppControllerClient.
       ua_client: A UAClient.
       zk_client: A KazooClient.
       version_update_lock: A kazoo lock.
       thread_pool: A ThreadPoolExecutor.
+      controller_state: A ControllerState object.
     """
+    self.acc = acc
     self.ua_client = ua_client
     self.zk_client = zk_client
     self.version_update_lock = version_update_lock
     self.thread_pool = thread_pool
+    self.controller_state = controller_state
 
   def get_current_user(self):
     """ Retrieves the current user.
@@ -793,7 +804,22 @@ class VersionsHandler(BaseHandler):
     pre_wait = REDEPLOY_WAIT if version_exists else 0
     logger.debug(
       'Starting operation {} in {}s'.format(operation.id, pre_wait))
-    IOLoop.current().call_later(pre_wait, wait_for_deploy, operation.id)
+    IOLoop.current().call_later(pre_wait, wait_for_deploy, operation.id,
+                                self.controller_state)
+
+    # Update the project's cron configuration. This is a bit messy  because it
+    # means acc.update_cron is often called twice when deploying a version.
+    # However, it's needed for now to handle the following case:
+    # 1. The user updates a project's cron config, referencing a module that
+    #    isn't deployed yet.
+    # 2. The user deploys the referenced module from a directory that does not
+    #    have any cron configuration.
+    # In order for the cron entries to use the correct location,
+    # acc.update_cron needs to be called again even though the client did not
+    # request a cron configuration update. This can be eliminated in the
+    # future by routing requests based on the host header like in GAE.
+    if not version_exists:
+      self.acc.update_cron(project_id)
 
     self.write(json_encode(operation.rest_repr()))
 
@@ -802,7 +828,7 @@ class VersionHandler(BaseVersionHandler):
   """ Manages particular service versions. """
 
   def initialize(self, acc, ua_client, zk_client, version_update_lock,
-                 thread_pool):
+                 thread_pool, controller_state):
     """ Defines required resources to handle requests.
 
     Args:
@@ -811,12 +837,14 @@ class VersionHandler(BaseVersionHandler):
       zk_client: A KazooClient.
       version_update_lock: A kazoo lock.
       thread_pool: A ThreadPoolExecutor.
+      controller_state: A ControllerState object.
     """
     self.acc = acc
     self.ua_client = ua_client
     self.zk_client = zk_client
     self.version_update_lock = version_update_lock
     self.thread_pool = thread_pool
+    self.controller_state = controller_state
 
   def get_version(self, project_id, service_id, version_id):
     """ Fetches a version node.
@@ -854,7 +882,8 @@ class VersionHandler(BaseVersionHandler):
       'appscaleExtensions.httpPort',
       'appscaleExtensions.httpsPort',
       'automaticScaling.standard_scheduler_settings.max_instances',
-      'automaticScaling.standard_scheduler_settings.min_instances'}
+      'automaticScaling.standard_scheduler_settings.min_instances',
+      'servingStatus'}
     mapped_fields = {
       'automaticScaling.standard_scheduler_settings.max_instances':
         'automaticScaling.standardSchedulerSettings.maxInstances',
@@ -919,6 +948,17 @@ class VersionHandler(BaseVersionHandler):
               .setdefault('standardSchedulerSettings',{})
               .update(new_fields.get('automaticScaling')
                                 .get('standardSchedulerSettings',{})))
+
+    if 'servingStatus' in new_fields:
+      if not 'manualScaling' in version:
+        scaling_error = ('Serving status cannot be changed for Automatic '
+                         'Scaling versions')
+        raise CustomHTTPError(HTTPCodes.BAD_REQUEST, message=scaling_error)
+
+      if ServingStatus.STOPPED == new_fields['servingStatus']:
+        version['servingStatus'] = ServingStatus.STOPPED
+      elif 'servingStatus' in version:
+        del version['servingStatus']
 
     new_ports = utils.assign_ports(version, new_fields, self.zk_client)
     version['appscaleExtensions'].update(new_ports)
@@ -987,6 +1027,29 @@ class VersionHandler(BaseVersionHandler):
 
     raise gen.Return(version)
 
+  @gen.coroutine
+  def update_serving_status_for_version(self, project_id, service_id,
+                                        version_id, serving_status):
+    """ Updates service status for a version.
+
+    Args:
+      project_id: A string specifying a project ID.
+      service_id: A string specifying a service ID.
+      version_id: A string specifying a version ID.
+      serving_status: The desired status (SERVING|STOPPED)
+    Returns:
+      A dictionary containing completed version details.
+    """
+    new_fields = {'servingStatus': serving_status}
+    yield self.thread_pool.submit(self.version_update_lock.acquire)
+    try:
+      version = self.update_version(project_id, service_id, version_id,
+                                    new_fields)
+    finally:
+      self.version_update_lock.release()
+
+    raise gen.Return(version)
+
   def get(self, project_id, service_id, version_id):
     """ Gets the specified version resource.
 
@@ -999,6 +1062,10 @@ class VersionHandler(BaseVersionHandler):
 
     version_details = self.get_version(project_id, service_id, version_id)
 
+    login_host = options.login_ip
+    if self.controller_state.options is not None:
+      login_host = self.controller_state.options.get('login', login_host)
+
     # Hide details that aren't needed for the public API.
     version_details.pop('revision', None)
     version_details.get('appscaleExtensions', {}).pop('haproxyPort', None)
@@ -1008,7 +1075,7 @@ class VersionHandler(BaseVersionHandler):
       'name': 'apps/{}/services/{}/versions/{}'.format(project_id, service_id,
                                                        version_id),
       'servingStatus': ServingStatus.SERVING,
-      'versionUrl': 'http://{}:{}'.format(options.login_ip, http_port)
+      'versionUrl': 'http://{}:{}'.format(login_host, http_port)
     }
     response.update(version_details)
     self.write(json_encode(response))
@@ -1076,6 +1143,11 @@ class VersionHandler(BaseVersionHandler):
       version = yield self.update_scaling_for_version(
         project_id, service_id, version_id, new_min_instances,
         new_max_instances)
+
+    serving_status = version.get('servingStatus', None)
+    if serving_status:
+      version = yield self.update_serving_status_for_version(
+        project_id, service_id, version_id, serving_status)
 
     operation = UpdateVersionOperation(project_id, service_id, version)
     self.write(json_encode(operation.rest_repr()))
@@ -1291,14 +1363,22 @@ def main():
     logger.info('Starting push worker manager')
     GlobalPushWorkerManager(zk_client, monit_operator)
 
+  if options.private_ip in appscale_info.get_load_balancer_ips():
+    logger.info('Starting RoutingManager')
+    routing_manager = RoutingManager(zk_client)
+    routing_manager.start()
+
   service_manager = ServiceManager(zk_client)
   service_manager.start()
+
+  controller_state = ControllerState(zk_client)
 
   app = web.Application([
     ('/oauth/token', OAuthHandler, {'ua_client': ua_client}),
     ('/v1/apps/([^/]*)/services/([^/]*)/versions', VersionsHandler,
-     {'ua_client': ua_client, 'zk_client': zk_client,
-      'version_update_lock': version_update_lock, 'thread_pool': thread_pool}),
+     {'acc': acc, 'ua_client': ua_client, 'zk_client': zk_client,
+      'version_update_lock': version_update_lock, 'thread_pool': thread_pool,
+      'controller_state': controller_state}),
     ('/v1/projects', ProjectsHandler, all_resources),
     ('/v1/projects/([a-z0-9-]+)', ProjectHandler, all_resources),
     ('/v1/apps/([^/]*)/services', ServicesHandler,
@@ -1306,7 +1386,10 @@ def main():
     ('/v1/apps/([^/]*)/services/([^/]*)', ServiceHandler,
      all_resources),
     ('/v1/apps/([^/]*)/services/([^/]*)/versions/([^/]*)',
-     VersionHandler, all_resources),
+     VersionHandler,
+     {'acc': acc, 'ua_client': ua_client, 'zk_client': zk_client,
+      'version_update_lock': version_update_lock, 'thread_pool': thread_pool,
+      'controller_state': controller_state}),
     ('/v1/apps/([^/]*)/operations/([a-z0-9-]+)', OperationsHandler,
      {'ua_client': ua_client}),
     ('/api/cron/update', UpdateCronHandler,

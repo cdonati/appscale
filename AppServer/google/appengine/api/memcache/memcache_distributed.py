@@ -127,8 +127,7 @@ class MemcacheService(apiproxy_stub.APIProxyStub):
         if (old_entry is None or set_policy == MemcacheSetRequest.SET):
           set_status = MemcacheSetResponse.STORED
 
-      elif (set_policy == MemcacheSetRequest.CAS and item.for_cas() and
-        item.has_cas_id()):
+      elif (set_policy == MemcacheSetRequest.CAS and item.has_cas_id()):
         if old_entry is None:
           set_status = MemcacheSetResponse.NOT_STORED
         elif cas_id != item.cas_id():
@@ -188,8 +187,12 @@ class MemcacheService(apiproxy_stub.APIProxyStub):
     if value is None:
       if not request.has_initial_value():
         return None
-      flags, cas_id, stored_value = (
-        TYPE_INT, cas_id, str(request.initial_value()))
+
+      flags = TYPE_INT
+      if request.has_initial_flags():
+        flags = request.initial_flags()
+
+      stored_value = str(request.initial_value())
     else:
       flags, cas_id, stored_value = cPickle.loads(value)
 
