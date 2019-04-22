@@ -1,4 +1,5 @@
 """ Fulfills AppServer instance assignments from the scheduler. """
+import hashlib
 import logging
 import math
 import json
@@ -15,10 +16,11 @@ from appscale.admin.constants import CONTROLLER_STATE_NODE, UNPACK_ROOT
 from appscale.admin.instance_manager.constants import (
   API_SERVER_LOCATION, API_SERVER_PREFIX, APP_LOG_SIZE, BACKOFF_TIME,
   BadConfigurationException, DASHBOARD_LOG_SIZE, DASHBOARD_PROJECT_ID,
-  DEFAULT_MAX_APPSERVER_MEMORY, FETCH_PATH, GO_SDK, INSTANCE_CLASSES,
-  JAVA_APPSERVER_CLASS, MAX_API_SERVER_PORT, MAX_INSTANCE_RESPONSE_TIME,
-  MONIT_INSTANCE_PREFIX, NoRedirection, PIDFILE_TEMPLATE, PYTHON_APPSERVER,
-  START_APP_TIMEOUT, STARTING_INSTANCE_PORT, VERSION_REGISTRATION_NODE)
+  DEFAULT_MAX_APPSERVER_MEMORY, FETCH_PATH, GO_SDK, HEALTH_CHECK_TIMEOUT,
+  INSTANCE_CLASSES, JAVA_APPSERVER_CLASS, MAX_API_SERVER_PORT,
+  MAX_INSTANCE_RESPONSE_TIME, MONIT_INSTANCE_PREFIX, NoRedirection,
+  PIDFILE_TEMPLATE, PYTHON_APPSERVER, START_APP_TIMEOUT,
+  STARTING_INSTANCE_PORT, VERSION_REGISTRATION_NODE)
 from appscale.admin.instance_manager.instance import (
   create_java_app_env, create_java_start_cmd, create_python_app_env,
   create_python27_start_cmd, get_login_server, Instance)
@@ -209,6 +211,9 @@ class InstanceManager(object):
     logger.info("Start command: " + str(start_cmd))
     logger.info("Environment variables: " + str(env_vars))
 
+    base_version = version.revision_key.rsplit(VERSION_PATH_SEPARATOR, 1)[0]
+    log_tag = "app_{}".format(hashlib.sha1(base_version).hexdigest()[:28])
+
     monit_app_configuration.create_config_file(
       watch,
       start_cmd,
@@ -218,7 +223,9 @@ class InstanceManager(object):
       max_memory,
       self._syslog_server,
       check_port=True,
-      kill_exceeded_memory=True)
+      kill_exceeded_memory=True,
+      log_tag=log_tag,
+    )
 
     full_watch = '{}-{}'.format(watch, port)
 
@@ -385,7 +392,7 @@ class InstanceManager(object):
     while retries > 0:
       try:
         opener = urllib2.build_opener(NoRedirection)
-        response = opener.open(url)
+        response = opener.open(url, timeout=HEALTH_CHECK_TIMEOUT)
         if response.code != HTTPCodes.OK:
           logger.warning('{} returned {}. Headers: {}'.
                           format(url, response.code, response.headers.headers))
