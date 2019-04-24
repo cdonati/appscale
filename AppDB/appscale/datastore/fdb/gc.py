@@ -148,41 +148,42 @@ class GarbageCollector(object):
       try:
         yield self._lock.acquire()
         for project_id in self._directory_cache.root.list(self._db):
-          safe_vs = yield self._newest_vs(project_id)
-          yield gen.sleep(self._SAFETY_INTERVAL)
-          if safe_vs is not None:
-            yield self._groom_deleted()
-          if safe_vs is None:
+          # Groom only an eighth of the scattered indexes at a time. There is
+          # no urgency.
+          for octant in range(8):
+            safe_vs = yield self._newest_vs(project_id, octant)
             yield gen.sleep(self._SAFETY_INTERVAL)
-            continue
+            if safe_vs is not None:
+              yield self._groom_deleted(safe_vs, octant)
+
+            if safe_vs is None:
+              yield gen.sleep(self._SAFETY_INTERVAL)
+              continue
       except Exception:
         logger.exception(u'Unexpected error while grooming projects')
         yield gen.sleep(10)
 
   @gen.coroutine
-  def _newest_vs(self, project_id):
+  def _newest_vs(self, project_id, octant):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
     deleted_dir = self._directory_cache.get(
       (project_id, self.DELETED_VERSIONS_DIR))
-    oldest_vs = None
+    newest_vs = None
 
-    def future_for_range(byte_num):
+    def newest_scattered(byte_num):
       scatter_byte = bytes(bytearray([byte_num]))
       hash_range = deleted_dir.range((scatter_byte,))
       return self._tornado_fdb.get_range(tr, hash_range, limit=1, reverse=True,
                                          snapshot=True)
 
-    # Fetch in 4 batches of 64.
-    for quadrant in range(4):
-      quadrant_kvs = yield [
-        future_for_range(byte_num)
-        for byte_num in range(quadrant * 64, (quadrant + 1) * 64)]
-      for kvs in quadrant_kvs:
-        if kvs:
-          oldest_vs = min(deleted_dir.unpack(kvs[0].key)[1], oldest_vs)
+    scattered_kvs = yield [newest_scattered(byte)
+                           for byte in range(octant * 32, (octant + 1) * 32)]
+    for kvs in scattered_kvs:
+      if kvs:
+        newest_vs = max(deleted_dir.unpack(kvs[0].key)[1], newest_vs)
 
-    raise gen.Return(oldest_vs)
+    raise gen.Return(newest_vs)
 
   def _groom_deleted(self, project_id, safe_vs):
     yield self._lock.acquire()
