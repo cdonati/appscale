@@ -1,9 +1,10 @@
 import logging
-import six
 import time
 from collections import deque
 
 import mmh3
+import six
+import six.moves as sm
 from tornado import gen
 from tornado.ioloop import IOLoop
 
@@ -27,15 +28,69 @@ def group_hash(key):
   return hash_tuple(group_path)
 
 
-class GarbageCollector(object):
-  DELETED_VERSIONS_DIR = u'deleted-versions'
+class DeletedVersionEntry(object):
+  __SLOTS__ = [u'project_id', u'namespace', u'path', u'original_vs',
+               u'deleted_vs']
 
+  def __init__(self, project_id, namespace, path, original_vs, deleted_vs):
+    self.project_id = project_id
+    self.namespace = namespace
+    self.path = path
+    self.original_vs = original_vs
+    self.deleted_vs = deleted_vs
+
+
+class DeletedVersionIndex(object):
+  DIR_NAME = u'deleted-versions'
+
+  def __init__(self, directory):
+    self.directory = directory
+
+  @classmethod
+  def from_cache(cls, project_id, directory_cache):
+    directory = directory_cache.get((project_id, cls.DIR_NAME))
+    return cls(directory)
+
+  @property
+  def project_id(self):
+    return self.directory.get_path()[2]
+
+  def encode(self, entity, original_vs, deleted_vs):
+    namespace = decode_str(entity.key().name_space())
+    path = encode_path(entity.key().path())
+    if deleted_vs.is_complete():
+      pack = self.directory.pack
+    else:
+      pack = self.directory.pack_with_versionstamp
+
+    # The entity path is prefixed with a hash in order to scatter the writes.
+    return pack((hash_tuple(path), deleted_vs, namespace, path, original_vs))
+
+  def decode(self, kv):
+    _, deleted_vs, namespace, path, original_vs = self.directory.unpack(kv.key)
+    return DeletedVersionEntry(self.project_id, namespace, path, original_vs,
+                               deleted_vs)
+
+
+class GarbageCollector(object):
   SAFE_READ_DIR = u'safe-read'
 
   _LOCK_KEY = u'gc-lock'
 
+  # The number of extra seconds to wait before checking which versions are safe
+  # to delete. A larger value results in fewer GC transactions. It also results
+  # in a more relaxed max transaction duration.
+  _DEFERRED_DEL_PADDING = 2
+
   # Give the deferred deletion process a chance to succeed before grooming.
-  _SAFETY_INTERVAL = MAX_TX_DURATION + 60
+  _SAFETY_INTERVAL = MAX_TX_DURATION * 2
+
+  # The percantage of scattered index space to groom at a time. There is no
+  # urgency. This fraction's reciprocal should be a factor of 256.
+  _BATCH_PERCENT = .125
+
+  # The number of ranges to groom within a single transaction.
+  _BATCH_COUNT = int(_BATCH_PERCENT * 256)
 
   def __init__(self, db, tornado_fdb, data_manager, index_manager,
                directory_cache):
@@ -51,10 +106,10 @@ class GarbageCollector(object):
   def start(self):
     self._lock.start()
     IOLoop.current().spawn_callback(self._process_deferred_deletes)
-    # IOLoop.current().spawn_callback(self._groom_projects)
+    IOLoop.current().spawn_callback(self._groom_projects)
 
   def clear_later(self, entities, new_vs):
-    safe_time = time.time() + 60
+    safe_time = time.time() + MAX_TX_DURATION
     for old_entity, old_vs in entities:
       # TODO: Strip raw properties and enforce a max queue size to keep memory
       # usage reasonable.
@@ -71,25 +126,11 @@ class GarbageCollector(object):
 
     raise gen.Return(fdb.tuple.Versionstamp(vs.value))
 
-  def index_deleted_versions(self, tr, entities):
-    for old_entity, old_vs in entities:
-      key = self._deleted_index_key(
-        old_entity, old_vs, fdb.tuple.Versionstamp())
+  def index_deleted_versions(self, tr, project_id, entities):
+    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
+    for old_entity, original_vs in entities:
+      key = index.encode(old_entity, original_vs, fdb.tuple.Versionstamp())
       tr.set_versionstamped_key(key, b'')
-
-  def _deleted_index_key(self, old_entity, old_vs, commit_vs):
-    project_id = decode_str(old_entity.key().app())
-    namespace = decode_str(old_entity.key().name_space())
-    path = encode_path(old_entity.key().path())
-    deleted_dir = self._directory_cache.get(
-      (project_id, self.DELETED_VERSIONS_DIR))
-    if commit_vs.is_complete():
-      pack = deleted_dir.pack
-    else:
-      pack = deleted_dir.pack_with_versionstamp
-
-    # The entity path is prefixed with a hash in order to scatter the writes.
-    return pack((hash_tuple(path), commit_vs, namespace, path, old_vs))
 
   @gen.coroutine
   def _process_deferred_deletes(self):
@@ -108,35 +149,29 @@ class GarbageCollector(object):
     tx_deadline = current_time + 2.5
     tr = None
     while True:
-      if not self._queue:
+      safe_time = next(iter(self._queue), [current_time + MAX_TX_DURATION])[0]
+      if current_time < safe_time:
         if tr is not None:
           yield self._tornado_fdb.commit(tr)
 
-        yield gen.sleep(61)
+        yield gen.sleep(safe_time - current_time + self._DEFERRED_DEL_PADDING)
         break
 
-      safe_time, old_entity, old_vs, new_vs = self._queue.popleft()
-      if safe_time > current_time:
-        self._queue.appendleft((safe_time, old_entity, old_vs, new_vs))
-        if tr is not None:
-          yield self._tornado_fdb.commit(tr)
-
-        yield gen.sleep(safe_time - current_time + 1)
-        break
-
+      safe_time, old_entity, original_vs, deleted_vs = self._queue.popleft()
+      project_id = decode_str(old_entity.key().app())
       if tr is None:
         tr = self._db.create_transaction()
 
-      self._data_manager.hard_delete(tr, old_entity.key(), old_vs)
-      self._index_manager.hard_delete_entries(tr, old_entity, old_vs)
-      del tr[self._deleted_index_key(old_entity, old_vs, new_vs)]
+      self._data_manager.hard_delete(tr, old_entity.key(), original_vs)
+      self._index_manager.hard_delete_entries(tr, old_entity, original_vs)
+      index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
+      del tr[index.encode(old_entity, original_vs, deleted_vs)]
 
       # Keep track of safe versionstamps to invalidate stale txids.
-      project_id = decode_str(old_entity.key().app())
       safe_read_dir = self._directory_cache.get(
         (project_id, self.SAFE_READ_DIR))
       safe_read_key = safe_read_dir.rawPrefix + group_hash(old_entity.key())
-      tr.byte_max(safe_read_key, new_vs.tr_version)
+      tr.byte_max(safe_read_key, deleted_vs.tr_version)
 
       if time.time() > tx_deadline:
         yield self._tornado_fdb.commit(tr)
@@ -148,63 +183,53 @@ class GarbageCollector(object):
       try:
         yield self._lock.acquire()
         for project_id in self._directory_cache.root.list(self._db):
-          # Groom only an eighth of the scattered indexes at a time. There is
-          # no urgency.
-          for octant in range(8):
-            safe_vs = yield self._newest_vs(project_id, octant)
-            yield gen.sleep(self._SAFETY_INTERVAL)
-            if safe_vs is not None:
-              yield self._groom_deleted(safe_vs, octant)
-
-            if safe_vs is None:
-              yield gen.sleep(self._SAFETY_INTERVAL)
-              continue
+          yield self._groom_project(project_id)
       except Exception:
         logger.exception(u'Unexpected error while grooming projects')
         yield gen.sleep(10)
 
   @gen.coroutine
-  def _newest_vs(self, project_id, octant):
+  def _groom_project(self, project_id):
+    for batch_num in sm.range(int(1 / self._BATCH_PERCENT)):
+      ranges = sm.range(batch_num * self._BATCH_COUNT,
+                        (batch_num + 1) * self._BATCH_COUNT)
+      safe_vs = yield self._newest_vs(project_id, ranges)
+      yield gen.sleep(self._SAFETY_INTERVAL)
+      if safe_vs is not None:
+        yield self._groom_ranges(project_id, safe_vs, ranges)
+
+  @gen.coroutine
+  def _newest_vs(self, project_id, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
-    deleted_dir = self._directory_cache.get(
-      (project_id, self.DELETED_VERSIONS_DIR))
-    newest_vs = None
-
-    def newest_scattered(byte_num):
+    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
+    def newest_from_range(byte_num):
       scatter_byte = bytes(bytearray([byte_num]))
-      hash_range = deleted_dir.range((scatter_byte,))
+      hash_range = index.directory.range((scatter_byte,))
       return self._tornado_fdb.get_range(tr, hash_range, limit=1, reverse=True,
                                          snapshot=True)
 
-    scattered_kvs = yield [newest_scattered(byte)
-                           for byte in range(octant * 32, (octant + 1) * 32)]
-    for kvs in scattered_kvs:
-      if kvs:
-        newest_vs = max(deleted_dir.unpack(kvs[0].key)[1], newest_vs)
+    all_kvs = yield [newest_from_range(range_) for range_ in ranges]
+    newest_vs = max(
+      [index.decode(kvs[0]).deleted_vs for kvs in all_kvs if kvs] or [None])
 
     raise gen.Return(newest_vs)
 
-  def _groom_deleted(self, project_id, safe_vs):
+  def _groom_ranges(self, project_id, safe_vs, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
-    deleted_dir = self._directory_cache.get(
-      (project_id, self.DELETED_VERSIONS_DIR))
-
+    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
     def iter_for_byte(byte_num):
       scatter_byte = bytes(bytearray([byte_num]))
-      safe_start = deleted_dir.range((scatter_byte,)).start
+      safe_start = index.directory.range((scatter_byte,)).start
       safe_stop = fdb.KeySelector.first_greater_than(
-        deleted_dir.pack((scatter_byte, safe_vs)))
+        index.directory.pack((scatter_byte, safe_vs)))
       safe_range = slice(safe_start, safe_stop)
       return KVIterator(tr, self._tornado_fdb, safe_range)
 
-    # Fetch in 4 batches of 64.
-    for quadrant in range(4):
-      responses = yield [
-        iter_for_byte(byte_num).next_page()
-        for byte_num in range(quadrant * 64, (quadrant + 1) * 64)]
+    iterators = [iter_for_byte(range_) for range_ in ranges]
+    responses = yield [iterator.next_page() for iterator in iterators]
+    for kvs, more in responses:
 
-      for kvs, more in responses:
-        if kvs:
-          oldest_vs = min(deleted_dir.unpack(kvs[0].key)[1], oldest_vs)
+      if kvs:
+        oldest_vs = min(deleted_dir.unpack(kvs[0].key)[1], oldest_vs)
