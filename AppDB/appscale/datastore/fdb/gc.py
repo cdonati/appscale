@@ -162,17 +162,7 @@ class GarbageCollector(object):
       if tr is None:
         tr = self._db.create_transaction()
 
-      self._data_manager.hard_delete(tr, old_entity.key(), original_vs)
-      self._index_manager.hard_delete_entries(tr, old_entity, original_vs)
-      index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
-      del tr[index.encode(old_entity, original_vs, deleted_vs)]
-
-      # Keep track of safe versionstamps to invalidate stale txids.
-      safe_read_dir = self._directory_cache.get(
-        (project_id, self.SAFE_READ_DIR))
-      safe_read_key = safe_read_dir.rawPrefix + group_hash(old_entity.key())
-      tr.byte_max(safe_read_key, deleted_vs.tr_version)
-
+      self._hard_delete(tr, project_id, old_entity, original_vs, deleted_vs)
       if time.time() > tx_deadline:
         yield self._tornado_fdb.commit(tr)
         break
@@ -215,9 +205,11 @@ class GarbageCollector(object):
 
     raise gen.Return(newest_vs)
 
+  @gen.coroutine
   def _groom_ranges(self, project_id, safe_vs, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
+    tx_deadline = time.time() + 2.5
     index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
     def iter_for_byte(byte_num):
       scatter_byte = bytes(bytearray([byte_num]))
@@ -227,9 +219,26 @@ class GarbageCollector(object):
       safe_range = slice(safe_start, safe_stop)
       return KVIterator(tr, self._tornado_fdb, safe_range)
 
-    iterators = [iter_for_byte(range_) for range_ in ranges]
-    responses = yield [iterator.next_page() for iterator in iterators]
-    for kvs, more in responses:
+    yield [self._groom_range(tr, index, iter_for_byte(range_), tx_deadline)
+           for range_ in ranges]
+    yield self._tornado_fdb.commit(tr)
 
-      if kvs:
-        oldest_vs = min(deleted_dir.unpack(kvs[0].key)[1], oldest_vs)
+  @gen.coroutine
+  def _groom_range(self, tr, index, iterator, tx_deadline):
+    while True:
+      kvs, more = yield iterator.next_page()
+      for kv in kvs:
+        entry = index.decode(kv)
+        entity = yield self._data_manager.get_version_from_path(
+          tr, entry.project_id, )
+
+  def _hard_delete(self, tr, project_id, entity, original_vs, deleted_vs):
+    self._data_manager.hard_delete(tr, entity.key(), original_vs)
+    self._index_manager.hard_delete_entries(tr, entity, original_vs)
+    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
+    del tr[index.encode(entity, original_vs, deleted_vs)]
+
+    # Keep track of safe versionstamps to invalidate stale txids.
+    safe_read_dir = self._directory_cache.get((project_id, self.SAFE_READ_DIR))
+    safe_read_key = safe_read_dir.rawPrefix + group_hash(entity.key())
+    tr.byte_max(safe_read_key, deleted_vs.tr_version)
