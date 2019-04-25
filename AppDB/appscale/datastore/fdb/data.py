@@ -24,7 +24,7 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
-from appscale.datastore.fdb.codecs import decode_str, encode_path
+from appscale.datastore.fdb.codecs import decode_path, decode_str, encode_path
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, EncodedTypes, fdb, put_chunks, KVIterator)
 
@@ -38,26 +38,48 @@ MAX_ENTITY_SIZE = 1048572
 
 class VersionEntry(object):
   __SLOTS__ = [u'project_id', u'namespace', u'path', u'commit_vs',
-               u'encoded_entity']
-  def __init__(self, project_id, namespace, path, commit_vs,
+               u'encoded_entity', u'version']
+
+  def __init__(self, project_id, namespace, path, commit_vs=None,
                encoded_entity=None, version=None):
     self.project_id = project_id
     self.namespace = namespace
     self.path = path
     self.commit_vs = commit_vs
     self.encoded_entity = encoded_entity
-    self.version = version
+    self.version = ABSENT_VERSION if version is None else version
 
   @property
   def complete(self):
     return self.encoded_entity is not None
 
+  @property
+  def present(self):
+    return self.version != ABSENT_VERSION
 
-class NamespaceData(object):
+  @property
+  def key(self):
+    key = entity_pb.Reference()
+    key.set_app(self.project_id)
+    key.set_name_space(self.namespace)
+    key.mutable_path().MergeFrom(decode_path(self.path))
+    return key
+
+
+class DataNamespace(object):
   DIR_NAME = u'data'
 
   # The max number of bytes for each FDB value.
   _CHUNK_SIZE = 10000
+
+  # The number of bytes used to store an entity version.
+  _VERSION_SIZE = 7
+
+  # The number of bytes used to store a commit versionstamp.
+  _VS_SIZE = 10
+
+  # The number of bytes to use to encode the chunk index.
+  _INDEX_SIZE = 1
 
   def __init__(self, directory):
     self.directory = directory
@@ -85,19 +107,25 @@ class NamespaceData(object):
     if not isinstance(path, tuple):
       path = encode_path(path)
 
-    path_subspace = self.directory.subspace((path,))
+    encoded_path = fdb.tuple.pack(path)
+    if commit_vs is not None:
+      prefix = self.directory.rawPrefix + encoded_path + commit_vs
+      # All chunks for a given version.
+      return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
+                   fdb.KeySelector.first_greater_than(prefix + b'\xff'))
+
     if read_vs is not None:
-      # Ignore values written after read_vs.
-      start = fdb.KeySelector.first_greater_than(path_subspace.range().start)
-      stop = fdb.KeySelector.first_greater_or_equal(
-        path_subspace.range((read_vs,)).stop)
-      return slice(start, stop)
+      path_prefix = self.directory.rawPrefix + encoded_path
+      version_prefix = path_prefix + read_vs
+      # All versions for a given path except those written after the read_vs.
+      return slice(
+        fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
+        fdb.KeySelector.first_greater_than(version_prefix + b'\xff'))
 
-    if commit_vs is None:
-      return self.directory.range((path,))
-
-    # TODO
-    return
+    prefix = self.directory.rawPrefix + encoded_path
+    # All versions for a given path.
+    return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
+                 fdb.KeySelector.first_greater_than(prefix + b'\xff'))
 
   def encode(self, path, entity, version, commit_vs=None):
     if isinstance(entity, entity_pb.EntityProto):
@@ -106,43 +134,49 @@ class NamespaceData(object):
     if len(entity) > MAX_ENTITY_SIZE:
       raise BadRequest('Entity exceeds maximum size')
 
-    encoded_version = struct.pack('<I', version)[:7]
+    encoded_version = struct.pack('<I', version)[:self._VERSION_SIZE]
     full_value = b''.join([encoded_version, EncodedTypes.ENTITY_V3, entity])
     chunk_count = int(math.ceil(len(full_value) / self._CHUNK_SIZE))
     return tuple(self._encode_kv(full_value, index, path, commit_vs)
                  for index in sm.range(chunk_count))
 
-  def decode(self, kvs):
-    encoded_path = kvs[0].key[len()]
-    path, commit_vs, first_index = self.directory.unpack(kvs[0].key)
-    if first_index == 0:
-      encoded_data = b''.join([kv.value for kv in kvs])
-      version, encoding, encoded_entity = fdb.tuple.unpack(''.join(chunks))
-      if encoding != EncodedTypes.ENTITY_V3:
-        raise InternalError(u'Unknown entity type')
-
-      return version, encoded_entity
-
-    commit_vs = None
-    for kv in kvs:
-      path, commit_vs, index = self.directory.unpack(kv.key)
-      commit_vs = unpacked_key[-2]
-      data_index = unpacked_key[-1]
-      raise gen.Return((chunk, commit_vs, data_index))
-
-  def _encode_kv(self, full_value, index, path, commit_vs):
-    encoded_vs = b'\x00' * 10 if commit_vs is None else commit_vs
+  def encode_key(self, path, commit_vs, index):
+    encoded_vs = b'\x00' * self._VS_SIZE if commit_vs is None else commit_vs
     encoded_index = bytes(bytearray((index,)))
     encoded_key = b''.join([self.directory.rawPrefix, fdb.tuple.pack(path),
                             encoded_vs, encoded_index])
+    if commit_vs is None:
+      vs_index = len(encoded_key) - (self._VS_SIZE + self._INDEX_SIZE)
+      encoded_key += struct.pack('<L', vs_index)
+
+  def decode(self, kvs):
+    path_slice = slice(len(self.directory.rawPrefix),
+                       -1 * (self._VS_SIZE + self._INDEX_SIZE))
+    vs_slice = slice(path_slice.stop, -1 * self._INDEX_SIZE)
+    index_slice = slice(vs_slice.stop, None)
+    path = fdb.tuple.unpack(kvs[0].key[path_slice])
+    commit_vs = kvs[0].key[vs_slice]
+    first_index = ord(kvs[0].key[index_slice])
+
+    encoded_entity = None
+    version = None
+    if first_index == 0:
+      encoded_val = b''.join([kv.value for kv in kvs])
+      version = struct.unpack('<I', encoded_val[:self._VERSION_SIZE] + b'\x00')
+      encoding = encoded_val[self._VERSION_SIZE]
+      encoded_entity = encoded_val[self._VERSION_SIZE + 1:]
+      if encoding != EncodedTypes.ENTITY_V3:
+        raise InternalError(u'Unknown entity type')
+
+    return VersionEntry(self.project_id, self.namespace, path, commit_vs,
+                        encoded_entity, version)
+
+  def _encode_kv(self, full_value, index, path, commit_vs):
     data_range = slice(index * self._CHUNK_SIZE,
                        (index + 1) * self._CHUNK_SIZE)
     encoded_val = full_value[data_range]
-    if commit_vs is None:
-      vs_index = len(encoded_key) - len(encoded_index) - len(encoded_vs)
-      encoded_key += struct.pack('<L', vs_index)
+    return self.encode_key(path, commit_vs, index), encoded_val
 
-    return encoded_key, encoded_val
 
 class DataManager(object):
   GROUP_UPDATES_DIR = u'group-updates'
@@ -152,28 +186,16 @@ class DataManager(object):
     self._tornado_fdb = tornado_fdb
 
   @gen.coroutine
-  def get_latest(self, tr, key, read_vs=None):
-    ns_data = NamespaceData.from_key(key, self._directory_cache)
-    path_range = ns_data.get_slice(key.path())
+  def get_latest(self, tr, key, read_vs=None, include_data=True):
+    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    desired_slice = data_ns.get_slice(key.path(), read_vs=read_vs)
+    last_version = yield self._last_version(
+      tr, data_ns, desired_slice, include_data)
+    if last_version is None:
+      last_version = VersionEntry(data_ns.project_id, data_ns.namespace,
+                                  encode_path(key.path()))
 
-    path_subspace = self._subspace_from_key(key)
-    last_chunk, commit_vs, data_index = yield self._last_chunk(
-      tr, path_subspace, read_vs)
-    if last_chunk is None:
-      raise gen.Return((key, None, ABSENT_VERSION, commit_vs))
-
-    # If the retrieved kv does not contain the whole entity, fetch it.
-    if data_index > 0:
-      commit_subspace = path_subspace.subspace((commit_vs,))
-      remaining_range = slice(commit_subspace.start,
-                              path_subspace.pack((commit_vs, data_index)))
-      initial_chunks = yield self._get_range(tr, remaining_range)
-      chunks = initial_chunks + [last_chunk]
-    else:
-      chunks = [last_chunk]
-
-    version, encoded_entity = from_chunks(chunks)
-    raise gen.Return((key, encoded_entity, version, commit_vs))
+    raise gen.Return(last_version)
 
   @gen.coroutine
   def get_entry(self, tr, entry, snapshot=False):
@@ -200,9 +222,14 @@ class DataManager(object):
 
   @gen.coroutine
   def latest_vs(self, tr, key):
-    path_subspace = self._subspace_from_key(key)
-    _, commit_vs, _ = yield self._last_chunk(tr, path_subspace)
-    raise gen.Return(commit_vs)
+    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    desired_slice = data_ns.get_slice(key.path())
+    last_entry = yield self._last_version(tr, data_ns, desired_slice,
+                                          include_data=False)
+    if last_entry is None:
+      return
+
+    raise gen.Return(last_entry.commit_vs)
 
   @gen.coroutine
   def last_commit(self, tr, project_id, namespace, group_path):
@@ -249,27 +276,29 @@ class DataManager(object):
     kvs, count, more_results = yield self._tornado_fdb.get_range(
       tr, desired_slice, limit=1, reverse=True)
 
-    if not count:
+    if not kvs:
       return
 
-    entry = data_ns.decode(kvs)
+    last_kv = kvs[0]
+    entry = data_ns.decode([last_kv])
     if not include_data or entry.complete:
       raise gen.Return(entry)
 
-    chunk = kvs[0].value
-    unpacked_key = path_subspace.unpack(kvs[0].key)
-    commit_vs = unpacked_key[-2]
-    data_index = unpacked_key[-1]
-    raise gen.Return((chunk, commit_vs, data_index))
+    version_slice = data_ns.get_slice(entry.path, entry.commit_vs)
+    end_key = data_ns.encode_key(entry.path, entry.commit_vs, entry.index)
+    remaining_slice = slice(version_slice.start,
+                            fdb.KeySelector.first_greater_or_equal(end_key))
+    kvs = self._get_range(tr, remaining_slice)
+    raise gen.Return(data_ns.decode(kvs + [last_kv]))
 
   @gen.coroutine
   def _get_range(self, tr, data_range, snapshot=False):
     iterator = KVIterator(tr, self._tornado_fdb, data_range, snapshot=snapshot)
-    chunks = []
+    all_kvs = []
     while True:
       kvs, more_results = yield iterator.next_page()
-      chunks.extend([kv.value for kv in kvs])
+      all_kvs.extend(kvs)
       if not more_results:
         break
 
-    raise gen.Return(chunks)
+    raise gen.Return(all_kvs)

@@ -134,22 +134,21 @@ class FDBDatastore(object):
     for key in get_request.key_list():
       futures.append(self._data_manager.get_latest(tr, key, read_vs))
 
-    results = yield futures
+    version_entries = yield futures
 
+    # If this read is in a transaction, logging the RPC is a mutation.
     yield self._tornado_fdb.commit(tr)
 
-    paths = []
-    for key, encoded_entity, version, _ in results:
+    for entry in version_entries:
       response_entity = get_response.add_entity()
-      response_entity.mutable_key().CopyFrom(key)
-      response_entity.set_version(version)
-      if encoded_entity:
-        paths.append(encode_path(key.path()))
-        entity = entity_pb.EntityProto(encoded_entity)
-        response_entity.mutable_entity().CopyFrom(entity)
+      response_entity.mutable_key().MergeFrom(entry.key)
+      response_entity.set_version(entry.version)
+      if entry.encoded_entity:
+        entity = entity_pb.EntityProto(entry.encoded_entity)
+        response_entity.mutable_entity().MergeFrom(entity)
 
-    #logger.debug('get_response:\n{}'.format(get_response))
-    logger.debug('get_response: {}'.format(paths))
+    logger.debug('fetched paths: {}'.format(
+      [entry.path for entry in version_entries if entry.present]))
 
   @gen.coroutine
   def dynamic_delete(self, project_id, delete_request):
@@ -286,13 +285,13 @@ class FDBDatastore(object):
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     txid = yield self._tx_manager.create(tr, project_id, is_xg)
-    logger.debug('txid: {}'.format(txid))
+    logger.debug(u'Started new transaction: {}:{}'.format(project_id, txid))
     yield self._tornado_fdb.commit(tr)
     raise gen.Return(txid)
 
   @gen.coroutine
   def apply_txn_changes(self, project_id, txid):
-    logger.debug('applying {}:{}'.format(project_id, txid))
+    logger.debug(u'Applying {}:{}'.format(project_id, txid))
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
     tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
@@ -314,7 +313,7 @@ class FDBDatastore(object):
       new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
       self._gc.clear_later(old_entities, new_vs)
 
-    logger.debug('success')
+    logger.debug(u'Finished applying {}:{}'.format(project_id, txid))
 
   @gen.coroutine
   def rollback_transaction(self, project_id, txid):
@@ -340,38 +339,37 @@ class FDBDatastore(object):
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
-    _, old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
-      tr, entity.key())
-    if old_encoded:
-      old_entity = entity_pb.EntityProto(old_encoded)
-    else:
-      old_entity = None
+    old_entry = yield self._data_manager.get_latest(tr, entity.key())
+    old_entity = None
+    if old_entry.encoded_entity:
+      old_entity = entity_pb.EntityProto(old_entry.encoded_entity)
 
     # If the datastore chose an ID, don't overwrite existing data.
-    if auto_id and old_version != ABSENT_VERSION:
+    if auto_id and old_entry.present:
       self._scattered_allocator.invalidate()
       raise InternalError('The datastore chose an existing ID')
 
-    new_version = next_entity_version(old_version)
+    new_version = next_entity_version(old_entry.version)
     self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
-    self.index_manager.put_entries(tr, old_entity, old_vs, entity)
+    self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs, entity)
 
-    raise gen.Return((entity.key(), old_entity, old_vs, new_version))
+    raise gen.Return(
+      (entity.key(), old_entity, old_entry.commit_vs, new_version))
 
   @gen.coroutine
   def _delete(self, tr, key):
-    _, old_encoded, old_version, old_vs = yield self._data_manager.get_latest(
-      tr, key)
+    old_entry = yield self._data_manager.get_latest(tr, key)
 
-    if old_encoded is None:
-      raise gen.Return((None, old_vs, None))
+    if not old_entry.present:
+      raise gen.Return((None, None, None))
 
-    old_entity = entity_pb.EntityProto(old_encoded)
-    new_version = next_entity_version(old_version)
-    self._data_manager.put(tr, key, new_version, '')
-    self.index_manager.put_entries(tr, old_entity, old_vs, new_entity=None)
+    old_entity = entity_pb.EntityProto(old_entry.encoded_entity)
+    new_version = next_entity_version(old_entry.version)
+    self._data_manager.put(tr, key, new_version, b'')
+    self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs,
+                                   new_entity=None)
 
-    raise gen.Return((old_entity, old_vs, new_version))
+    raise gen.Return((old_entity, old_entry.commit_vs, new_version))
 
   @gen.coroutine
   def _apply_mutations(self, tr, project_id, queried_groups, mutations,
@@ -395,10 +393,8 @@ class FDBDatastore(object):
     futures = {}
     for key in lookups:
       encoded_key = key.Encode()
-      if encoded_key in require_data:
-        futures[encoded_key] = self._data_manager.get_latest(tr, key)
-      else:
-        futures[encoded_key] = self._data_manager.latest_vs(tr, key)
+      futures[encoded_key] = self._data_manager.get_latest(
+        tr, key, include_data=encoded_key in require_data)
 
     # Fetch remaining entities that were mutated.
     for mutation in mutations:
@@ -412,19 +408,13 @@ class FDBDatastore(object):
     present_group_updates = [vs for vs in group_updates if vs is not None]
     if any(commit_vs > read_vs for commit_vs in present_group_updates):
       raise ConcurrentModificationException(
-        'A queried group was modified after this transaction was started.')
+        u'A queried group was modified after this transaction was started.')
 
-    for key in lookups:
-      latest_commit_vs = yield futures[key.Encode()]
-      if isinstance(latest_commit_vs, tuple):
-        latest_commit_vs = latest_commit_vs[-1]
-
-      if isinstance(latest_commit_vs, int) and latest_commit_vs == 0:
-        continue
-
-      if latest_commit_vs > read_vs:
-        raise ConcurrentModificationException(
-          'An entity was modified after this transaction was started.')
+    version_entries = yield [futures[key.Encode()] for key in lookups]
+    if any(entry.present and entry.commit_vs > read_vs
+           for entry in version_entries):
+      raise ConcurrentModificationException(
+        u'An entity was modified after this transaction was started.')
 
     # Apply mutations.
     old_entities = []

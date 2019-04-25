@@ -150,7 +150,7 @@ class TransactionManager(object):
         key_parts = metadata_subspace.unpack(kv.key)
         metadata_key = key_parts[0]
         if metadata_key == MetadataKeys.READ_VS:
-          read_vs = fdb.tuple.Versionstamp(kv.value)
+          read_vs = kv.value
           continue
 
         if metadata_key == MetadataKeys.XG:

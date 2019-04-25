@@ -185,8 +185,7 @@ class IndexEntry(object):
     key = entity_pb.Reference()
     key.set_app(self.project_id)
     key.set_name_space(self.namespace)
-    path = key.mutable_path()
-    path.MergeFrom(decode_path(self.path))
+    key.mutable_path().MergeFrom(decode_path(self.path))
     return key
 
   @property

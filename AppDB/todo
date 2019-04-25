@@ -101,3 +101,4 @@ transactional tasks
 custom encoding for TRVersion objects (save two bytes)
 add test committing a tx with no mutations
 add test that uses API server for query batching (count with "Next")
+double check order of paths (int IDs vs string names)
