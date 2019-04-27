@@ -26,7 +26,7 @@ from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.codecs import decode_path, decode_str, encode_path
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, EncodedTypes, fdb, put_chunks, KVIterator)
+  ABSENT_VERSION, EncodedTypes, fdb, hash_tuple, KVIterator, VS_SIZE)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -75,9 +75,6 @@ class DataNamespace(object):
   # The number of bytes used to store an entity version.
   _VERSION_SIZE = 7
 
-  # The number of bytes used to store a commit versionstamp.
-  _VS_SIZE = 10
-
   # The number of bytes to use to encode the chunk index.
   _INDEX_SIZE = 1
 
@@ -101,31 +98,35 @@ class DataNamespace(object):
 
   @property
   def namespace(self):
-    return self.directory.get_path()[3]
+    return self.directory.get_path()[4]
+
+  @property
+  def prefix_size(self):
+    # The length of the directory prefix and the scatter byte.
+    return len(self.directory.rawPrefix) + 1
 
   def get_slice(self, path, commit_vs=None, read_vs=None):
     if not isinstance(path, tuple):
       path = encode_path(path)
 
-    encoded_path = fdb.tuple.pack(path)
+    path_prefix = b''.join([self.directory.rawPrefix, hash_tuple(path),
+                            fdb.tuple.pack(path)])
     if commit_vs is not None:
-      prefix = self.directory.rawPrefix + encoded_path + commit_vs
+      prefix = path_prefix + commit_vs
       # All chunks for a given version.
       return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
                    fdb.KeySelector.first_greater_than(prefix + b'\xff'))
 
     if read_vs is not None:
-      path_prefix = self.directory.rawPrefix + encoded_path
       version_prefix = path_prefix + read_vs
       # All versions for a given path except those written after the read_vs.
       return slice(
         fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
         fdb.KeySelector.first_greater_than(version_prefix + b'\xff'))
 
-    prefix = self.directory.rawPrefix + encoded_path
     # All versions for a given path.
-    return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
-                 fdb.KeySelector.first_greater_than(prefix + b'\xff'))
+    return slice(fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
+                 fdb.KeySelector.first_greater_than(path_prefix + b'\xff'))
 
   def encode(self, path, entity, version, commit_vs=None):
     if isinstance(entity, entity_pb.EntityProto):
@@ -141,22 +142,20 @@ class DataNamespace(object):
                  for index in sm.range(chunk_count))
 
   def encode_key(self, path, commit_vs, index):
-    encoded_vs = b'\x00' * self._VS_SIZE if commit_vs is None else commit_vs
+    encoded_vs = b'\x00' * VS_SIZE if commit_vs is None else commit_vs
     encoded_index = bytes(bytearray((index,)))
-    encoded_key = b''.join([self.directory.rawPrefix, fdb.tuple.pack(path),
-                            encoded_vs, encoded_index])
+    encoded_key = b''.join([self.directory.rawPrefix, hash_tuple(path),
+                            fdb.tuple.pack(path), encoded_vs, encoded_index])
     if commit_vs is None:
-      vs_index = len(encoded_key) - (self._VS_SIZE + self._INDEX_SIZE)
+      vs_index = len(encoded_key) - (VS_SIZE + self._INDEX_SIZE)
       encoded_key += struct.pack('<L', vs_index)
 
   def decode(self, kvs):
-    path_slice = slice(len(self.directory.rawPrefix),
-                       -1 * (self._VS_SIZE + self._INDEX_SIZE))
+    path_slice = slice(self.prefix_size, -1 * (VS_SIZE + self._INDEX_SIZE))
     vs_slice = slice(path_slice.stop, -1 * self._INDEX_SIZE)
-    index_slice = slice(vs_slice.stop, None)
     path = fdb.tuple.unpack(kvs[0].key[path_slice])
     commit_vs = kvs[0].key[vs_slice]
-    first_index = ord(kvs[0].key[index_slice])
+    first_index = ord(kvs[0].key[vs_slice.stop:])
 
     encoded_entity = None
     version = None
@@ -178,9 +177,31 @@ class DataNamespace(object):
     return self.encode_key(path, commit_vs, index), encoded_val
 
 
-class DataManager(object):
-  GROUP_UPDATES_DIR = u'group-updates'
+class GroupUpdatesNS(object):
+  DIR_NAME = u'group-updates'
 
+  def __init__(self, directory):
+    self.directory = directory
+
+  @classmethod
+  def from_cache(cls, project_id, namespace, directory_cache):
+    directory = directory_cache.get((project_id, cls.DIR_NAME, namespace))
+    return cls(directory)
+
+  def encode(self, path):
+    if not isinstance(path, tuple):
+      path = encode_path(path)
+
+    group_path = path[:2]
+    val = b'\x00' * VS_SIZE + struct.pack('<L', 0)
+    return self.encode_key(group_path), val
+
+  def encode_key(self, group_path):
+    return b''.join([self.directory.rawPrefix, hash_tuple(group_path),
+                     fdb.tuple.pack(group_path)])
+
+
+class DataManager(object):
   def __init__(self, directory_cache, tornado_fdb):
     self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
@@ -189,87 +210,53 @@ class DataManager(object):
   def get_latest(self, tr, key, read_vs=None, include_data=True):
     data_ns = DataNamespace.from_key(key, self._directory_cache)
     desired_slice = data_ns.get_slice(key.path(), read_vs=read_vs)
-    last_version = yield self._last_version(
+    last_entry = yield self._last_version(
       tr, data_ns, desired_slice, include_data)
-    if last_version is None:
-      last_version = VersionEntry(data_ns.project_id, data_ns.namespace,
-                                  encode_path(key.path()))
-
-    raise gen.Return(last_version)
-
-  @gen.coroutine
-  def get_entry(self, tr, entry, snapshot=False):
-    data_ns_dir = self._directory_cache.get(
-      (entry.project_id, self.DATA_DIR, entry.namespace))
-    data_range = data_ns_dir.range(entry.path + (entry.commit_vs,))
-    chunks = yield self._get_range(tr, data_range, snapshot)
-    raise gen.Return(from_chunks(chunks))
-
-  @gen.coroutine
-  def get_version(self, tr, key, commit_vs):
-    path_subspace = self._subspace_from_key(key)
-    vs_subspace = path_subspace.subspace((commit_vs,))
-    chunks = yield self._get_range(tr, vs_subspace.range())
-    raise gen.Return(from_chunks(chunks))
-
-  @gen.coroutine
-  def get_version_from_path(self, tr, project_id, namespace, path, commit_vs):
-    directory = self._directory_cache.get(
-      (project_id, self.DATA_DIR, namespace))
-    vs_subspace = directory.subspace(path + (commit_vs,))
-    chunks = yield self._get_range(tr, vs_subspace.range())
-    raise gen.Return(from_chunks(chunks))
-
-  @gen.coroutine
-  def latest_vs(self, tr, key):
-    data_ns = DataNamespace.from_key(key, self._directory_cache)
-    desired_slice = data_ns.get_slice(key.path())
-    last_entry = yield self._last_version(tr, data_ns, desired_slice,
-                                          include_data=False)
     if last_entry is None:
-      return
+      last_entry = VersionEntry(data_ns.project_id, data_ns.namespace,
+                                encode_path(key.path()))
 
-    raise gen.Return(last_entry.commit_vs)
+    raise gen.Return(last_entry)
 
   @gen.coroutine
-  def last_commit(self, tr, project_id, namespace, group_path):
-    group_ns_dir = self._directory_cache.get(
-      (project_id, self.GROUP_UPDATES_DIR, namespace))
-    group_key = group_ns_dir.pack(group_path)
-    last_updated_vs = yield self._tornado_fdb.get(tr, group_key)
+  def get_entry(self, tr, index_entry, snapshot=False):
+    version_entry = yield self.get_version_from_path(
+      tr, index_entry.project_id, index_entry.namespace, index_entry.path,
+      index_entry.commit_vs, snapshot)
+    raise gen.Return(version_entry)
+
+  @gen.coroutine
+  def get_version_from_path(self, tr, project_id, namespace, path, commit_vs,
+                            snapshot=False):
+    data_ns = DataNamespace.from_cache(
+      project_id, namespace, self._directory_cache)
+    desired_slice = data_ns.get_slice(path, commit_vs)
+    kvs = yield self._get_range(tr, desired_slice, snapshot)
+    raise gen.Return(data_ns.decode(kvs))
+
+  @gen.coroutine
+  def last_group_vs(self, tr, project_id, namespace, group_path):
+    group_ns = GroupUpdatesNS.from_cache(
+      project_id, namespace, self._directory_cache)
+    last_updated_vs = yield self._tornado_fdb.get(tr, group_ns.encode_key(group_path))
     if not last_updated_vs.present():
       return
 
-    raise gen.Return(fdb.tuple.Versionstamp(last_updated_vs))
+    raise gen.Return(last_updated_vs.value)
 
   def put(self, tr, key, version, encoded_entity):
-    path_subspace = self._subspace_from_key(key)
-    encoded_value = fdb.tuple.pack((version, EncodedTypes.ENTITY_V3,
-                                    encoded_entity))
-    put_chunks(tr, encoded_value, path_subspace, add_vs=True)
-    tr.set_versionstamped_value(self._group_key(key), b'\x00' * 14)
+    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    for fdb_key, val in data_ns.encode(key.path(), encoded_entity, version):
+      tr[fdb_key] = val
+
+    group_ns = GroupUpdatesNS.from_cache(
+      data_ns.project_id, data_ns.namespace, self._directory_cache)
+    tr.set_versionstamped_value(*group_ns.encode(key.path()))
 
   def hard_delete(self, tr, key, commit_vs):
     """ Only the GC should use this. """
-    path_subspace = self._subspace_from_key(key)
-    version_subspace = path_subspace.subspace((commit_vs,))
-    del tr[version_subspace.range()]
-
-  def _group_key(self, key):
-    project_id = decode_str(key.app())
-    namespace = decode_str(key.name_space())
-    group_path = encode_path(key.path())[:2]
-    group_ns_dir = self._directory_cache.get(
-      (project_id, self.GROUP_UPDATES_DIR, namespace))
-    return group_ns_dir.pack(group_path)
-
-  def _subspace_from_key(self, key):
-    project_id = decode_str(key.app())
-    namespace = decode_str(key.name_space())
-    path = encode_path(key.path())
-    data_ns_dir = self._directory_cache.get(
-      (project_id, self.DATA_DIR, namespace))
-    return data_ns_dir.subspace(path)
+    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    del tr[data_ns.get_slice(key.path(), commit_vs)]
 
   @gen.coroutine
   def _last_version(self, tr, data_ns, desired_slice, include_data=True):

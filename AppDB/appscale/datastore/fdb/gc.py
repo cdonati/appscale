@@ -1,9 +1,8 @@
 import logging
+import struct
 import time
 from collections import deque
 
-import mmh3
-import six
 import six.moves as sm
 from tornado import gen
 from tornado.ioloop import IOLoop
@@ -11,16 +10,9 @@ from tornado.ioloop import IOLoop
 from appscale.datastore.dbconstants import MAX_TX_DURATION
 from appscale.datastore.fdb.codecs import decode_str, encode_path
 from appscale.datastore.fdb.polling_lock import PollingLock
-from appscale.datastore.fdb.utils import fdb, KVIterator
+from appscale.datastore.fdb.utils import fdb, hash_tuple, KVIterator, VS_SIZE
 
 logger = logging.getLogger(__name__)
-
-
-def hash_tuple(value):
-  hashable_value = u''.join([six.text_type(element) for element in value])
-  val = mmh3.hash(hashable_value.encode('utf-8'), signed=False)
-  byte_array = bytearray((val % 256,))
-  return bytes(byte_array)
 
 
 def group_hash(key):
@@ -47,29 +39,53 @@ class DeletedVersionIndex(object):
     self.directory = directory
 
   @classmethod
-  def from_cache(cls, project_id, directory_cache):
-    directory = directory_cache.get((project_id, cls.DIR_NAME))
+  def from_cache(cls, project_id, namespace, directory_cache):
+    directory = directory_cache.get((project_id, cls.DIR_NAME, namespace))
     return cls(directory)
 
   @property
   def project_id(self):
     return self.directory.get_path()[2]
 
-  def encode(self, entity, original_vs, deleted_vs):
-    namespace = decode_str(entity.key().name_space())
-    path = encode_path(entity.key().path())
-    if deleted_vs.is_complete():
-      pack = self.directory.pack
-    else:
-      pack = self.directory.pack_with_versionstamp
+  @property
+  def namespace(self):
+    return self.directory.get_path()[4]
+
+  @property
+  def prefix_size(self):
+    # The length of the directory prefix and the scatter byte.
+    return len(self.directory.rawPrefix) + 1
+
+  def encode_key(self, path, original_vs, deleted_vs=None):
+    if not isinstance(path, tuple):
+      path = encode_path(path)
 
     # The entity path is prefixed with a hash in order to scatter the writes.
-    return pack((hash_tuple(path), deleted_vs, namespace, path, original_vs))
+    scatter_byte = hash_tuple(path)
+    fill_vs = deleted_vs is None
+    deleted_vs = deleted_vs or b'\x00' * VS_SIZE
+    key = b''.join([self.directory.rawPrefix, scatter_byte, deleted_vs,
+                    fdb.tuple.pack(path), original_vs])
+    if fill_vs:
+      vs_index = len(self.directory.rawPrefix) + len(scatter_byte)
+      key += struct.pack('<L', vs_index)
+
+    return key
 
   def decode(self, kv):
-    _, deleted_vs, namespace, path, original_vs = self.directory.unpack(kv.key)
-    return DeletedVersionEntry(self.project_id, namespace, path, original_vs,
-                               deleted_vs)
+    del_vs_slice = slice(self.prefix_size, self.prefix_size + VS_SIZE)
+    path_slice = slice(del_vs_slice.stop, -1 * VS_SIZE)
+    deleted_vs = kv.key[del_vs_slice]
+    path = fdb.tuple.unpack(kv.key[path_slice])
+    original_vs = kv.key[path_slice.stop:]
+    return DeletedVersionEntry(self.project_id, self.namespace, path,
+                               original_vs, deleted_vs)
+
+  def get_slice(self, byte_num, safe_vs):
+    scatter_byte = bytes(bytearray([byte_num]))
+    prefix = self.directory.rawPrefix + scatter_byte
+    return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
+                 fdb.KeySelector.first_greater_than(prefix + safe_vs))
 
 
 class GarbageCollector(object):
@@ -85,8 +101,8 @@ class GarbageCollector(object):
   # Give the deferred deletion process a chance to succeed before grooming.
   _SAFETY_INTERVAL = MAX_TX_DURATION * 2
 
-  # The percantage of scattered index space to groom at a time. There is no
-  # urgency. This fraction's reciprocal should be a factor of 256.
+  # The percantage of scattered index space to groom at a time. This fraction's
+  # reciprocal should be a factor of 256.
   _BATCH_PERCENT = .125
 
   # The number of ranges to groom within a single transaction.
@@ -126,11 +142,11 @@ class GarbageCollector(object):
 
     raise gen.Return(fdb.tuple.Versionstamp(vs.value))
 
-  def index_deleted_versions(self, tr, project_id, entities):
-    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
-    for old_entity, original_vs in entities:
-      key = index.encode(old_entity, original_vs, fdb.tuple.Versionstamp())
-      tr.set_versionstamped_key(key, b'')
+  def index_deleted_version(self, tr, version_entry):
+    index = DeletedVersionIndex.from_cache(
+      version_entry.project_id, version_entry.namespace, self._directory_cache)
+    key = index.encode_key(version_entry.path, version_entry.commit_vs)
+    tr.set_versionstamped_key(key, b'')
 
   @gen.coroutine
   def _process_deferred_deletes(self):
@@ -158,11 +174,10 @@ class GarbageCollector(object):
         break
 
       safe_time, old_entity, original_vs, deleted_vs = self._queue.popleft()
-      project_id = decode_str(old_entity.key().app())
       if tr is None:
         tr = self._db.create_transaction()
 
-      self._hard_delete(tr, project_id, old_entity, original_vs, deleted_vs)
+      self._hard_delete(tr, old_entity, original_vs, deleted_vs)
       if time.time() > tx_deadline:
         yield self._tornado_fdb.commit(tr)
         break
@@ -189,20 +204,24 @@ class GarbageCollector(object):
         yield self._groom_ranges(project_id, safe_vs, ranges)
 
   @gen.coroutine
+  def _newest_in_range(self, tr, index, byte_num):
+    scatter_byte = bytes(bytearray([byte_num]))
+    hash_range = index.directory.range((scatter_byte,))
+    kvs = yield self._tornado_fdb.get_range(
+      tr, hash_range, limit=1, reverse=True, snapshot=True)
+    if not kvs:
+      return
+
+    raise gen.Return(index.decode(kvs[0]).deleted_vs)
+
+  @gen.coroutine
   def _newest_vs(self, project_id, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
     index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
-    def newest_from_range(byte_num):
-      scatter_byte = bytes(bytearray([byte_num]))
-      hash_range = index.directory.range((scatter_byte,))
-      return self._tornado_fdb.get_range(tr, hash_range, limit=1, reverse=True,
-                                         snapshot=True)
-
-    all_kvs = yield [newest_from_range(range_) for range_ in ranges]
-    newest_vs = max(
-      [index.decode(kvs[0]).deleted_vs for kvs in all_kvs if kvs] or [None])
-
+    deletion_stamps = yield [self._newest_in_range(tr, index, byte_num)
+                             for byte_num in ranges]
+    newest_vs = max([vs for vs in deletion_stamps if vs] or [None])
     raise gen.Return(newest_vs)
 
   @gen.coroutine
@@ -211,20 +230,14 @@ class GarbageCollector(object):
     tr = self._db.create_transaction()
     tx_deadline = time.time() + 2.5
     index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
-    def iter_for_byte(byte_num):
-      scatter_byte = bytes(bytearray([byte_num]))
-      safe_start = index.directory.range((scatter_byte,)).start
-      safe_stop = fdb.KeySelector.first_greater_than(
-        index.directory.pack((scatter_byte, safe_vs)))
-      safe_range = slice(safe_start, safe_stop)
-      return KVIterator(tr, self._tornado_fdb, safe_range)
-
-    yield [self._groom_range(tr, index, iter_for_byte(range_), tx_deadline)
-           for range_ in ranges]
+    yield [self._groom_range(tr, index, byte_num, safe_vs, tx_deadline)
+           for byte_num in ranges]
     yield self._tornado_fdb.commit(tr)
 
   @gen.coroutine
-  def _groom_range(self, tr, index, iterator, tx_deadline):
+  def _groom_range(self, tr, index, byte_num, safe_vs, tx_deadline):
+    iterator = KVIterator(tr, self._tornado_fdb, index.get_slice(byte_num, safe_vs))
+
     while True:
       kvs, more = yield iterator.next_page()
       for kv in kvs:
@@ -232,11 +245,15 @@ class GarbageCollector(object):
         entity = yield self._data_manager.get_version_from_path(
           tr, entry.project_id, )
 
-  def _hard_delete(self, tr, project_id, entity, original_vs, deleted_vs):
+  def _hard_delete(self, tr, entity, original_vs, deleted_vs):
+    project_id = decode_str(entity.key().app())
+    namespace = decode_str(entity.key().name_space())
+
     self._data_manager.hard_delete(tr, entity.key(), original_vs)
     self._index_manager.hard_delete_entries(tr, entity, original_vs)
-    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
-    del tr[index.encode(entity, original_vs, deleted_vs)]
+    index = DeletedVersionIndex.from_cache(
+      project_id, namespace, self._directory_cache)
+    del tr[index.encode_key(entity.key().path(), original_vs, deleted_vs)]
 
     # Keep track of safe versionstamps to invalidate stale txids.
     safe_read_dir = self._directory_cache.get((project_id, self.SAFE_READ_DIR))

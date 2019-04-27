@@ -251,7 +251,7 @@ class FDBDatastore(object):
 
     if fetch_data:
       entity_results = yield data_futures
-      results = [encoded_entity for version, encoded_entity in entity_results]
+      results = [v_entry.encoded_entity for v_entry in entity_results]
     else:
       results = [result.Encode() for result in results]
 
@@ -352,6 +352,8 @@ class FDBDatastore(object):
     new_version = next_entity_version(old_entry.version)
     self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
     self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs, entity)
+    if old_entry.present:
+      self._gc.index_deleted_version(tr, old_entry)
 
     raise gen.Return(
       (entity.key(), old_entity, old_entry.commit_vs, new_version))
@@ -368,6 +370,8 @@ class FDBDatastore(object):
     self._data_manager.put(tr, key, new_version, b'')
     self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs,
                                    new_entity=None)
+    if old_entry.present:
+      self._gc.index_deleted_version(tr, old_entry)
 
     raise gen.Return((old_entity, old_entry.commit_vs, new_version))
 
@@ -379,7 +383,7 @@ class FDBDatastore(object):
       raise gen.Return([])
 
     group_update_futures = [
-      self._data_manager.last_commit(tr, project_id, namespace, group_path)
+      self._data_manager.last_group_vs(tr, project_id, namespace, group_path)
       for namespace, group_path in queried_groups]
 
     # Index keys that require a full lookup rather than a versionstamp.
@@ -405,8 +409,8 @@ class FDBDatastore(object):
         futures[encoded_key] = self._data_manager.get_latest(tr, key)
 
     group_updates = yield group_update_futures
-    present_group_updates = [vs for vs in group_updates if vs is not None]
-    if any(commit_vs > read_vs for commit_vs in present_group_updates):
+    group_updates = [vs for vs in group_updates if vs is not None]
+    if any(commit_vs > read_vs for commit_vs in group_updates):
       raise ConcurrentModificationException(
         u'A queried group was modified after this transaction was started.')
 
@@ -421,18 +425,19 @@ class FDBDatastore(object):
     for mutation in mutations:
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
-      old_entity_response = yield futures[key.Encode()]
-      old_encoded, old_version, old_vs = old_entity_response[1:]
-      if old_encoded:
-        old_entity = entity_pb.EntityProto(old_encoded)
-        old_entities.append((old_entity, old_vs))
-      else:
-        old_entity = None
+      old_entry = yield futures[key.Encode()]
+      old_entity = None
+      if old_entry.encoded_entity:
+        old_entity = entity_pb.EntityProto(old_entry.encoded_entity)
+        old_entities.append((old_entity, old_entry.commit_vs))
 
-      new_version = next_entity_version(old_version)
+      new_version = next_entity_version(old_entry.version)
       new_encoded = mutation.Encode() if op == 'put' else ''
       self._data_manager.put(tr, key, new_version, new_encoded)
       new_entity = mutation if op == 'put' else None
-      self.index_manager.put_entries(tr, old_entity, old_vs, new_entity)
+      self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs,
+                                     new_entity)
+      if old_entry.present:
+        self._gc.index_deleted_version(tr, old_entry)
 
     raise gen.Return(old_entities)

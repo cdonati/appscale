@@ -1300,7 +1300,7 @@ class IndexManager(object):
         entity_results = yield [self._data_manager.get_entry(self, tr, entry)
                                 for entry in entries]
         for index, kv in enumerate(kvs):
-          entity = entity_pb.EntityProto(entity_results[index][1])
+          entity = entity_pb.EntityProto(entity_results[index].encoded_entity)
           entry = entries[index]
           keys = composite_index.encode(
             entity.property_list(), entry.path, entry.commit_vs)

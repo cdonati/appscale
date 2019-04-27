@@ -34,6 +34,9 @@ MAX_32 = 256 ** 4
 
 SCATTER_PROPORTION = int(MAX_32 * SCATTER_CHANCE)
 
+# The number of bytes used to store a commit versionstamp.
+VS_SIZE = 10
+
 
 class EncodedTypes(object):
   ENTITY_V3 = b'\x00'
@@ -294,3 +297,10 @@ def get_scatter_val(path):
     return None
 
   return val
+
+
+def hash_tuple(value):
+  hashable_value = u''.join([six.text_type(element) for element in value])
+  val = mmh3.hash(hashable_value.encode('utf-8'), signed=False)
+  byte_array = bytearray((val % 256,))
+  return bytes(byte_array)
