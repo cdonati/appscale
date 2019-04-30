@@ -95,8 +95,7 @@ class FDBDatastore(object):
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities, new_vs)
+      self._gc.clear_later(old_entities, vs_future.wait().value)
 
     for key, _, _, new_version in writes:
       put_response.add_key().CopyFrom(key)
@@ -108,15 +107,12 @@ class FDBDatastore(object):
 
   @gen.coroutine
   def dynamic_get(self, project_id, get_request, get_response):
-    #logger.debug('get_request:\n{}'.format(get_request))
-    paths = [encode_path(key.path()) for key in get_request.key_list()]
-    logger.debug('get_request: {}'.format(paths))
+    logger.debug('get_request:\n{}'.format(get_request))
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
 
     read_vs = None
     if get_request.has_transaction():
-      logger.debug('get in tx: {}'.format(get_request.transaction().handle()))
       read_vs_future = self._tx_manager.get_read_vs(
         tr, project_id, get_request.transaction().handle())
       self._tx_manager.log_rpc(tr, project_id, get_request)
@@ -124,8 +120,7 @@ class FDBDatastore(object):
       # Ensure the GC hasn't cleaned up an entity written after the tx start.
       safe_read_stamps = yield [self._gc.safe_read_vs(tr, key)
                                 for key in get_request.key_list()]
-      safe_read_stamps = [safe_vs for safe_vs in safe_read_stamps
-                          if safe_vs is not None]
+      safe_read_stamps = [vs for vs in safe_read_stamps if vs is not None]
       read_vs = yield read_vs_future
       if any(safe_vs > read_vs for safe_vs in safe_read_stamps):
         raise BadRequest(u'The specified transaction has expired')
@@ -143,8 +138,8 @@ class FDBDatastore(object):
       response_entity = get_response.add_entity()
       response_entity.mutable_key().MergeFrom(entry.key)
       response_entity.set_version(entry.version)
-      if entry.encoded_entity:
-        entity = entity_pb.EntityProto(entry.encoded_entity)
+      if entry.complete:
+        entity = entity_pb.EntityProto(entry.encoded)
         response_entity.mutable_entity().MergeFrom(entity)
 
     logger.debug('fetched paths: {}'.format(
@@ -175,8 +170,7 @@ class FDBDatastore(object):
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities, new_vs)
+      self._gc.clear_later(old_entities, vs_future.wait().value)
 
     # TODO: Once the Cassandra backend is removed, populate a delete response.
     for old_entity, old_vs, new_version in deletes:
@@ -206,8 +200,8 @@ class FDBDatastore(object):
     for prop_name in query.property_name_list():
       prop_name = decode_str(prop_name)
       if prop_name not in iterator.prop_names:
-        raise BadRequest('Projections on {} are not '
-                         'supported'.format(prop_name))
+        raise BadRequest(
+          u'Projections on {} are not supported'.format(prop_name))
 
     data_futures = [] if fetch_data else None
     unique_keys = set()
@@ -251,7 +245,7 @@ class FDBDatastore(object):
 
     if fetch_data:
       entity_results = yield data_futures
-      results = [v_entry.encoded_entity for v_entry in entity_results]
+      results = [entity.encoded for entity in entity_results]
     else:
       results = [result.Encode() for result in results]
 
@@ -275,10 +269,7 @@ class FDBDatastore(object):
     if query.keys_only():
       query_result.set_keys_only(True)
 
-    logger.debug('{} results'.format(len(query_result.result_list())))
-    logger.debug('query_result: {}'.format(query_result))
-    for encoded_entity in query_result.result_list():
-      logger.debug('entity: {}'.format(entity_pb.EntityProto(encoded_entity)))
+    logger.debug(u'{} results'.format(len(query_result.result_list())))
 
   @gen.coroutine
   def setup_transaction(self, project_id, is_xg):
@@ -310,8 +301,8 @@ class FDBDatastore(object):
     yield self._tornado_fdb.commit(tr)
 
     if old_entities:
-      new_vs = fdb.tuple.Versionstamp(vs_future.wait().value)
-      self._gc.clear_later(old_entities, new_vs)
+      old_decoded = [entity.decoded for entity in old_entities]
+      self._gc.clear_later(old_decoded, vs_future.wait().value)
 
     logger.debug(u'Finished applying {}:{}'.format(project_id, txid))
 
@@ -339,41 +330,38 @@ class FDBDatastore(object):
     if auto_id:
       last_element.set_id(self._scattered_allocator.get_id())
 
-    old_entry = yield self._data_manager.get_latest(tr, entity.key())
-    old_entity = None
-    if old_entry.encoded_entity:
-      old_entity = entity_pb.EntityProto(old_entry.encoded_entity)
+    old_entity = yield self._data_manager.get_latest(tr, entity.key())
 
     # If the datastore chose an ID, don't overwrite existing data.
-    if auto_id and old_entry.present:
+    if auto_id and old_entity.present:
       self._scattered_allocator.invalidate()
       raise InternalError('The datastore chose an existing ID')
 
-    new_version = next_entity_version(old_entry.version)
+    new_version = next_entity_version(old_entity.version)
     self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
-    self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs, entity)
-    if old_entry.present:
-      self._gc.index_deleted_version(tr, old_entry)
+    self.index_manager.put_entries(
+      tr, old_entity.decoded, old_entity.commit_vs, entity)
+    if old_entity.present:
+      self._gc.index_deleted_version(tr, old_entity)
 
     raise gen.Return(
-      (entity.key(), old_entity, old_entry.commit_vs, new_version))
+      (entity.key(), old_entity, old_entity.commit_vs, new_version))
 
   @gen.coroutine
   def _delete(self, tr, key):
-    old_entry = yield self._data_manager.get_latest(tr, key)
+    old_entity = yield self._data_manager.get_latest(tr, key)
 
-    if not old_entry.present:
+    if not old_entity.present:
       raise gen.Return((None, None, None))
 
-    old_entity = entity_pb.EntityProto(old_entry.encoded_entity)
-    new_version = next_entity_version(old_entry.version)
+    new_version = next_entity_version(old_entity.version)
     self._data_manager.put(tr, key, new_version, b'')
-    self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs,
-                                   new_entity=None)
-    if old_entry.present:
-      self._gc.index_deleted_version(tr, old_entry)
+    self.index_manager.put_entries(
+      tr, old_entity.decoded, old_entity.commit_vs, new_entity=None)
+    if old_entity.present:
+      self._gc.index_deleted_version(tr, old_entity)
 
-    raise gen.Return((old_entity, old_entry.commit_vs, new_version))
+    raise gen.Return((old_entity.decoded, old_entity.commit_vs, new_version))
 
   @gen.coroutine
   def _apply_mutations(self, tr, project_id, queried_groups, mutations,
@@ -425,19 +413,17 @@ class FDBDatastore(object):
     for mutation in mutations:
       op = 'delete' if isinstance(mutation, entity_pb.Reference) else 'put'
       key = mutation if op == 'delete' else mutation.key()
-      old_entry = yield futures[key.Encode()]
-      old_entity = None
-      if old_entry.encoded_entity:
-        old_entity = entity_pb.EntityProto(old_entry.encoded_entity)
-        old_entities.append((old_entity, old_entry.commit_vs))
+      old_entity = yield futures[key.Encode()]
+      if old_entity.present:
+        old_entities.append(old_entity)
 
-      new_version = next_entity_version(old_entry.version)
-      new_encoded = mutation.Encode() if op == 'put' else ''
+      new_version = next_entity_version(old_entity.version)
+      new_encoded = mutation.Encode() if op == 'put' else b''
       self._data_manager.put(tr, key, new_version, new_encoded)
       new_entity = mutation if op == 'put' else None
-      self.index_manager.put_entries(tr, old_entity, old_entry.commit_vs,
-                                     new_entity)
-      if old_entry.present:
-        self._gc.index_deleted_version(tr, old_entry)
+      self.index_manager.put_entries(
+        tr, old_entity.decoded, old_entity.commit_vs, new_entity)
+      if old_entity.present:
+        self._gc.index_deleted_version(tr, old_entity)
 
     raise gen.Return(old_entities)

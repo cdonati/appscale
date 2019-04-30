@@ -38,7 +38,7 @@ MAX_ENTITY_SIZE = 1048572
 
 class VersionEntry(object):
   __SLOTS__ = [u'project_id', u'namespace', u'path', u'commit_vs',
-               u'encoded_entity', u'version']
+               u'version', u'_encoded_entity', u'_decoded_entity']
 
   def __init__(self, project_id, namespace, path, commit_vs=None,
                encoded_entity=None, version=None):
@@ -46,12 +46,13 @@ class VersionEntry(object):
     self.namespace = namespace
     self.path = path
     self.commit_vs = commit_vs
-    self.encoded_entity = encoded_entity
     self.version = ABSENT_VERSION if version is None else version
+    self._encoded_entity = encoded_entity
+    self._decoded_entity = None
 
   @property
   def complete(self):
-    return self.encoded_entity is not None
+    return self._encoded_entity is not None or self._decoded_entity is not None
 
   @property
   def present(self):
@@ -64,6 +65,26 @@ class VersionEntry(object):
     key.set_name_space(self.namespace)
     key.mutable_path().MergeFrom(decode_path(self.path))
     return key
+
+  @property
+  def encoded(self):
+    if self._encoded_entity is not None:
+      return self._encoded_entity
+    elif self._decoded_entity is not None:
+      self._encoded_entity = self._decoded_entity.Encode()
+      return self._encoded_entity
+    else:
+      return None
+
+  @property
+  def decoded(self):
+    if self._decoded_entity is not None:
+      return self._decoded_entity
+    elif self._encoded_entity is not None:
+      self._decoded_entity = entity_pb.EntityProto(self._encoded_entity)
+      return self._decoded_entity
+    else:
+      return None
 
 
 class DataNamespace(object):
@@ -133,9 +154,13 @@ class DataNamespace(object):
       entity = entity.Encode()
 
     if len(entity) > MAX_ENTITY_SIZE:
-      raise BadRequest('Entity exceeds maximum size')
+      raise BadRequest(u'Entity exceeds maximum size')
 
-    encoded_version = struct.pack('<I', version)[:self._VERSION_SIZE]
+    encoded_version = struct.pack('<Q', version)
+    if any(byte != b'\x00' for byte in encoded_version[self._VERSION_SIZE:]):
+      raise InternalError(u'Version exceeds maximum size')
+
+    encoded_version = encoded_version[self._VERSION_SIZE]
     full_value = b''.join([encoded_version, EncodedTypes.ENTITY_V3, entity])
     chunk_count = int(math.ceil(len(full_value) / self._CHUNK_SIZE))
     return tuple(self._encode_kv(full_value, index, path, commit_vs)

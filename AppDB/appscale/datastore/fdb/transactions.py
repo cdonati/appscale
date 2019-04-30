@@ -11,9 +11,9 @@ entries:
 """
 import logging
 import sys
+import struct
 import uuid
 
-import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
@@ -21,7 +21,7 @@ from appscale.datastore.dbconstants import (
   BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
 from appscale.datastore.fdb.codecs import decode_str, encode_path
 from appscale.datastore.fdb.utils import (
-  fdb, EncodedTypes, put_chunks, KVIterator)
+  fdb, EncodedTypes, put_chunks, KVIterator, VS_SIZE)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
@@ -50,18 +50,64 @@ def decode_chunks(chunks, rpc_type):
     expected_encoding = EncodedTypes.KEY_V3
     pb_class = entity_pb.Reference
   else:
-    raise InternalError('Unexpected RPC type')
+    raise InternalError(u'Unexpected RPC type')
 
   elements = fdb.tuple.unpack(''.join(chunks))
   if elements[0] != expected_encoding:
-    raise InternalError('Unexpected encoding')
+    raise InternalError(u'Unexpected encoding')
 
   return [pb_class(encoded_value) for encoded_value in elements[1:]]
 
 
-class TransactionManager(object):
-  DIRECTORY = u'transactions'
+class TransactionMetadata(object):
+  DIR_NAME = u'transactions'
 
+  READ_VS = b'\x00'
+  XG = b'\x01'
+  LOOKUPS = b'\x02'
+  QUERIES = b'\x03'
+  PUTS = b'\x04'
+  DELETES = b'\x05'
+
+  FALSE = b'\x00'
+  TRUE = b'\x01'
+
+  def __init__(self, directory):
+    self.directory = directory
+
+  @classmethod
+  def from_cache(cls, project_id, directory_cache):
+    directory = directory_cache.get((project_id, cls.DIR_NAME))
+    return cls(directory)
+
+  def tx_prefix(self, txid):
+    return self.directory.rawPrefix + struct.pack('<Q', txid)
+
+  def read_vs_key(self, txid):
+    return self.tx_prefix(txid) + self.READ_VS
+
+  def set_read_vs(self, tr, txid):
+    tr.set_versionstamped_value(self.read_vs_key(txid),
+                                b'\x00' * VS_SIZE + struct.pack('<L', 0))
+  def xg_key(self, txid):
+    return self.tx_prefix(txid) + self.XG
+
+  def set_xg(self, tr, txid, xg):
+    tr[self.xg_key(txid)] = self.TRUE if xg else self.FALSE
+
+  def clear(self, tr, txid):
+    tx_range = slice(
+      fdb.KeySelector.first_greater_or_equal(self.tx_prefix(txid)),
+      fdb.KeySelector.first_greater_than(self.tx_prefix(txid) + b'\xff'))
+    del tr[tx_range]
+
+  def log_put(self, tr, txid, entities):
+    value = fdb.tuple.pack(
+      (EncodedTypes.ENTITY_V3,) +
+      tuple(entity.Encode() for entity in request.entity_list()))
+    subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
+
+class TransactionManager(object):
   def __init__(self, directory_cache, tornado_fdb):
     self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
@@ -69,29 +115,30 @@ class TransactionManager(object):
   @gen.coroutine
   def create(self, tr, project_id, is_xg):
     txid = uuid.uuid4().int & (1 << 64) - 1
-    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    read_vs_key = tx_dir.pack((txid, MetadataKeys.READ_VS))
+    tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
+    read_vs_key = tx_dir.read_vs_key(txid)
+    # This read can be removed when the API server starts mapping 64-bit txids
+    # to versionstamps.
     read_vs = yield self._tornado_fdb.get(tr, read_vs_key)
     if read_vs.present():
-      raise InternalError('The datastore chose an existing txid')
+      raise InternalError(u'The datastore chose an existing txid')
 
-    tr.set_versionstamped_value(read_vs_key, b'\x00' * 14)
-    tr[tx_dir.pack((txid, MetadataKeys.XG))] = XG if is_xg else NOT_XG
+    tx_dir.set_read_vs(tr, txid)
+    tx_dir.set_xg(tr, txid, is_xg)
     raise gen.Return(txid)
 
   def delete(self, tr, project_id, txid):
-    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    del tr[tx_dir.range((txid,))]
+    tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
+    tx_dir.clear(tr, txid)
 
   @gen.coroutine
   def get_read_vs(self, tr, project_id, txid):
-    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    vs_key = tx_dir.pack((txid, MetadataKeys.READ_VS))
-    read_vs = yield self._tornado_fdb.get(tr, vs_key)
+    tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
+    read_vs = yield self._tornado_fdb.get(tr, tx_dir.read_vs_key(txid))
     if not read_vs.present():
-      raise BadRequest('Transaction does not exist')
+      raise BadRequest(u'Transaction does not exist')
 
-    raise gen.Return(fdb.tuple.Versionstamp(read_vs.value))
+    raise gen.Return(read_vs.value)
 
   def log_rpc(self, tr, project_id, request):
     txid = request.transaction().handle()
@@ -112,7 +159,7 @@ class TransactionManager(object):
         tuple(key.Encode() for key in request.key_list()))
       subspace = tx_dir.subspace((txid, MetadataKeys.DELETES))
     else:
-      raise BadRequest('Unexpected RPC type')
+      raise BadRequest(u'Unexpected RPC type')
 
     put_chunks(tr, value, subspace, add_vs=True)
 
@@ -121,7 +168,7 @@ class TransactionManager(object):
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
     namespace = decode_str(query.name_space())
     if not query.has_ancestor():
-      raise BadRequest('Queries in a transaction must specify an ancestor')
+      raise BadRequest(u'Queries in a transaction must specify an ancestor')
 
     group_path = encode_path(query.ancestor().path())[:2]
     key = tx_dir.pack_with_versionstamp(
@@ -188,7 +235,7 @@ class TransactionManager(object):
       mutations.extend(decode_chunks(tmp_chunks, tmp_rpc_type))
 
     if read_vs is None or xg is None:
-      raise BadRequest('Transaction not found')
+      raise BadRequest(u'Transaction not found')
 
     lookup_groups = set()
     for key in lookups:
@@ -207,6 +254,6 @@ class TransactionManager(object):
     tx_groups = queried_groups | lookup_groups | mutated_groups
     max_groups = MAX_GROUPS_FOR_XG if xg else 1
     if len(tx_groups) > max_groups:
-      raise TooManyGroupsException('Too many groups in transaction')
+      raise TooManyGroupsException(u'Too many groups in transaction')
 
     raise gen.Return((read_vs, lookups, queried_groups, mutations))

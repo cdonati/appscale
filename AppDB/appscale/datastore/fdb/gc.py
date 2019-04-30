@@ -15,11 +15,6 @@ from appscale.datastore.fdb.utils import fdb, hash_tuple, KVIterator, VS_SIZE
 logger = logging.getLogger(__name__)
 
 
-def group_hash(key):
-  group_path = encode_path(key.path())[:2]
-  return hash_tuple(group_path)
-
-
 class DeletedVersionEntry(object):
   __SLOTS__ = [u'project_id', u'namespace', u'path', u'original_vs',
                u'deleted_vs']
@@ -88,9 +83,25 @@ class DeletedVersionIndex(object):
                  fdb.KeySelector.first_greater_than(prefix + safe_vs))
 
 
-class GarbageCollector(object):
-  SAFE_READ_DIR = u'safe-read'
+class SafeReadDir(object):
+  DIR_NAME = u'safe-read'
 
+  def __init__(self, directory):
+    self.directory = directory
+
+  @classmethod
+  def from_cache(cls, project_id, directory_cache):
+    directory = directory_cache.get((project_id, cls.DIR_NAME))
+    return cls(directory)
+
+  def encode_key(self, path):
+    if not isinstance(path, tuple):
+      path = encode_path(path)
+
+    return self.directory.rawPrefix + hash_tuple(path[:2])
+
+
+class GarbageCollector(object):
   _LOCK_KEY = u'gc-lock'
 
   # The number of extra seconds to wait before checking which versions are safe
@@ -134,13 +145,15 @@ class GarbageCollector(object):
   @gen.coroutine
   def safe_read_vs(self, tr, key):
     project_id = decode_str(key.app())
-    safe_read_dir = self._directory_cache.get((project_id, self.SAFE_READ_DIR))
-    safe_read_key = safe_read_dir.rawPrefix + group_hash(key)
+    safe_read_dir = SafeReadDir.from_cache(project_id, self._directory_cache)
+    safe_read_key = safe_read_dir.encode_key(key.path())
+    # A concurrent change to the safe read VS does not affect what the current
+    # transaction can read, so "snapshot" is used to reduce conflicts.
     vs = yield self._tornado_fdb.get(tr, safe_read_key, snapshot=True)
     if not vs.present():
-      raise gen.Return(None)
+      return
 
-    raise gen.Return(fdb.tuple.Versionstamp(vs.value))
+    raise gen.Return(vs.value)
 
   def index_deleted_version(self, tr, version_entry):
     index = DeletedVersionIndex.from_cache(
@@ -187,6 +200,7 @@ class GarbageCollector(object):
     while True:
       try:
         yield self._lock.acquire()
+        # TODO: Make the list operation async.
         for project_id in self._directory_cache.root.list(self._db):
           yield self._groom_project(project_id)
       except Exception:
@@ -195,13 +209,16 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def _groom_project(self, project_id):
-    for batch_num in sm.range(int(1 / self._BATCH_PERCENT)):
-      ranges = sm.range(batch_num * self._BATCH_COUNT,
-                        (batch_num + 1) * self._BATCH_COUNT)
-      safe_vs = yield self._newest_vs(project_id, ranges)
-      yield gen.sleep(self._SAFETY_INTERVAL)
-      if safe_vs is not None:
-        yield self._groom_ranges(project_id, safe_vs, ranges)
+    project_dir = self._directory_cache.get((project_id,))
+    # TODO: Make the list operation async.
+    for namespace in project_dir.list(self._db):
+      for batch_num in sm.range(int(1 / self._BATCH_PERCENT)):
+        ranges = sm.range(batch_num * self._BATCH_COUNT,
+                          (batch_num + 1) * self._BATCH_COUNT)
+        safe_vs = yield self._newest_vs(project_id, namespace, ranges)
+        yield gen.sleep(self._SAFETY_INTERVAL)
+        if safe_vs is not None:
+          yield self._groom_ranges(project_id, namespace, safe_vs, ranges)
 
   @gen.coroutine
   def _newest_in_range(self, tr, index, byte_num):
@@ -215,35 +232,50 @@ class GarbageCollector(object):
     raise gen.Return(index.decode(kvs[0]).deleted_vs)
 
   @gen.coroutine
-  def _newest_vs(self, project_id, ranges):
+  def _newest_vs(self, project_id, namespace, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
-    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
+    index = DeletedVersionIndex.from_cache(
+      project_id, namespace, self._directory_cache)
     deletion_stamps = yield [self._newest_in_range(tr, index, byte_num)
                              for byte_num in ranges]
     newest_vs = max([vs for vs in deletion_stamps if vs] or [None])
     raise gen.Return(newest_vs)
 
   @gen.coroutine
-  def _groom_ranges(self, project_id, safe_vs, ranges):
+  def _groom_ranges(self, project_id, namespace, safe_vs, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
     tx_deadline = time.time() + 2.5
-    index = DeletedVersionIndex.from_cache(project_id, self._directory_cache)
-    yield [self._groom_range(tr, index, byte_num, safe_vs, tx_deadline)
-           for byte_num in ranges]
+    index = DeletedVersionIndex.from_cache(
+      project_id, namespace, self._directory_cache)
+    delete_counts = yield [
+      self._groom_range(tr, index, byte_num, safe_vs, tx_deadline)
+      for byte_num in ranges]
     yield self._tornado_fdb.commit(tr)
+    deleted = sum(delete_counts)
+    if deleted:
+      logger.debug(u'GC deleted {} entities'.format(deleted))
 
   @gen.coroutine
   def _groom_range(self, tr, index, byte_num, safe_vs, tx_deadline):
-    iterator = KVIterator(tr, self._tornado_fdb, index.get_slice(byte_num, safe_vs))
-
+    iterator = KVIterator(tr, self._tornado_fdb,
+                          index.get_slice(byte_num, safe_vs))
+    deleted = 0
     while True:
       kvs, more = yield iterator.next_page()
       for kv in kvs:
         entry = index.decode(kv)
         entity = yield self._data_manager.get_version_from_path(
-          tr, entry.project_id, )
+          tr, entry.project_id, entry.namespace, entry.path, entry.commit_vs)
+        self._hard_delete(tr, entity.decoded, entry.original_vs,
+                          entry.deleted_vs)
+        deleted += 1
+
+      if not more or time.time() > tx_deadline:
+        break
+
+    raise gen.Return(deleted)
 
   def _hard_delete(self, tr, entity, original_vs, deleted_vs):
     project_id = decode_str(entity.key().app())
@@ -256,6 +288,6 @@ class GarbageCollector(object):
     del tr[index.encode_key(entity.key().path(), original_vs, deleted_vs)]
 
     # Keep track of safe versionstamps to invalidate stale txids.
-    safe_read_dir = self._directory_cache.get((project_id, self.SAFE_READ_DIR))
-    safe_read_key = safe_read_dir.rawPrefix + group_hash(entity.key())
-    tr.byte_max(safe_read_key, deleted_vs.tr_version)
+    safe_read_dir = SafeReadDir.from_cache(project_id, self._directory_cache)
+    safe_read_key = safe_read_dir.encode_key(entity.key().path())
+    tr.byte_max(safe_read_key, deleted_vs)

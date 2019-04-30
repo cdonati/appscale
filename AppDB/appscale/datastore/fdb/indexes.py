@@ -302,9 +302,6 @@ class IndexIterator(object):
     self.index = index
     self._kv_iterator = KVIterator(
       tr, tornado_fdb, key_slice, fetch_limit, reverse, snapshot=snapshot)
-    if read_vs is None:
-      read_vs = fdb.tuple.Versionstamp()
-
     self._read_vs = read_vs
     self._done = False
 
@@ -325,7 +322,7 @@ class IndexIterator(object):
     usable_entries = []
     for kv in kvs:
       entry = self.index.decode(kv)
-      if not entry.commit_vs < self._read_vs <= entry.deleted_vs:
+      if not self._usable(entry):
         self._kv_iterator.increase_limit()
         more_results = not self._kv_iterator.done_with_range
         continue
@@ -337,40 +334,19 @@ class IndexIterator(object):
 
     raise gen.Return((usable_entries, more_results))
 
-
-class MultipleRangeIterator(object):
-  def __init__(self, iterators, fetch_limit):
-    self._iterators = sorted(
-      iterators, key=lambda iterator: iterator.start_key)
-    self._fetch_limit = fetch_limit
-    self._fetched = 0
-    self._done = False
-
-  @gen.coroutine
-  def next_page(self):
-    if self._done:
-      raise gen.Return(([], False))
-
-    entries, more_results = yield self._iterators[0].next_page()
-    if not more_results:
-      self._iterators.pop(0)
-
-    remaining = self._fetch_limit - self._fetched
-    entries = entries[:remaining]
-    self._fetched += len(entries)
-    if self._fetched == self._fetch_limit or not self._iterators:
-      self._done = True
-
-    raise gen.Return((entries, not self._done))
+  def _usable(self, entry):
+    if self._read_vs and entry.deleted_vs:
+      return entry.commit_vs < self._read_vs < entry.deleted_vs
+    elif self._read_vs:
+      return entry.commit_vs < self._read_vs
+    else:
+      return True
 
 
 class MergeJoinIterator(object):
   def __init__(self, tr, tornado_fdb, filter_props, indexes, fetch_limit,
                read_vs=None, ancestor_path=None, snapshot=False):
     self.indexes = indexes
-    if read_vs is None:
-      read_vs = fdb.tuple.Versionstamp()
-
     self._filter_props = filter_props
     self._read_vs = read_vs
     self._tr = tr
@@ -413,7 +389,7 @@ class MergeJoinIterator(object):
                           key_slice.stop)
         for kv in kvs:
           entry = index.decode(kv)
-          if entry.commit_vs < self._read_vs <= entry.deleted_vs:
+          if self._usable(entry):
             usable_entry = entry
             break
 
@@ -424,7 +400,6 @@ class MergeJoinIterator(object):
         self._done = True
         break
 
-      logger.debug('usable_entry: {}'.format(usable_entry))
       if usable_entry.path == self._candidate_path:
         self._candidate_entries.append(usable_entry)
       else:
@@ -488,6 +463,14 @@ class MergeJoinIterator(object):
       self._done = True
 
     raise gen.Return((results, not self._done))
+
+  def _usable(self, entry):
+    if self._read_vs and entry.deleted_vs:
+      return entry.commit_vs < self._read_vs < entry.deleted_vs
+    elif self._read_vs:
+      return entry.commit_vs < self._read_vs
+    else:
+      return True
 
 
 class Index(object):
