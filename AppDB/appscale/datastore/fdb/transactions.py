@@ -21,16 +21,12 @@ from appscale.datastore.dbconstants import (
   BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
 from appscale.datastore.fdb.codecs import decode_str, encode_path
 from appscale.datastore.fdb.utils import (
-  fdb, EncodedTypes, put_chunks, KVIterator, VS_SIZE)
+  fdb, EncodedTypes, put_chunks, KVIterator, MAX_ENTITY_SIZE, VS_SIZE)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
 
 logger = logging.getLogger(__name__)
-
-
-NOT_XG = b'\x00'
-XG = b'\x01'
 
 
 class MetadataKeys(object):
@@ -72,6 +68,8 @@ class TransactionMetadata(object):
   FALSE = b'\x00'
   TRUE = b'\x01'
 
+  _ENTITY_LEN_SIZE = 3
+
   def __init__(self, directory):
     self.directory = directory
 
@@ -89,6 +87,7 @@ class TransactionMetadata(object):
   def set_read_vs(self, tr, txid):
     tr.set_versionstamped_value(self.read_vs_key(txid),
                                 b'\x00' * VS_SIZE + struct.pack('<L', 0))
+
   def xg_key(self, txid):
     return self.tx_prefix(txid) + self.XG
 
@@ -102,10 +101,21 @@ class TransactionMetadata(object):
     del tr[tx_range]
 
   def log_put(self, tr, txid, entities):
-    value = fdb.tuple.pack(
-      (EncodedTypes.ENTITY_V3,) +
-      tuple(entity.Encode() for entity in request.entity_list()))
+    encoded_entities = [entity.Encode() for entity in entities]
+    value = b''.join([b''.join([self._encode_entity_len(entity), entity])
+                      for entity in encoded_entities])
     subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
+
+  def _encode_entity_len(self, encoded_entity):
+    if len(encoded_entity) > MAX_ENTITY_SIZE:
+      raise BadRequest(u'Entity exceeds maximum size')
+
+    encoded_len = struct.pack('<L', len(encoded_entity))
+    if any(byte != b'\x00' for byte in encoded_len[self._ENTITY_LEN_SIZE:]):
+      raise InternalError(u'Entity length exceeds maximum size')
+
+    return encoded_len[:self._ENTITY_LEN_SIZE]
+
 
 class TransactionManager(object):
   def __init__(self, directory_cache, tornado_fdb):

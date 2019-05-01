@@ -37,6 +37,8 @@ SCATTER_PROPORTION = int(MAX_32 * SCATTER_CHANCE)
 # The number of bytes used to store a commit versionstamp.
 VS_SIZE = 10
 
+MAX_ENTITY_SIZE = 1048572
+
 
 class EncodedTypes(object):
   ENTITY_V3 = b'\x00'

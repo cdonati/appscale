@@ -26,14 +26,13 @@ from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.codecs import decode_path, decode_str, encode_path
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, EncodedTypes, fdb, hash_tuple, KVIterator, VS_SIZE)
+  ABSENT_VERSION, EncodedTypes, fdb, hash_tuple, KVIterator, MAX_ENTITY_SIZE,
+  VS_SIZE)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
 
 logger = logging.getLogger(__name__)
-
-MAX_ENTITY_SIZE = 1048572
 
 
 class VersionEntry(object):
