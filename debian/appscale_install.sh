@@ -40,6 +40,7 @@ case "$1" in
         installappserverjava
         installtornado
         installpycrypto
+        installurllib3
         installpycapnp
         installpyyaml
         installsoappy
