@@ -68,9 +68,6 @@ DATASTORE_SERVERS_NODE = '/appscale/datastore/servers'
 
 class ClearHandler(tornado.web.RequestHandler):
   """ Defines what to do when the webserver receives a /clear HTTP request. """
-  def set_default_headers(self):
-    """ Instructs clients to close the connection after each response. """
-    self.set_header('Connection', 'close')
 
   @tornado.web.asynchronous
   def post(self):
@@ -83,10 +80,6 @@ class ClearHandler(tornado.web.RequestHandler):
 
 class ReadOnlyHandler(tornado.web.RequestHandler):
   """ Handles requests to check or set read-only mode. """
-  def set_default_headers(self):
-    """ Instructs clients to close the connection after each response. """
-    self.set_header('Connection', 'close')
-
   @tornado.web.asynchronous
   def post(self):
     """ Handle requests to turn read-only mode on or off. """
@@ -125,10 +118,6 @@ class MainHandler(tornado.web.RequestHandler):
   Defines what to do when the webserver receives different types of 
   HTTP requests.
   """
-  def set_default_headers(self):
-    """ Instructs clients to close the connection after each response. """
-    self.set_header('Connection', 'close')
-
   def unknown_request(self, app_id, http_request_data, pb_type):
     """ Function which handles unknown protocol buffers.
 
