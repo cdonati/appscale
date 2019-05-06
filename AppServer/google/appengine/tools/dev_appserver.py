@@ -3507,6 +3507,7 @@ def SetupStubs(app_id, **config):
 
   root_path = config.get('root_path', None)
   login_url = config['login_url']
+  datastore_locations = config['datastore_locations']
   datastore_path = config['datastore_path']
   clear_datastore = config['clear_datastore']
   prospective_search_path = config.get('prospective_search_path', '')
@@ -3587,7 +3588,7 @@ def SetupStubs(app_id, **config):
         capability_stub.CapabilityServiceStub())
 
     datastore = datastore_distributed.DatastoreDistributed(
-        app_id, datastore_path, trusted=trusted)
+        app_id, datastore_locations, trusted=trusted)
 
     apiproxy_stub_map.apiproxy.ReplaceStub(
         'datastore_v3', datastore)

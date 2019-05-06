@@ -176,6 +176,8 @@ class InstanceManager(object):
       env_vars['GOROOT'] = os.path.join(GO_SDK, 'goroot')
 
     watch = ''.join([MONIT_INSTANCE_PREFIX, version.revision_key])
+    datastore_locations = self._zk_client.get_children(
+      '/appscale/datastore/servers')
     if runtime in (PYTHON27, GO, PHP):
       start_cmd = create_python27_start_cmd(
         version.project_id,
@@ -183,7 +185,8 @@ class InstanceManager(object):
         port,
         pidfile,
         version.revision_key,
-        api_server_port)
+        api_server_port,
+        datastore_locations)
       env_vars.update(create_python_app_env(self._login_server,
                                             version.project_id))
     elif runtime == JAVA:
@@ -201,7 +204,8 @@ class InstanceManager(object):
         max_heap,
         pidfile,
         version.revision_key,
-        api_server_port
+        api_server_port,
+        datastore_locations
       )
 
       env_vars.update(create_java_app_env(self._deployment_config))

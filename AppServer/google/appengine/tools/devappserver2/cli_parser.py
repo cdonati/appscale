@@ -466,6 +466,11 @@ def create_command_line_parser(configuration=None):
   # Datastore
   datastore_group = parser.add_argument_group('Datastore API')
   datastore_group.add_argument(
+      '--datastore_location',
+      action='append',
+      dest='datastore_locations',
+      help='a <host>:<port> entry that specifies a datastore server location')
+  datastore_group.add_argument(
       '--datastore_path',
       type=parse_path,
       default=None,

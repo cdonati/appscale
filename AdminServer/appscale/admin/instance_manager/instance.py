@@ -72,7 +72,8 @@ def create_java_app_env(deployment_config):
 
 
 def create_java_start_cmd(app_name, port, load_balancer_host, max_heap,
-                          pidfile, revision_key, api_server_port):
+                          pidfile, revision_key, api_server_port,
+                          datastore_locations):
   """ Creates the start command to run the java application server.
 
   Args:
@@ -83,6 +84,7 @@ def create_java_start_cmd(app_name, port, load_balancer_host, max_heap,
     pidfile: A string specifying the pidfile location.
     revision_key: A string specifying the revision key.
     api_server_port: An integer specifying the port of the external API server.
+    datastore_locations: A list of datastore server locations.
   Returns:
     A string of the start command.
   """
@@ -139,7 +141,7 @@ def create_python_app_env(public_ip, app_name):
 
 
 def create_python27_start_cmd(app_name, login_ip, port, pidfile, revision_key,
-                              api_server_port):
+                              api_server_port, datastore_locations):
   """ Creates the start command to run the python application server.
 
   Args:
@@ -149,6 +151,7 @@ def create_python27_start_cmd(app_name, login_ip, port, pidfile, revision_key,
     pidfile: A string specifying the pidfile location.
     revision_key: A string specifying the revision key.
     api_server_port: An integer specifying the port of the external API server.
+    datastore_locations: A list of datastore server locations.
   Returns:
     A string of the start command.
   """
@@ -179,6 +182,8 @@ def create_python27_start_cmd(app_name, login_ip, port, pidfile, revision_key,
     "--external_api_port", str(api_server_port),
     config_file
   ]
+  for datastore_location in datastore_locations:
+    cmd.append('--datastore_location {}'.format(datastore_location))
 
   if app_name in TRUSTED_APPS:
     cmd.append('--trusted')

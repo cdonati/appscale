@@ -239,6 +239,7 @@ def create_api_server(request_info, storage_path, options, app_id, app_root):
   Returns:
     An instance of APIServer.
   """
+  datastore_locations = options.datastore_locations
   datastore_path = options.datastore_path or os.path.join(
       storage_path, 'datastore.db')
   logs_path = options.logs_path or os.path.join(storage_path, 'logs.db')
@@ -289,7 +290,7 @@ def create_api_server(request_info, storage_path, options, app_id, app_root):
       # applications.
       trusted=getattr(options, 'trusted', False),
       blobstore_path=blobstore_path,
-      datastore_path=datastore_path,
+      datastore_locations=datastore_locations,
       datastore_consistency=consistency,
       datastore_require_indexes=options.require_indexes,
       datastore_auto_id_policy=options.auto_id_policy,
@@ -411,7 +412,7 @@ def setup_stubs(
     trusted,
     blobstore_path,
     datastore_consistency,
-    datastore_path,
+    datastore_locations,
     datastore_require_indexes,
     datastore_auto_id_policy,
     images_host_prefix,
@@ -446,8 +447,7 @@ def setup_stubs(
         storage.
     datastore_consistency: The datastore_stub_util.BaseConsistencyPolicy to
         use as the datastore consistency policy.
-    datastore_path: The path to the file that should be used for datastore
-        storage.
+    datastore_locations: A list of datastore server locations.
     datastore_require_indexes: A bool indicating if the same production
         datastore indexes requirements should be enforced i.e. if True then
         a google.appengine.ext.db.NeedIndexError will be be raised if a query
@@ -511,7 +511,7 @@ def setup_stubs(
       channel_service_stub.ChannelServiceStub(request_data=request_data))
 
   datastore = datastore_distributed.DatastoreDistributed(
-      app_id, datastore_path, trusted=trusted)
+      app_id, datastore_locations, trusted=trusted)
 
   apiproxy_stub_map.apiproxy.ReplaceStub(
       'datastore_v3', datastore)

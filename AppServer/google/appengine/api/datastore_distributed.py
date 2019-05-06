@@ -33,6 +33,8 @@ import sys
 import threading
 import warnings
 
+from urllib3 import HTTPConnectionPool
+
 from google.appengine.api import apiproxy_stub
 from google.appengine.api import apiproxy_stub_map
 from google.appengine.api import datastore_errors
@@ -179,14 +181,14 @@ class DatastoreDistributed(apiproxy_stub.APIProxyStub):
 
   def __init__(self,
                app_id,
-               datastore_location,
+               datastore_locations,
                service_name='datastore_v3',
                trusted=False):
     """Constructor.
 
     Args:
       app_id: string
-      datastore_location: location of datastore server
+      datastore_locations: a list of datastore server locations
       service_name: Service name expected for all calls.
       trusted: bool, default False.  If True, this stub allows an app to
         access the data of another app.
@@ -196,13 +198,9 @@ class DatastoreDistributed(apiproxy_stub.APIProxyStub):
     # TODO lock any use of these global variables
     assert isinstance(app_id, basestring) and app_id != ''
     self.project_id = app_id
-    self.__datastore_location = datastore_location
-    self.__is_encrypted = True
-    res = self.__datastore_location.split(':')
-    if len(res) == 2:
-      if int(res[1]) != SSL_DEFAULT_PORT:
-        self.__is_encrypted = False
-
+    locations = [location.split(':') for location in datastore_locations]
+    self._pools = [HTTPConnectionPool(host, int(port), maxsize=8)
+                   for host, port in locations]
     self.SetTrusted(trusted)
 
     self.__queries = {}
@@ -349,45 +347,31 @@ class DatastoreDistributed(apiproxy_stub.APIProxyStub):
     if request_id is not None:
       api_request.set_request_id(request_id)
 
-    api_response = remote_api_pb.Response()
+    data = api_request.Encode()
+    service_id = os.environ.get('CURRENT_MODULE_ID', 'default')
+    version_id = os.environ.get('CURRENT_VERSION_ID', 'v1').split('.')[0]
+    headers = {'Content-Length': len(data),
+               'Connection': 'keep-alive',
+               'ProtocolBufferType': 'Request',
+               'AppData': tag,
+               'Module': service_id,
+               'Version': version_id}
 
-    retry_count = 0
-    max_retries = 5
-    location = self.__datastore_location
-    while True:
-      try:
-        api_response = api_request.sendCommand(
-          location,
-          tag,
-          api_response,
-          1,
-          self.__is_encrypted,
-          KEY_LOCATION,
-          CERT_LOCATION)
-        break
-      except socket.error as socket_error:
-        if socket_error.errno in (errno.ECONNREFUSED, errno.EHOSTUNREACH):
-          retry_count += 1
-          if retry_count > max_retries:
-            raise
+    pool = random.choice(self._pools)
+    try:
+      http_response = pool.request('POST', '/', body=data, headers=headers)
+    except socket.error as socket_error:
+      error_message = 'Socket error when using {}: {}'.format(
+        pool, str(socket_error))
+      raise apiproxy_errors.ApplicationError(datastore_pb.Error.INTERNAL_ERROR,
+                                             error_message)
 
-          location = get_random_lb()
-          continue
+    if http_response.status != 200:
+      raise apiproxy_errors.ApplicationError(
+        datastore_pb.Error.INTERNAL_ERROR, 'Unhandled datastore error')
 
-        if socket_error.errno == errno.ETIMEDOUT:
-          raise apiproxy_errors.ApplicationError(
-            datastore_pb.Error.TIMEOUT,
-            'Connection timed out when making datastore request')
-        raise
-      # AppScale: Interpret ProtocolBuffer.ProtocolBufferReturnError as
-      # datastore_errors.InternalError
-      except ProtocolBuffer.ProtocolBufferReturnError as e:
-        raise datastore_errors.InternalError(e)
+    api_response = remote_api_pb.Response(http_response.data)
 
-    if not api_response or not api_response.has_response():
-      raise datastore_errors.InternalError(
-          'No response from db server on %s requests.' % method)
-    
     if api_response.has_application_error():
       error_pb = api_response.application_error()
       logging.error(error_pb.detail())

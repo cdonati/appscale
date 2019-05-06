@@ -410,7 +410,7 @@ class DatastoreViewer(DatastoreViewerPage):
     """
     self.ensure_user_has_admin(project_id)
 
-    ds_access = DatastoreDistributed(project_id, DATASTORE_LOCATION,
+    ds_access = DatastoreDistributed(project_id, [DATASTORE_LOCATION],
                                      trusted=True)
 
     kind = self.request.get('kind', None)
@@ -514,7 +514,7 @@ class DatastoreViewer(DatastoreViewerPage):
       self.redirect(self._construct_url(remove=['action:flush_memcache'],
                                         add={'message': message}))
     elif self.request.get('action:delete_entities'):
-      ds_access = DatastoreDistributed(project_id, DATASTORE_LOCATION,
+      ds_access = DatastoreDistributed(project_id, [DATASTORE_LOCATION],
                                        trusted=True)
 
       entity_keys = [datastore.Key(key)
@@ -540,7 +540,7 @@ class DatastoreEditRequestHandler(DatastoreViewerPage):
     """
     self.ensure_user_has_admin(project_id)
 
-    ds_access = DatastoreDistributed(project_id, DATASTORE_LOCATION,
+    ds_access = DatastoreDistributed(project_id, [DATASTORE_LOCATION],
                                      trusted=True)
 
     if entity_key_string:
@@ -613,7 +613,7 @@ class DatastoreEditRequestHandler(DatastoreViewerPage):
     """
     self.ensure_user_has_admin(project_id)
 
-    ds_access = DatastoreDistributed(project_id, DATASTORE_LOCATION,
+    ds_access = DatastoreDistributed(project_id, [DATASTORE_LOCATION],
                                      trusted=True)
 
     if self.request.get('action:delete'):
