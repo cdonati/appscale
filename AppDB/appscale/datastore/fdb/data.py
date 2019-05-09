@@ -121,16 +121,16 @@ class DataNamespace(object):
     return self.directory.get_path()[4]
 
   @property
-  def prefix_size(self):
-    # The length of the directory prefix and the scatter byte.
-    return len(self.directory.rawPrefix) + 1
+  def path_slice(self):
+    return slice(len(self.directory.rawPrefix) + 1,
+                 -1 * (VS_SIZE + self._INDEX_SIZE))
+
+  @property
+  def vs_slice(self):
+    return slice(self.path_slice.stop, -1 * self._INDEX_SIZE)
 
   def get_slice(self, path, commit_vs=None, read_vs=None):
-    if not isinstance(path, tuple):
-      path = encode_path(path)
-
-    path_prefix = b''.join([self.directory.rawPrefix, hash_tuple(path),
-                            fdb.tuple.pack(path)])
+    path_prefix = self._encode_path_prefix(path)
     if commit_vs is not None:
       prefix = path_prefix + commit_vs
       # All chunks for a given version.
@@ -159,7 +159,7 @@ class DataNamespace(object):
     if any(byte != b'\x00' for byte in encoded_version[self._VERSION_SIZE:]):
       raise InternalError(u'Version exceeds maximum size')
 
-    encoded_version = encoded_version[self._VERSION_SIZE]
+    encoded_version = encoded_version[:self._VERSION_SIZE]
     full_value = b''.join([encoded_version, EncodedTypes.ENTITY_V3, entity])
     chunk_count = int(math.ceil(len(full_value) / self._CHUNK_SIZE))
     return tuple(self._encode_kv(full_value, index, path, commit_vs)
@@ -168,18 +168,17 @@ class DataNamespace(object):
   def encode_key(self, path, commit_vs, index):
     encoded_vs = b'\x00' * VS_SIZE if commit_vs is None else commit_vs
     encoded_index = bytes(bytearray((index,)))
-    encoded_key = b''.join([self.directory.rawPrefix, hash_tuple(path),
-                            fdb.tuple.pack(path), encoded_vs, encoded_index])
+    encoded_key = self._encode_path_prefix(path) + encoded_vs + encoded_index
     if commit_vs is None:
       vs_index = len(encoded_key) - (VS_SIZE + self._INDEX_SIZE)
       encoded_key += struct.pack('<L', vs_index)
 
+    return encoded_key
+
   def decode(self, kvs):
-    path_slice = slice(self.prefix_size, -1 * (VS_SIZE + self._INDEX_SIZE))
-    vs_slice = slice(path_slice.stop, -1 * self._INDEX_SIZE)
-    path = fdb.tuple.unpack(kvs[0].key[path_slice])
-    commit_vs = kvs[0].key[vs_slice]
-    first_index = ord(kvs[0].key[vs_slice.stop:])
+    path = fdb.tuple.unpack(kvs[0].key[self.path_slice])
+    commit_vs = kvs[0].key[self.vs_slice]
+    first_index = ord(kvs[0].key[-1 * self._INDEX_SIZE:])
 
     encoded_entity = None
     version = None
@@ -193,6 +192,13 @@ class DataNamespace(object):
 
     return VersionEntry(self.project_id, self.namespace, path, commit_vs,
                         encoded_entity, version)
+
+  def _encode_path_prefix(self, path):
+    if not isinstance(path, tuple):
+      path = encode_path(path)
+
+    return b''.join([self.directory.rawPrefix, hash_tuple(path),
+                     fdb.tuple.pack(path)])
 
   def _encode_kv(self, full_value, index, path, commit_vs):
     data_range = slice(index * self._CHUNK_SIZE,
@@ -262,7 +268,8 @@ class DataManager(object):
   def last_group_vs(self, tr, project_id, namespace, group_path):
     group_ns = GroupUpdatesNS.from_cache(
       project_id, namespace, self._directory_cache)
-    last_updated_vs = yield self._tornado_fdb.get(tr, group_ns.encode_key(group_path))
+    last_updated_vs = yield self._tornado_fdb.get(
+      tr, group_ns.encode_key(group_path))
     if not last_updated_vs.present():
       return
 
