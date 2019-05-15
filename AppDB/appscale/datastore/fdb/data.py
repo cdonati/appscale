@@ -15,6 +15,7 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.fdb.cache import DirectoryCache
 from appscale.datastore.fdb.codecs import decode_path, decode_str, encode_path
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, EncodedTypes, fdb, hash_tuple, KVIterator, MAX_ENTITY_SIZE,
@@ -75,6 +76,15 @@ class VersionEntry(object):
       return self._decoded_entity
     else:
       return None
+
+
+class DataNSCache(DirectoryCache):
+  def __init__(self, tornado_fdb):
+    super(DataNSCache, self).__init__(tornado_fdb)
+
+  @gen.coroutine
+  def get(self, tr, project_id, namespace):
+    yield self._ensure_valid(tr)
 
 
 class DataNamespace(object):
