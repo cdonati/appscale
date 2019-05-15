@@ -103,3 +103,4 @@ add test committing a tx with no mutations
 add test that uses API server for query batching (count with "Next")
 double check order of paths (int IDs vs string names)
 check if lookups are more granular than entity groups when resolving transactions
+double check endianness for codecs

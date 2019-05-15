@@ -1,17 +1,8 @@
 """
-data: This maps entity keys to encoded entity data. The data is a tuple that
-specifies the version and the encoding. Due to FDB's value size limit, data
-that exceeds the chunk size threshold is split into multiple key-values. The
-index value indicates the position of the chunk. Here is an example template
-along with an example key-value:
-
-  ([directory^1], [path]^2, <vs^3>, <index>) -> (<version>, <encoding>, <data>)
-  ([directory], Greeting, 476633..., <vs>, 0) -> (0, 155284..., <protobuffer>)
-
-^1: A directory located at (appscale, datastore, <project>, data, <namespace>).
-^2: Items wrapped in "[]" represent multiple elements for brevity.
-^3: A FoundationDB-generated value specifying the commit versionstamp. It is
-    used for enforcing consistency.
+This module stores and retrieves entity data as well as the metadata needed to
+achieve snapshot isolation during transactions. The DataManager is the main
+interface that clients can use to interact with the data layer. See its
+documentation for implementation details.
 """
 from __future__ import division
 import logging
@@ -87,6 +78,41 @@ class VersionEntry(object):
 
 
 class DataNamespace(object):
+  """
+  The DataNamespace handles the encoding and decoding details for entity data
+  for a specific project_id/namespace combination. The directory path looks
+  like (<project-dir>, 'data', <namespace>). Within this directory, keys are
+  encoded as <scatter-byte> + <path-tuple> + <commit-vs> + <index>.
+
+  The <scatter-byte> is a single byte determined by hashing the entity path.
+  Its purpose is to spread writes more evenly across the cluster and minimize
+  hotspots.
+
+  The <path-tuple> is an encoded tuple containing the entity path.
+
+  The <commit-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that wrote the entity data.
+
+  The <index> is a single byte specifying which chunk number the KV contains.
+
+  Values are encoded as <entity-version> + <entity-encoding> + <entity>.
+
+  The <entity-version> is an integer specifying the approximate insert
+  timestamp in microseconds (according to the client performing the insert).
+  Though there is a one-to-one mapping of commit versionstamps to entity
+  versions, the datastore uses a different value for the entity version in
+  order to satisfy the 8-byte constraint and to follow the GAE convention of
+  the value representing a timestamp. It is encoded using 7 bytes.
+
+  The <entity-encoding> is a single byte specifying the encoding scheme of the
+  entity to follow.
+
+  The <entity> is an encoded protobuffer value.
+
+  Since encoded values can exceed the size limit imposed by FoundationDB,
+  values encoded values are split into chunks. Each chunk is stored as a
+  KV and ordered by a unique <index> byte.
+  """
   DIR_NAME = u'data'
 
   # The max number of bytes for each FDB value.
@@ -95,7 +121,7 @@ class DataNamespace(object):
   # The number of bytes used to store an entity version.
   _VERSION_SIZE = 7
 
-  # The number of bytes to use to encode the chunk index.
+  # The number of bytes used to encode the chunk index.
   _INDEX_SIZE = 1
 
   def __init__(self, directory):
@@ -232,6 +258,16 @@ class GroupUpdatesNS(object):
 
 
 class DataManager(object):
+  """
+  The DataManager is the main interface that clients can use to interact with
+  the data layer. It makes use of the DataNamespace and GroupUpdateNS
+  namespaces to handle the encoding and decoding details when satisfying
+  requests. When a client requests data, the DataManager encapsulates entity
+  data in a VersionEntry object.
+
+  See the DataNamespace and GroupUpdateNS classes for implementation details
+  about how data is stored and retrieved.
+  """
   def __init__(self, directory_cache, tornado_fdb):
     self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
