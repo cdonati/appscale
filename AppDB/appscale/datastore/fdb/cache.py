@@ -36,7 +36,7 @@ class DirectoryCache(object):
     return item in self._directory_dict
 
   @gen.coroutine
-  def _validate_cache(self, tr):
+  def validate_cache(self, tr):
     current_version = yield self._tornado_fdb.get(tr, self.METADATA_KEY)
     if not current_version.present():
       raise InternalError(u'The FDB cluster metadata key is missing')
@@ -45,13 +45,6 @@ class DirectoryCache(object):
       self._metadata_version = current_version.value
       self._directory_dict.clear()
       self._directory_keys.clear()
-
-  @gen.coroutine
-  def _ensure_project(self, tr, project_id):
-    yield self._validate_cache(tr)
-    if (project_id,) in self._directory_dict:
-      return
-    yield
 
 
 class ProjectCache(DirectoryCache):
@@ -63,27 +56,10 @@ class ProjectCache(DirectoryCache):
 
   @gen.coroutine
   def get(self, tr, project_id):
-    # Ensure the project hasn't been deleted.
-    yield self._validate_cache(tr)
+    yield self.validate_cache(tr)
     if project_id not in self:
-      self[project_id] = self.root_dir.
-    if project_id in self._directory_dict:
-      return
-      
-  @gen.coroutine
-  def _validate_cache(self, tr):
-    current_version = yield self._tornado_fdb.get(tr, self.METADATA_KEY)
-    if not current_version.present():
-      raise InternalError(u'The FDB cluster metadata key is missing')
+      # TODO: Check defined projects instead of assuming they are valid.
+      # This can also be made async.
+      self[project_id] = self.root_dir.create_or_open(tr, (project_id,))
 
-    if current_version.value != self._metadata_version:
-      self._metadata_version = current_version.value
-      self._directory_dict = {}
-      self._directory_list = []
-
-  @gen.coroutine
-  def _ensure_project(self, tr, project_id):
-    yield self._validate_cache(tr)
-    if (project_id,) in self._directory_dict:
-      return
-    yield
+    raise gen.Return(self[project_id])

@@ -39,6 +39,9 @@ VS_SIZE = 10
 
 MAX_ENTITY_SIZE = 1048572
 
+# The FDB directory used for the datastore.
+DS_ROOT = (u'appscale', u'datastore')
+
 
 class EncodedTypes(object):
   ENTITY_V3 = b'\x00'

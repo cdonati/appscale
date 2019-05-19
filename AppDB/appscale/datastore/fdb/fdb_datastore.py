@@ -18,15 +18,15 @@ from tornado.ioloop import IOLoop
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
-from appscale.datastore.fdb.codecs import decode_str, encode_path
+from appscale.datastore.fdb.cache import ProjectCache
+from appscale.datastore.fdb.codecs import decode_str
 from appscale.datastore.fdb.data import DataManager
 from appscale.datastore.fdb.gc import GarbageCollector
 from appscale.datastore.fdb.indexes import (
   get_order_info, IndexManager, KEY_PROP)
 from appscale.datastore.fdb.transactions import TransactionManager
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, DirectoryCache, fdb, next_entity_version, ScatteredAllocator,
-  TornadoFDB)
+  fdb, next_entity_version, DS_ROOT, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -36,8 +36,6 @@ logger = logging.getLogger(__name__)
 
 class FDBDatastore(object):
   """ A datastore implementation that uses FoundationDB. """
-
-  _ROOT_DIR = (u'appscale', u'datastore')
 
   def __init__(self):
     self.index_manager = None
@@ -51,10 +49,10 @@ class FDBDatastore(object):
 
   def start(self):
     self._db = fdb.open()
-    ds_dir = fdb.directory.create_or_open(self._db, self._ROOT_DIR)
-    self._directory_cache = DirectoryCache(self._db, ds_dir)
     self._tornado_fdb = TornadoFDB(IOLoop.current())
-    self._data_manager = DataManager(self._directory_cache, self._tornado_fdb)
+    ds_dir = fdb.directory.create_or_open(self._db, DS_ROOT)
+    project_cache = ProjectCache(self._tornado_fdb, ds_dir)
+    self._data_manager = DataManager(self._tornado_fdb, project_cache)
     self.index_manager = IndexManager(self._db, self._directory_cache,
                                       self._tornado_fdb, self._data_manager)
     self._tx_manager = TransactionManager(self._directory_cache,

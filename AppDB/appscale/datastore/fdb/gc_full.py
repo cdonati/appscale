@@ -1,6 +1,7 @@
 from __future__ import division
 
 import logging
+import monotonic
 import time
 import uuid
 
@@ -125,7 +126,7 @@ class GarbageCollector(object):
     versions_deleted = 0
     for namespace, disposable_range in disposable_ranges:
       gc_dir = self._directory_cache.get(namespace + Directories.DELETED)
-      work_cutoff = time.time() + MAX_FDB_TX_DURATION / 2
+      work_cutoff = monotonic.monotonic() + MAX_FDB_TX_DURATION / 2
       tr = self._db.create_transaction()
       iterator = KVIterator(self._tornado_fdb, tr, disposable_range)
       while True:
@@ -141,7 +142,7 @@ class GarbageCollector(object):
         yield self.clear_version(namespace, path, version, gc_versionstamp,
                                  op_id, tr)
         versions_deleted += 1
-        if time.time() > work_cutoff:
+        if monotonic.monotonic() > work_cutoff:
           break
 
       yield self._tornado_fdb.commit(tr)

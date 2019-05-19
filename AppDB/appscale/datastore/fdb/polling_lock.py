@@ -1,4 +1,5 @@
 import logging
+import monotonic
 import time
 import uuid
 
@@ -49,7 +50,8 @@ class PollingLock(object):
     if self._deadline is None:
       return False
 
-    return self._owner == self._client_id and time.time() < self._deadline
+    return (self._owner == self._client_id and
+            monotonic.monotonic() < self._deadline)
 
   @gen.coroutine
   def start(self):
@@ -81,19 +83,19 @@ class PollingLock(object):
     if lease_value.present():
       self._owner, new_op_id = fdb.tuple.unpack(lease_value)
       if new_op_id != self._op_id:
-        self._deadline = time.time() + self._LEASE_TIMEOUT
+        self._deadline = monotonic.monotonic() + self._LEASE_TIMEOUT
         self._op_id = new_op_id
     else:
       self._owner = None
 
-    can_acquire = self._owner is None or time.time() > self._deadline
+    can_acquire = self._owner is None or monotonic.monotonic() > self._deadline
     if can_acquire or self._owner == self._client_id:
       op_id = uuid.uuid4()
       tr[self.key] = fdb.tuple.pack((self._client_id, op_id))
       yield self._tornado_fdb.commit(tr)
       self._owner = self._client_id
       self._op_id = op_id
-      self._deadline = time.time() + self._LEASE_TIMEOUT
+      self._deadline = monotonic.monotonic() + self._LEASE_TIMEOUT
       self._event.set()
       if can_acquire:
         logger.info('Acquired lock for {}'.format(repr(self.key)))
@@ -102,4 +104,4 @@ class PollingLock(object):
       return
 
     # Since another candidate holds the lock, wait until it might expire.
-    yield gen.sleep(max(self._deadline - time.time(), 0))
+    yield gen.sleep(max(self._deadline - monotonic.monotonic(), 0))

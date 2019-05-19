@@ -18,8 +18,8 @@ from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.cache import DirectoryCache
 from appscale.datastore.fdb.codecs import decode_path, decode_str, encode_path
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, EncodedTypes, fdb, hash_tuple, KVIterator, MAX_ENTITY_SIZE,
-  VS_SIZE)
+  ABSENT_VERSION, DS_ROOT, EncodedTypes, fdb, hash_tuple, KVIterator,
+  MAX_ENTITY_SIZE, VS_SIZE)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -79,12 +79,32 @@ class VersionEntry(object):
 
 
 class DataNSCache(DirectoryCache):
-  def __init__(self, tornado_fdb):
-    super(DataNSCache, self).__init__(tornado_fdb)
+  # The number of items the cache can hold.
+  SIZE = 512
+
+  def __init__(self, tornado_fdb, project_cache):
+    super(DataNSCache, self).__init__(tornado_fdb, project_cache.root_dir,
+                                      self.SIZE)
+    self._project_cache = project_cache
 
   @gen.coroutine
   def get(self, tr, project_id, namespace):
-    yield self._ensure_valid(tr)
+    yield self.validate_cache(tr)
+    key = (project_id, namespace)
+    if key not in self:
+      project_dir = yield self._project_cache.get(project_id)
+      # TODO: Make async.
+      ns_dir = project_dir.create_or_open(
+        tr, (DataNamespace.DIR_NAME, namespace))
+      self[key] = DataNamespace(ns_dir)
+
+    raise gen.Return(self[key])
+
+  @gen.coroutine
+  def get_from_key(self, tr, key):
+    project_id = decode_str(key.app())
+    namespace = decode_str(key.name_space())
+    yield self.get(tr, project_id, namespace)
 
 
 class DataNamespace(object):
@@ -137,24 +157,13 @@ class DataNamespace(object):
   def __init__(self, directory):
     self.directory = directory
 
-  @classmethod
-  def from_cache(cls, project_id, namespace, directory_cache):
-    directory = directory_cache.get((project_id, cls.DIR_NAME, namespace))
-    return cls(directory)
-
-  @classmethod
-  def from_key(cls, key, directory_cache):
-    project_id = decode_str(key.app())
-    namespace = decode_str(key.name_space())
-    return cls.from_cache(project_id, namespace, directory_cache)
-
   @property
   def project_id(self):
-    return self.directory.get_path()[2]
+    return self.directory.get_path()[len(DS_ROOT)]
 
   @property
   def namespace(self):
-    return self.directory.get_path()[4]
+    return self.directory.get_path()[len(DS_ROOT) + 2]
 
   @property
   def path_slice(self):
@@ -163,7 +172,7 @@ class DataNamespace(object):
 
   @property
   def vs_slice(self):
-    return slice(self.path_slice.stop, -1 * self._INDEX_SIZE)
+    return slice(self.path_slice.stop, self.path_slice.stop + VS_SIZE)
 
   def get_slice(self, path, commit_vs=None, read_vs=None):
     path_prefix = self._encode_path_prefix(path)
@@ -243,16 +252,34 @@ class DataNamespace(object):
     return self.encode_key(path, commit_vs, index), encoded_val
 
 
+class GroupUpdatesNSCache(DirectoryCache):
+  # The number of items the cache can hold.
+  SIZE = 512
+
+  def __init__(self, tornado_fdb, project_cache):
+    super(GroupUpdatesNSCache, self).__init__(
+      tornado_fdb, project_cache.root_dir, self.SIZE)
+    self._project_cache = project_cache
+
+  @gen.coroutine
+  def get(self, tr, project_id, namespace):
+    yield self.validate_cache(tr)
+    key = (project_id, namespace)
+    if key not in self:
+      project_dir = yield self._project_cache.get(project_id)
+      # TODO: Make async.
+      ns_dir = project_dir.create_or_open(
+        tr, (GroupUpdatesNS.DIR_NAME, namespace))
+      self[key] = GroupUpdatesNS(ns_dir)
+
+    raise gen.Return(self[key])
+
+
 class GroupUpdatesNS(object):
   DIR_NAME = u'group-updates'
 
   def __init__(self, directory):
     self.directory = directory
-
-  @classmethod
-  def from_cache(cls, project_id, namespace, directory_cache):
-    directory = directory_cache.get((project_id, cls.DIR_NAME, namespace))
-    return cls(directory)
 
   def encode(self, path):
     if not isinstance(path, tuple):
@@ -278,13 +305,25 @@ class DataManager(object):
   See the DataNamespace and GroupUpdateNS classes for implementation details
   about how data is stored and retrieved.
   """
-  def __init__(self, directory_cache, tornado_fdb):
-    self._directory_cache = directory_cache
+  def __init__(self, tornado_fdb, project_cache):
     self._tornado_fdb = tornado_fdb
+    self._data_cache = DataNSCache(self._tornado_fdb, project_cache)
+    self._group_updates_cache = GroupUpdatesNSCache(
+      self._tornado_fdb, project_cache)
 
   @gen.coroutine
   def get_latest(self, tr, key, read_vs=None, include_data=True):
-    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    """ Get the newest entity version for the given read VS.
+
+    Args:
+      tr: An FDB transaction.
+      key: A protubuf reference object.
+      read_vs: A 10-byte string specifying the FDB read versionstamp. Newer
+        versionstamps are ignored.
+      include_data: A boolean specifying whether or not to fetch all of the
+        entity's KVs.
+    """
+    data_ns = yield self._data_cache.get_from_key(tr, key)
     desired_slice = data_ns.get_slice(key.path(), read_vs=read_vs)
     last_entry = yield self._last_version(
       tr, data_ns, desired_slice, include_data)
@@ -296,6 +335,14 @@ class DataManager(object):
 
   @gen.coroutine
   def get_entry(self, tr, index_entry, snapshot=False):
+    """ Get the entity data from an index entry.
+    Args:
+      tr: An FDB transaction.
+      index_entry: An IndexEntry object.
+      snapshot: If True, the read will not cause a transaction conflict.
+    Returns:
+      A VersionEntry or None.
+    """
     version_entry = yield self.get_version_from_path(
       tr, index_entry.project_id, index_entry.namespace, index_entry.path,
       index_entry.commit_vs, snapshot)
@@ -304,16 +351,25 @@ class DataManager(object):
   @gen.coroutine
   def get_version_from_path(self, tr, project_id, namespace, path, commit_vs,
                             snapshot=False):
-    data_ns = DataNamespace.from_cache(
-      project_id, namespace, self._directory_cache)
+    """ Get the entity data for a specific version.
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+      namespace: A string specifying the namespace.
+      path: A tuple or protobuf path object.
+      commit_vs: A 10-byte string specyfing the FDB commit versionstamp.
+      snapshot: f True, the read will not cause a transaction conflict.
+    Returns:
+      A VersionEntry or None.
+    """
+    data_ns = yield self._data_cache.get(tr, project_id, namespace)
     desired_slice = data_ns.get_slice(path, commit_vs)
     kvs = yield self._get_range(tr, desired_slice, snapshot)
     raise gen.Return(data_ns.decode(kvs))
 
   @gen.coroutine
   def last_group_vs(self, tr, project_id, namespace, group_path):
-    group_ns = GroupUpdatesNS.from_cache(
-      project_id, namespace, self._directory_cache)
+    group_ns = yield self._group_updates_cache.get(tr, project_id, namespace)
     last_updated_vs = yield self._tornado_fdb.get(
       tr, group_ns.encode_key(group_path))
     if not last_updated_vs.present():
@@ -322,17 +378,17 @@ class DataManager(object):
     raise gen.Return(last_updated_vs.value)
 
   def put(self, tr, key, version, encoded_entity):
-    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    data_ns = yield self._data_cache.get_from_key(tr, key)
     for fdb_key, val in data_ns.encode(key.path(), encoded_entity, version):
       tr[fdb_key] = val
 
-    group_ns = GroupUpdatesNS.from_cache(
-      data_ns.project_id, data_ns.namespace, self._directory_cache)
+    group_ns = yield self._group_updates_cache.get(
+      tr, data_ns.project_id, data_ns.namespace)
     tr.set_versionstamped_value(*group_ns.encode(key.path()))
 
   def hard_delete(self, tr, key, commit_vs):
     """ Only the GC should use this. """
-    data_ns = DataNamespace.from_key(key, self._directory_cache)
+    data_ns = yield self._data_cache.get_from_key(tr, key)
     del tr[data_ns.get_slice(key.path(), commit_vs)]
 
   @gen.coroutine
@@ -348,6 +404,7 @@ class DataManager(object):
     if not include_data or entry.complete:
       raise gen.Return(entry)
 
+    # Retrieve the remaining chunks.
     version_slice = data_ns.get_slice(entry.path, entry.commit_vs)
     end_key = data_ns.encode_key(entry.path, entry.commit_vs, entry.index)
     remaining_slice = slice(version_slice.start,

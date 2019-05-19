@@ -1,4 +1,5 @@
 import logging
+import monotonic
 import struct
 import time
 from collections import deque
@@ -136,7 +137,7 @@ class GarbageCollector(object):
     IOLoop.current().spawn_callback(self._groom_projects)
 
   def clear_later(self, entities, new_vs):
-    safe_time = time.time() + MAX_TX_DURATION
+    safe_time = monotonic.monotonic() + MAX_TX_DURATION
     for old_entity, old_vs in entities:
       # TODO: Strip raw properties and enforce a max queue size to keep memory
       # usage reasonable.
@@ -174,7 +175,7 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def _process_queue(self):
-    current_time = time.time()
+    current_time = monotonic.monotonic()
     tx_deadline = current_time + 2.5
     tr = None
     while True:
@@ -191,7 +192,7 @@ class GarbageCollector(object):
         tr = self._db.create_transaction()
 
       self._hard_delete(tr, old_entity, original_vs, deleted_vs)
-      if time.time() > tx_deadline:
+      if monotonic.monotonic() > tx_deadline:
         yield self._tornado_fdb.commit(tr)
         break
 
@@ -246,7 +247,7 @@ class GarbageCollector(object):
   def _groom_ranges(self, project_id, namespace, safe_vs, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
-    tx_deadline = time.time() + 2.5
+    tx_deadline = monotonic.monotonic() + 2.5
     index = DeletedVersionIndex.from_cache(
       project_id, namespace, self._directory_cache)
     delete_counts = yield [
@@ -272,7 +273,7 @@ class GarbageCollector(object):
                           entry.deleted_vs)
         deleted += 1
 
-      if not more or time.time() > tx_deadline:
+      if not more or monotonic.monotonic() > tx_deadline:
         break
 
     raise gen.Return(deleted)

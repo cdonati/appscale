@@ -13,6 +13,7 @@ from __future__ import division
 
 import itertools
 import logging
+import monotonic
 import sys
 import time
 
@@ -1251,7 +1252,7 @@ class IndexManager(object):
                   for prop in index_pb.definition().property_list())
     indexes_dir = self._directory_cache.get((project_id, INDEX_DIR))
     tr = self._db.create_transaction()
-    deadline = time.time() + MAX_FDB_TX_DURATION / 2
+    deadline = monotonic.monotonic() + MAX_FDB_TX_DURATION / 2
     for namespace in indexes_dir.list(tr):
       if start_ns is not None and namespace < start_ns:
         continue
@@ -1296,7 +1297,7 @@ class IndexManager(object):
           logger.info(u'Finished backfilling {}'.format(composite_index))
           break
 
-        if time.time() > deadline:
+        if monotonic.monotonic() > deadline:
           try:
             yield self._tornado_fdb.commit(tr)
             cursor = (namespace, kvs[-1].key)

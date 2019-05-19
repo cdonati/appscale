@@ -15,6 +15,7 @@ setup(
     'kazoo',
     'M2Crypto',
     'mmh3',
+    'monotonic',
     'SOAPpy',
     'tornado'
   ],
