@@ -14,9 +14,11 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
+from appscale.datastore.fdb.cache import DirectoryCache
 from appscale.datastore.fdb.codecs import decode_str, encode_path
 from appscale.datastore.fdb.polling_lock import PollingLock
-from appscale.datastore.fdb.utils import fdb, hash_tuple, KVIterator, VS_SIZE
+from appscale.datastore.fdb.utils import (
+  DS_ROOT, fdb, hash_tuple, KVIterator, VS_SIZE)
 
 logger = logging.getLogger(__name__)
 
@@ -34,58 +36,126 @@ class DeletedVersionEntry(object):
     self.deleted_vs = deleted_vs
 
 
-class DeletedVersionIndexCache(object):
-  """  """
+class DeletedVersionIndexCache(DirectoryCache):
+  """ Caches DeletedVersionIndex objects to keep track of directory prefixes.
+  """
 
   # The number of items the cache can hold.
   SIZE = 512
 
+  def __init__(self, tornado_fdb, project_cache):
+    super(DeletedVersionIndexCache, self).__init__(
+      tornado_fdb, project_cache.root_dir, self.SIZE)
+    self._project_cache = project_cache
+
+  @gen.coroutine
+  def get(self, tr, project_id, namespace):
+    """ Gets a DeletedVersionIndex for the given project and namespace.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+      namespace: A string specifying the namespace.
+    Returns:
+      A DeletedVersionIndex object.
+    """
+    yield self.validate_cache(tr)
+    key = (project_id, namespace)
+    if key not in self:
+      project_dir = yield self._project_cache.get(project_id)
+      # TODO: Make async.
+      ns_dir = project_dir.create_or_open(
+        tr, (DeletedVersionIndex.DIR_NAME, namespace))
+      self[key] = DeletedVersionIndex(ns_dir)
+
+    raise gen.Return(self[key])
+
+
 class DeletedVersionIndex(object):
+  """
+  A DeletedVersionIndex handles the encoding and decoding details for deleted
+  version references.
+
+  The directory path looks like
+  (<project-dir>, 'deleted-versions', <namespace>).
+
+  Within this directory, keys are encoded as
+  <scatter-byte> + <deleted-vs> + <path-tuple> + <original-vs>.
+
+  The <scatter-byte> is a single byte determined by hashing the entity path.
+  Its purpose is to spread writes more evenly across the cluster and minimize
+  hotspots. This is especially important for this index because each write is
+  given a new, larger <deleted-vs> value than the last.
+
+  The <deleted-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that deleted the entity version.
+
+  The <path-tuple> is an encoded tuple containing the entity path.
+
+  The <original-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that originally wrote the entity data.
+
+  None of the keys in this index have values.
+  """
   DIR_NAME = u'deleted-versions'
 
   def __init__(self, directory):
     self.directory = directory
 
-  @classmethod
-  def from_cache(cls, project_id, namespace, directory_cache):
-    directory = directory_cache.get((project_id, cls.DIR_NAME, namespace))
-    return cls(directory)
-
   @property
   def project_id(self):
-    return self.directory.get_path()[2]
+    return self.directory.get_path()[len(DS_ROOT)]
 
   @property
   def namespace(self):
-    return self.directory.get_path()[4]
+    return self.directory.get_path()[len(DS_ROOT) + 2]
 
   @property
-  def prefix_size(self):
-    # The length of the directory prefix and the scatter byte.
-    return len(self.directory.rawPrefix) + 1
+  def del_vs_slice(self):
+    """ The portion of keys that contain the deleted versionstamp. """
+    prefix_size = len(self.directory.rawPrefix) + 1
+    return slice(prefix_size, prefix_size + VS_SIZE)
+
+  @property
+  def path_slice(self):
+    """ The portion of keys that contain the encoded path. """
+    return slice(self.del_vs_slice.stop, -1 * VS_SIZE)
+
+  @property
+  def original_vs_slice(self):
+    """ The portion of keys that contain the original versionstamp. """
+    return slice(-1 * VS_SIZE, None)
 
   def encode_key(self, path, original_vs, deleted_vs=None):
+    """ Encodes a key for a deleted version index entry.
+
+    Args:
+      path: A tuple or protobuf path object.
+      original_vs: A 10-byte string specifying the entity version's original
+        commit versionstamp.
+      deleted_vs: A 10-byte string specifying the entity version's delete
+        versionstamp or None.
+    Returns:
+      A string containing an FDB key. If deleted_vs was None, the key should
+      be used with set_versionstamped_key.
+    """
     if not isinstance(path, tuple):
       path = encode_path(path)
 
-    # The entity path is prefixed with a hash in order to scatter the writes.
-    scatter_byte = hash_tuple(path)
-    fill_vs = deleted_vs is None
-    deleted_vs = deleted_vs or b'\x00' * VS_SIZE
-    key = b''.join([self.directory.rawPrefix, scatter_byte, deleted_vs,
-                    fdb.tuple.pack(path), original_vs])
-    if fill_vs:
+    key = b''.join([
+      self.directory.rawPrefix, hash_tuple(path),
+      deleted_vs or b'\x00' * VS_SIZE, fdb.tuple.pack(path), original_vs])
+
+    if not deleted_vs:
       vs_index = len(self.directory.rawPrefix) + len(scatter_byte)
       key += struct.pack('<L', vs_index)
 
     return key
 
   def decode(self, kv):
-    del_vs_slice = slice(self.prefix_size, self.prefix_size + VS_SIZE)
-    path_slice = slice(del_vs_slice.stop, -1 * VS_SIZE)
-    deleted_vs = kv.key[del_vs_slice]
-    path = fdb.tuple.unpack(kv.key[path_slice])
-    original_vs = kv.key[path_slice.stop:]
+    deleted_vs = kv.key[self.del_vs_slice]
+    path = fdb.tuple.unpack(kv.key[self.path_slice])
+    original_vs = kv.key[self.original_vs_slice]
     return DeletedVersionEntry(self.project_id, self.namespace, path,
                                original_vs, deleted_vs)
 

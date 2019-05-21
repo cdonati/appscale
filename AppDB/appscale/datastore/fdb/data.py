@@ -131,7 +131,7 @@ class DataNSCache(DirectoryCache):
 
 class DataNamespace(object):
   """
-  The DataNamespace handles the encoding and decoding details for entity data
+  A DataNamespace handles the encoding and decoding details for entity data
   for a specific project_id/namespace combination.
 
   The directory path looks like (<project-dir>, 'data', <namespace>).
@@ -221,35 +221,6 @@ class DataNamespace(object):
     """ The portion of values that contain the encoded entity. """
     return slice(self._VERSION_SIZE + 1, None)
 
-  def get_slice(self, path, commit_vs=None, read_vs=None):
-    """ Gets the range of keys relevant to the given constraints.
-
-    Args:
-      path: A tuple or protobuf path object.
-      commit_vs: The commit versionstamp for a specific entity version.
-      read_vs: The transaction's read versionstamp. All newer entity versions
-        are ignored.
-    Returns:
-      A slice specifying the start and stop keys.
-    """
-    path_prefix = self._encode_path_prefix(path)
-    if commit_vs is not None:
-      prefix = path_prefix + commit_vs
-      # All chunks for a given version.
-      return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
-                   fdb.KeySelector.first_greater_than(prefix + b'\xff'))
-
-    if read_vs is not None:
-      version_prefix = path_prefix + read_vs
-      # All versions for a given path except those written after the read_vs.
-      return slice(
-        fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
-        fdb.KeySelector.first_greater_than(version_prefix + b'\xff'))
-
-    # All versions for a given path.
-    return slice(fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
-                 fdb.KeySelector.first_greater_than(path_prefix + b'\xff'))
-
   def encode(self, path, entity, version):
     """ Encodes a tuple of KV tuples for a given version entry.
 
@@ -284,10 +255,12 @@ class DataNamespace(object):
       A string containing an FDB key. If commit_vs was None, the key should be
       used with set_versionstamped_key.
     """
-    encoded_vs = b'\x00' * VS_SIZE if commit_vs is None else commit_vs
     encoded_index = bytes(bytearray((index,)))
-    encoded_key = self._encode_path_prefix(path) + encoded_vs + encoded_index
-    if commit_vs is None:
+    encoded_key = b''.join([
+      self._encode_path_prefix(path),
+      commit_vs or b'\x00' * VS_SIZE,
+      encoded_index])
+    if not commit_vs:
       vs_index = len(encoded_key) - (VS_SIZE + self._INDEX_SIZE)
       encoded_key += encode_vs_index(vs_index)
 
@@ -317,6 +290,35 @@ class DataNamespace(object):
 
     return VersionEntry(self.project_id, self.namespace, path, commit_vs,
                         encoded_entity, version)
+
+  def get_slice(self, path, commit_vs=None, read_vs=None):
+    """ Gets the range of keys relevant to the given constraints.
+
+    Args:
+      path: A tuple or protobuf path object.
+      commit_vs: The commit versionstamp for a specific entity version.
+      read_vs: The transaction's read versionstamp. All newer entity versions
+        are ignored.
+    Returns:
+      A slice specifying the start and stop keys.
+    """
+    path_prefix = self._encode_path_prefix(path)
+    if commit_vs is not None:
+      prefix = path_prefix + commit_vs
+      # All chunks for a given version.
+      return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
+                   fdb.KeySelector.first_greater_than(prefix + b'\xff'))
+
+    if read_vs is not None:
+      version_prefix = path_prefix + read_vs
+      # All versions for a given path except those written after the read_vs.
+      return slice(
+        fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
+        fdb.KeySelector.first_greater_than(version_prefix + b'\xff'))
+
+    # All versions for a given path.
+    return slice(fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
+                 fdb.KeySelector.first_greater_than(path_prefix + b'\xff'))
 
   def _encode_path_prefix(self, path):
     """ Encodes the portion of the key up to and including the path.
@@ -388,7 +390,7 @@ class GroupUpdatesNSCache(DirectoryCache):
 
 class GroupUpdatesNS(object):
   """
-  The GroupUpdatesNS handles the encoding and decoding details for commit
+  A GroupUpdatesNS handles the encoding and decoding details for commit
   versionstamps for each entity group. These are used to materialize conflicts
   for transactions that involve ancestory queries on the same entity groups.
 
