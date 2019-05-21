@@ -1,7 +1,12 @@
+"""
+This module keeps track of outdated transactions and entity versions and
+deletes them when sufficient time has passed. The GarbageCollector is the main
+interface that clients can use to mark resources as old and determine if a
+resource is still available.
+"""
 import logging
 import monotonic
 import struct
-import time
 from collections import deque
 
 import six.moves as sm
@@ -17,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class DeletedVersionEntry(object):
+  """ Encapsulates details for a deleted entity version. """
   __SLOTS__ = [u'project_id', u'namespace', u'path', u'original_vs',
                u'deleted_vs']
 
@@ -27,6 +33,12 @@ class DeletedVersionEntry(object):
     self.original_vs = original_vs
     self.deleted_vs = deleted_vs
 
+
+class DeletedVersionIndexCache(object):
+  """  """
+
+  # The number of items the cache can hold.
+  SIZE = 512
 
 class DeletedVersionIndex(object):
   DIR_NAME = u'deleted-versions'

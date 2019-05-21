@@ -1,4 +1,5 @@
-""" A datastore implementation that uses FoundationDB.
+"""
+A datastore implementation that uses FoundationDB.
 
 All datastore state is split between multiple FoundationDB directories. All of
 the state for a given project is stored in (appscale, datastore, <project-id>).
@@ -7,7 +8,6 @@ Within each project directory, there is a directory for each of the following:
 data: encoded entity data
 indexes: entity key references by property values
 transactions: transaction metadata
-
 """
 import logging
 import sys

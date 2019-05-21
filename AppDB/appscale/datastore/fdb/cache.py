@@ -1,4 +1,7 @@
-"""  """
+"""
+This module allows FDB clients to cache directory mappings and invalidate
+them when the schema changes.
+"""
 
 from collections import deque
 
@@ -8,8 +11,7 @@ from appscale.datastore.dbconstants import InternalError
 
 
 class DirectoryCache(object):
-  # The root directory that the datastore uses.
-  ROOT = ('appscale', 'datastore')
+  """ A simple directory cache that more specialized caches can extend. """
 
   # The location of the metadata version key.
   METADATA_KEY = b'\xff/metadataVersion'
@@ -39,6 +41,7 @@ class DirectoryCache(object):
 
   @gen.coroutine
   def validate_cache(self, tr):
+    """ Clears the cache if the metadata key has been updated. """
     current_version = yield self._tornado_fdb.get(tr, self.METADATA_KEY)
     if not current_version.present():
       raise InternalError(u'The FDB cluster metadata key is missing')
@@ -50,6 +53,8 @@ class DirectoryCache(object):
 
 
 class ProjectCache(DirectoryCache):
+  """ A directory cache that keeps track of projects. """
+
   # The number of items the cache can hold.
   SIZE = 256
 
@@ -58,9 +63,17 @@ class ProjectCache(DirectoryCache):
 
   @gen.coroutine
   def get(self, tr, project_id):
+    """ Gets a project's directory.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying a project ID.
+    Returns:
+      A DirectorySubspace object.
+    """
     yield self.validate_cache(tr)
     if project_id not in self:
-      # TODO: Check defined projects instead of assuming they are valid.
+      # TODO: Check new projects instead of assuming they are valid.
       # This can also be made async.
       self[project_id] = self.root_dir.create_or_open(tr, (project_id,))
 
