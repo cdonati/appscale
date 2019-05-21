@@ -5,10 +5,11 @@ import time
 import fdb
 import mmh3
 import six
+import struct
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 
-from appscale.datastore.dbconstants import SCATTER_CHANCE
+from appscale.datastore.dbconstants import InternalError, SCATTER_CHANCE
 
 fdb.api_version(600)
 logger = logging.getLogger(__name__)
@@ -219,29 +220,9 @@ class KVIterator(object):
     self._done = False
 
   def __repr__(self):
-    # TODO: Simplify when KeySelector repr is fixed.
-    start = self.slice.start
-    if isinstance(start, fdb.KeySelector):
-      start = u'KeySelector(%r, %r, %r)' % (start.key, start.or_equal,
-                                            start.offset)
-    else:
-      start = repr(start)
-
-    stop = self.slice.stop
-    if isinstance(stop, fdb.KeySelector):
-      stop = u'KeySelector(%r, %r, %r)' % (stop.key, stop.or_equal,
-                                           stop.offset)
-    else:
-      stop = repr(stop)
-
-    attrs = [u'start={}'.format(start), u'stop={}'.format(stop)]
-    if self._limit > 0:
-      attrs.append(u'limit={}'.format(self._limit))
-
-    if self._reverse:
-      attrs.append(u'reverse={}'.format(self._reverse))
-
-    return u'KVIterator({})'.format(', '.join(attrs))
+    return (u'KVIterator(key_slice={!r}, limit={!r}, reverse={!r}, '
+            u'streaming_mode={!r}, snapshot={!r})').format(
+      self.slice, self._limit, self._reverse, self._mode, self._snapshot)
 
   def increase_limit(self, difference=1):
     if not self.done_with_range:

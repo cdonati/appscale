@@ -1,9 +1,10 @@
+import struct
 import sys
 
 import six
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.dbconstants import BadRequest
+from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.utils import fdb
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
@@ -253,3 +254,23 @@ def decode_value(encoded_value):
     compound_val.MergeFrom(decoded_value)
 
   return prop_value
+
+
+def encode_sortable_int(value, byte_count):
+  format_str = u'>Q' if byte_count > 4 else u'>I'
+  encoded = struct.pack(format_str, value)
+  if any(byte != b'\x00' for byte in encoded[:-1 * byte_count]):
+    raise InternalError(u'Value exceeds maximum size')
+
+  return encoded[-1 * byte_count:]
+
+
+def decode_sortable_int(encoded_value):
+  format_str = u'>Q' if len(encoded_value) > 4 else u'>I'
+  format_size = 8 if len(encoded_value) > 4 else 4
+  encoded_value = b'\x00' * (format_size - len(encoded_value)) + encoded_value
+  return struct.unpack(format_str, encoded_value)[0]
+
+
+def encode_vs_index(vs_position):
+  return struct.pack(u'<L', vs_position)

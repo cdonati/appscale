@@ -16,7 +16,9 @@ from tornado import gen
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.cache import DirectoryCache
-from appscale.datastore.fdb.codecs import decode_path, decode_str, encode_path
+from appscale.datastore.fdb.codecs import (
+  decode_path, decode_sortable_int, decode_str, encode_path,
+  encode_sortable_int, encode_vs_index)
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, DS_ROOT, EncodedTypes, fdb, hash_tuple, KVIterator,
   MAX_ENTITY_SIZE, VS_SIZE)
@@ -110,9 +112,12 @@ class DataNSCache(DirectoryCache):
 class DataNamespace(object):
   """
   The DataNamespace handles the encoding and decoding details for entity data
-  for a specific project_id/namespace combination. The directory path looks
-  like (<project-dir>, 'data', <namespace>). Within this directory, keys are
-  encoded as <scatter-byte> + <path-tuple> + <commit-vs> + <index>.
+  for a specific project_id/namespace combination.
+
+  The directory path looks like (<project-dir>, 'data', <namespace>).
+
+  Within this directory, keys are encoded as
+  <scatter-byte> + <path-tuple> + <commit-vs> + <index>.
 
   The <scatter-byte> is a single byte determined by hashing the entity path.
   Its purpose is to spread writes more evenly across the cluster and minimize
@@ -167,14 +172,46 @@ class DataNamespace(object):
 
   @property
   def path_slice(self):
+    """ The portion of keys that contain the encoded path. """
     return slice(len(self.directory.rawPrefix) + 1,
                  -1 * (VS_SIZE + self._INDEX_SIZE))
 
   @property
   def vs_slice(self):
+    """ The portion of keys that contain the commit versionstamp. """
     return slice(self.path_slice.stop, self.path_slice.stop + VS_SIZE)
 
+  @property
+  def index_slice(self):
+    """ The portion of keys that contain the chunk index. """
+    return slice(-1 * self._INDEX_SIZE, None)
+
+  @property
+  def version_slice(self):
+    """ The portion of values that contain the entity version. """
+    return slice(None, self._VERSION_SIZE)
+
+  @property
+  def encoding_slice(self):
+    """ The portion of values that specify the entity encoding type. """
+    return slice(self._VERSION_SIZE, self._VERSION_SIZE + 1)
+
+  @property
+  def entity_slice(self):
+    """ The portion of values that contain the encoded entity. """
+    return slice(self._VERSION_SIZE + 1, None)
+
   def get_slice(self, path, commit_vs=None, read_vs=None):
+    """ Gets the range of keys relevant to the given constraints.
+
+    Args:
+      path: A tuple or protobuf path object.
+      commit_vs: The commit versionstamp for a specific entity version.
+      read_vs: The transaction's read versionstamp. All newer entity versions
+        are ignored.
+    Returns:
+      A slice specifying the start and stop keys.
+    """
     path_prefix = self._encode_path_prefix(path)
     if commit_vs is not None:
       prefix = path_prefix + commit_vs
@@ -193,21 +230,26 @@ class DataNamespace(object):
     return slice(fdb.KeySelector.first_greater_or_equal(path_prefix + b'\x00'),
                  fdb.KeySelector.first_greater_than(path_prefix + b'\xff'))
 
-  def encode(self, path, entity, version, commit_vs=None):
+  def encode(self, path, entity, version):
+    """ Encodes a tuple of KV tuples for a given version entry.
+
+    Args:
+      path: A tuple or protobuf path object.
+      entity: An encoded entity or protobuf object.
+      version: An integer specifying the new entity version.
+    Returns:
+      A tuple of KV tuples suitable for writing in an FDB transaction.
+    """
     if isinstance(entity, entity_pb.EntityProto):
       entity = entity.Encode()
 
     if len(entity) > MAX_ENTITY_SIZE:
       raise BadRequest(u'Entity exceeds maximum size')
 
-    encoded_version = struct.pack('<Q', version)
-    if any(byte != b'\x00' for byte in encoded_version[self._VERSION_SIZE:]):
-      raise InternalError(u'Version exceeds maximum size')
-
-    encoded_version = encoded_version[:self._VERSION_SIZE]
+    encoded_version = encode_sortable_int(version, self._VERSION_SIZE)
     full_value = b''.join([encoded_version, EncodedTypes.ENTITY_V3, entity])
     chunk_count = int(math.ceil(len(full_value) / self._CHUNK_SIZE))
-    return tuple(self._encode_kv(full_value, index, path, commit_vs)
+    return tuple(self._encode_kv(full_value, index, path, commit_vs=None)
                  for index in sm.range(chunk_count))
 
   def encode_key(self, path, commit_vs, index):
@@ -216,22 +258,22 @@ class DataNamespace(object):
     encoded_key = self._encode_path_prefix(path) + encoded_vs + encoded_index
     if commit_vs is None:
       vs_index = len(encoded_key) - (VS_SIZE + self._INDEX_SIZE)
-      encoded_key += struct.pack('<L', vs_index)
+      encoded_key += encode_vs_index(vs_index)
 
     return encoded_key
 
   def decode(self, kvs):
     path = fdb.tuple.unpack(kvs[0].key[self.path_slice])
     commit_vs = kvs[0].key[self.vs_slice]
-    first_index = ord(kvs[0].key[-1 * self._INDEX_SIZE:])
+    first_index = ord(kvs[0].key[self.index_slice])
 
     encoded_entity = None
     version = None
     if first_index == 0:
       encoded_val = b''.join([kv.value for kv in kvs])
-      version = struct.unpack('<I', encoded_val[:self._VERSION_SIZE] + b'\x00')
-      encoding = encoded_val[self._VERSION_SIZE]
-      encoded_entity = encoded_val[self._VERSION_SIZE + 1:]
+      version = decode_sortable_int(encoded_val[self.version_slice])
+      encoding = encoded_val[self.encoding_slice]
+      encoded_entity = encoded_val[self.entity_slice]
       if encoding != EncodedTypes.ENTITY_V3:
         raise InternalError(u'Unknown entity type')
 
@@ -253,6 +295,8 @@ class DataNamespace(object):
 
 
 class GroupUpdatesNSCache(DirectoryCache):
+  """ Caches GroupUpdatesNS objects to keep track of FDB directory prefixes. """
+
   # The number of items the cache can hold.
   SIZE = 512
 
@@ -263,6 +307,13 @@ class GroupUpdatesNSCache(DirectoryCache):
 
   @gen.coroutine
   def get(self, tr, project_id, namespace):
+    """ Gets a GroupUpdatesNS for a given project and namespace.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+      namespace: A string specifying the namespace.
+    """
     yield self.validate_cache(tr)
     key = (project_id, namespace)
     if key not in self:
@@ -276,12 +327,37 @@ class GroupUpdatesNSCache(DirectoryCache):
 
 
 class GroupUpdatesNS(object):
+  """
+  The GroupUpdatesNS handles the encoding and decoding details for commit
+  versionstamps for each entity group. These are used to materialize conflicts
+  for transactions that involve ancestory queries on the same entity groups.
+
+  The directory path looks like (<project-dir>, 'group-updates', <namespace>).
+
+  Within this directory, keys are encoded as <scatter-byte> + <path-tuple>.
+
+  The <scatter-byte> is a single byte determined by hashing the group path.
+  Its purpose is to spread writes more evenly across the cluster and minimize
+  hotspots.
+
+  The <path-tuple> is an encoded tuple containing the group path.
+
+  Values are 10-byte strings that specify the latest commit version for the
+  entity group.
+  """
   DIR_NAME = u'group-updates'
 
   def __init__(self, directory):
     self.directory = directory
 
   def encode(self, path):
+    """ Creates a KV tuple for updating a group's commit versionstamp.
+
+    Args:
+      path: A tuple or protobuf path object.
+    Returns:
+      A (key, value) tuple suitable for tr.set_versionstamped_value.
+    """
     if not isinstance(path, tuple):
       path = encode_path(path)
 
@@ -290,6 +366,13 @@ class GroupUpdatesNS(object):
     return self.encode_key(group_path), val
 
   def encode_key(self, group_path):
+    """ Encodes a key for a given entity group.
+
+    Args:
+      group_path: A tuple containing path elements.
+    Returns:
+      A byte string containing the relevant FDB key.
+    """
     return b''.join([self.directory.rawPrefix, hash_tuple(group_path),
                      fdb.tuple.pack(group_path)])
 
@@ -313,7 +396,7 @@ class DataManager(object):
 
   @gen.coroutine
   def get_latest(self, tr, key, read_vs=None, include_data=True):
-    """ Get the newest entity version for the given read VS.
+    """ Gets the newest entity version for the given read VS.
 
     Args:
       tr: An FDB transaction.
@@ -335,7 +418,8 @@ class DataManager(object):
 
   @gen.coroutine
   def get_entry(self, tr, index_entry, snapshot=False):
-    """ Get the entity data from an index entry.
+    """ Gets the entity data from an index entry.
+
     Args:
       tr: An FDB transaction.
       index_entry: An IndexEntry object.
@@ -351,14 +435,15 @@ class DataManager(object):
   @gen.coroutine
   def get_version_from_path(self, tr, project_id, namespace, path, commit_vs,
                             snapshot=False):
-    """ Get the entity data for a specific version.
+    """ Gets the entity data for a specific version.
+
     Args:
       tr: An FDB transaction.
       project_id: A string specifying the project ID.
       namespace: A string specifying the namespace.
       path: A tuple or protobuf path object.
       commit_vs: A 10-byte string specyfing the FDB commit versionstamp.
-      snapshot: f True, the read will not cause a transaction conflict.
+      snapshot: If True, the read will not cause a transaction conflict.
     Returns:
       A VersionEntry or None.
     """
@@ -369,6 +454,16 @@ class DataManager(object):
 
   @gen.coroutine
   def last_group_vs(self, tr, project_id, namespace, group_path):
+    """ Gets the most recent commit versionstamp for the entity group.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+      namespace: A string specifying the namespace.
+      group_path: A tuple containing the group's path elements.
+    Returns:
+      A 10-byte string specifying the versionstamp or None.
+    """
     group_ns = yield self._group_updates_cache.get(tr, project_id, namespace)
     last_updated_vs = yield self._tornado_fdb.get(
       tr, group_ns.encode_key(group_path))
@@ -378,6 +473,14 @@ class DataManager(object):
     raise gen.Return(last_updated_vs.value)
 
   def put(self, tr, key, version, encoded_entity):
+    """ Writes a new version entry and updates the entity group VS.
+
+    Args:
+      tr: An FDB transaction.
+      key: A protobuf reference object.
+      version: An integer specifying the new entity version.
+      encoded_entity: A string specifying the encoded entity data.
+    """
     data_ns = yield self._data_cache.get_from_key(tr, key)
     for fdb_key, val in data_ns.encode(key.path(), encoded_entity, version):
       tr[fdb_key] = val
@@ -387,12 +490,28 @@ class DataManager(object):
     tr.set_versionstamped_value(*group_ns.encode(key.path()))
 
   def hard_delete(self, tr, key, commit_vs):
-    """ Only the GC should use this. """
+    """ Deletes a version entry. Only the GC should use this.
+
+    Args:
+      tr: An FDB transaction.
+      key: A protobuf reference object.
+      commit_vs: A 10-byte string specifying the commit versionstamp.
+    """
     data_ns = yield self._data_cache.get_from_key(tr, key)
     del tr[data_ns.get_slice(key.path(), commit_vs)]
 
   @gen.coroutine
   def _last_version(self, tr, data_ns, desired_slice, include_data=True):
+    """ Gets the most recent entity data for a given slice.
+
+    Args:
+      tr: An FDB transaction.
+      data_ns: A DataNamespace.
+      desired_slice: A slice specifying the start and stop keys.
+      include_data: A boolean indicating that all chunks should be fetched.
+    Returns:
+      A VersionEntry or None.
+    """
     kvs, count, more_results = yield self._tornado_fdb.get_range(
       tr, desired_slice, limit=1, reverse=True)
 
@@ -414,6 +533,15 @@ class DataManager(object):
 
   @gen.coroutine
   def _get_range(self, tr, data_range, snapshot=False):
+    """ Gets a list of KVs for a given slice.
+
+    Args:
+      tr: An FDB transaction.
+      data_range: A slice specifying the start and stop keys.
+      snapshot: If True, the read will not cause a transaction conflict.
+    Returns:
+      A list of KVs in the given range.
+    """
     iterator = KVIterator(tr, self._tornado_fdb, data_range, snapshot=snapshot)
     all_kvs = []
     while True:
