@@ -1,3 +1,5 @@
+"""  """
+
 from collections import deque
 
 from tornado import gen

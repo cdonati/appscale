@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class VersionEntry(object):
+  """ Encapsulates details for an entity version. """
   __SLOTS__ = [u'project_id', u'namespace', u'path', u'commit_vs',
                u'version', u'_encoded_entity', u'_decoded_entity']
 
@@ -81,6 +82,8 @@ class VersionEntry(object):
 
 
 class DataNSCache(DirectoryCache):
+  """ Caches DataNamespace objects to keep track of FDB directory prefixes. """
+
   # The number of items the cache can hold.
   SIZE = 512
 
@@ -91,6 +94,15 @@ class DataNSCache(DirectoryCache):
 
   @gen.coroutine
   def get(self, tr, project_id, namespace):
+    """ Gets a DataNamespace for the given project and namespace.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+      namespace: A string specifying the namespace.
+    Returns:
+      A DataNamespace object.
+    """
     yield self.validate_cache(tr)
     key = (project_id, namespace)
     if key not in self:
@@ -104,6 +116,14 @@ class DataNSCache(DirectoryCache):
 
   @gen.coroutine
   def get_from_key(self, tr, key):
+    """ Gets a DataNamespace for a protobuf reference object.
+
+    Args:
+      tr: An FDB transaction.
+      key: A protobuf reference object.
+    Returns:
+      A DataNamespace object.
+    """
     project_id = decode_str(key.app())
     namespace = decode_str(key.name_space())
     yield self.get(tr, project_id, namespace)
@@ -257,10 +277,11 @@ class DataNamespace(object):
 
     Args:
       path: A tuple or protobuf path object.
-      commit_vs: A 10-byte string specifying the version's commit versionstamp.
+      commit_vs: A 10-byte string specifying the version's commit versionstamp
+        or None.
       index: An integer specifying the chunk index.
     Returns:
-      A string containing an FDB key. If commit_vs was none, the key should be
+      A string containing an FDB key. If commit_vs was None, the key should be
       used with set_versionstamped_key.
     """
     encoded_vs = b'\x00' * VS_SIZE if commit_vs is None else commit_vs
@@ -273,6 +294,13 @@ class DataNamespace(object):
     return encoded_key
 
   def decode(self, kvs):
+    """ Decodes KVs to a version entry.
+
+    Args:
+      kvs: An iterable containing KeyValue objects.
+    Returns:
+      A VersionEntry object.
+    """
     path = fdb.tuple.unpack(kvs[0].key[self.path_slice])
     commit_vs = kvs[0].key[self.vs_slice]
     first_index = ord(kvs[0].key[self.index_slice])
@@ -291,6 +319,13 @@ class DataNamespace(object):
                         encoded_entity, version)
 
   def _encode_path_prefix(self, path):
+    """ Encodes the portion of the key up to and including the path.
+
+    Args:
+      path: A tuple or protobuf path object.
+    Returns:
+      A string containing the path prefix.
+    """
     if not isinstance(path, tuple):
       path = encode_path(path)
 
@@ -298,6 +333,18 @@ class DataNamespace(object):
                      fdb.tuple.pack(path)])
 
   def _encode_kv(self, full_value, index, path, commit_vs):
+    """ Encodes an individual KV entry for a single chunk.
+
+    Args:
+      full_value: A string containing the full encoded version entry value.
+      index: An integer specifying the chunk index.
+      path: A tuple or protobuf path object.
+      commit_vs: A 10-byte string specifying the version's commit versionstamp
+        or None.
+    Returns:
+      A tuple in the form of (key, value) suitable for using with FDB. If
+      commit_vs was None, the tuple should be used with set_versionstamped_key.
+    """
     data_range = slice(index * self._CHUNK_SIZE,
                        (index + 1) * self._CHUNK_SIZE)
     encoded_val = full_value[data_range]
@@ -305,7 +352,8 @@ class DataNamespace(object):
 
 
 class GroupUpdatesNSCache(DirectoryCache):
-  """ Caches GroupUpdatesNS objects to keep track of FDB directory prefixes. """
+  """ Caches GroupUpdatesNS objects to keep track of FDB directory prefixes.
+  """
 
   # The number of items the cache can hold.
   SIZE = 512
@@ -323,6 +371,8 @@ class GroupUpdatesNSCache(DirectoryCache):
       tr: An FDB transaction.
       project_id: A string specifying the project ID.
       namespace: A string specifying the namespace.
+    Returns:
+      A DataNamespace object.
     """
     yield self.validate_cache(tr)
     key = (project_id, namespace)
@@ -366,7 +416,7 @@ class GroupUpdatesNS(object):
     Args:
       path: A tuple or protobuf path object.
     Returns:
-      A (key, value) tuple suitable for tr.set_versionstamped_value.
+      A (key, value) tuple suitable for set_versionstamped_value.
     """
     if not isinstance(path, tuple):
       path = encode_path(path)
