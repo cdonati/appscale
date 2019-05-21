@@ -253,6 +253,16 @@ class DataNamespace(object):
                  for index in sm.range(chunk_count))
 
   def encode_key(self, path, commit_vs, index):
+    """ Encodes a key for the given version entry.
+
+    Args:
+      path: A tuple or protobuf path object.
+      commit_vs: A 10-byte string specifying the version's commit versionstamp.
+      index: An integer specifying the chunk index.
+    Returns:
+      A string containing an FDB key. If commit_vs was none, the key should be
+      used with set_versionstamped_key.
+    """
     encoded_vs = b'\x00' * VS_SIZE if commit_vs is None else commit_vs
     encoded_index = bytes(bytearray((index,)))
     encoded_key = self._encode_path_prefix(path) + encoded_vs + encoded_index
