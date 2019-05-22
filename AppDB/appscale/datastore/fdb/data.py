@@ -15,10 +15,10 @@ from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
-from appscale.datastore.fdb.cache import DirectoryCache
+from appscale.datastore.fdb.cache import NSCache
 from appscale.datastore.fdb.codecs import (
-  decode_path, decode_sortable_int, decode_str, encode_path,
-  encode_sortable_int, encode_vs_index)
+  decode_path, decode_sortable_int, encode_path, encode_sortable_int,
+  encode_vs_index)
 from appscale.datastore.fdb.utils import (
   ABSENT_VERSION, DS_ROOT, EncodedTypes, fdb, hash_tuple, KVIterator,
   MAX_ENTITY_SIZE, VS_SIZE)
@@ -79,54 +79,6 @@ class VersionEntry(object):
       return self._decoded_entity
     else:
       return None
-
-
-class DataNSCache(DirectoryCache):
-  """ Caches DataNamespace objects to keep track of FDB directory prefixes. """
-
-  # The number of items the cache can hold.
-  SIZE = 512
-
-  def __init__(self, tornado_fdb, project_cache):
-    super(DataNSCache, self).__init__(tornado_fdb, project_cache.root_dir,
-                                      self.SIZE)
-    self._project_cache = project_cache
-
-  @gen.coroutine
-  def get(self, tr, project_id, namespace):
-    """ Gets a DataNamespace for the given project and namespace.
-
-    Args:
-      tr: An FDB transaction.
-      project_id: A string specifying the project ID.
-      namespace: A string specifying the namespace.
-    Returns:
-      A DataNamespace object.
-    """
-    yield self.validate_cache(tr)
-    key = (project_id, namespace)
-    if key not in self:
-      project_dir = yield self._project_cache.get(project_id)
-      # TODO: Make async.
-      ns_dir = project_dir.create_or_open(
-        tr, (DataNamespace.DIR_NAME, namespace))
-      self[key] = DataNamespace(ns_dir)
-
-    raise gen.Return(self[key])
-
-  @gen.coroutine
-  def get_from_key(self, tr, key):
-    """ Gets a DataNamespace for a protobuf reference object.
-
-    Args:
-      tr: An FDB transaction.
-      key: A protobuf reference object.
-    Returns:
-      A DataNamespace object.
-    """
-    project_id = decode_str(key.app())
-    namespace = decode_str(key.name_space())
-    yield self.get(tr, project_id, namespace)
 
 
 class DataNamespace(object):
@@ -256,10 +208,9 @@ class DataNamespace(object):
       used with set_versionstamped_key.
     """
     encoded_index = bytes(bytearray((index,)))
-    encoded_key = b''.join([
-      self._encode_path_prefix(path),
-      commit_vs or b'\x00' * VS_SIZE,
-      encoded_index])
+    encoded_key = b''.join([self._encode_path_prefix(path),
+                            commit_vs or b'\x00' * VS_SIZE,
+                            encoded_index])
     if not commit_vs:
       vs_index = len(encoded_key) - (VS_SIZE + self._INDEX_SIZE)
       encoded_key += encode_vs_index(vs_index)
@@ -353,41 +304,6 @@ class DataNamespace(object):
     return self.encode_key(path, commit_vs, index), encoded_val
 
 
-class GroupUpdatesNSCache(DirectoryCache):
-  """ Caches GroupUpdatesNS objects to keep track of FDB directory prefixes.
-  """
-
-  # The number of items the cache can hold.
-  SIZE = 512
-
-  def __init__(self, tornado_fdb, project_cache):
-    super(GroupUpdatesNSCache, self).__init__(
-      tornado_fdb, project_cache.root_dir, self.SIZE)
-    self._project_cache = project_cache
-
-  @gen.coroutine
-  def get(self, tr, project_id, namespace):
-    """ Gets a GroupUpdatesNS for a given project and namespace.
-
-    Args:
-      tr: An FDB transaction.
-      project_id: A string specifying the project ID.
-      namespace: A string specifying the namespace.
-    Returns:
-      A DataNamespace object.
-    """
-    yield self.validate_cache(tr)
-    key = (project_id, namespace)
-    if key not in self:
-      project_dir = yield self._project_cache.get(project_id)
-      # TODO: Make async.
-      ns_dir = project_dir.create_or_open(
-        tr, (GroupUpdatesNS.DIR_NAME, namespace))
-      self[key] = GroupUpdatesNS(ns_dir)
-
-    raise gen.Return(self[key])
-
-
 class GroupUpdatesNS(object):
   """
   A GroupUpdatesNS handles the encoding and decoding details for commit
@@ -452,9 +368,9 @@ class DataManager(object):
   """
   def __init__(self, tornado_fdb, project_cache):
     self._tornado_fdb = tornado_fdb
-    self._data_cache = DataNSCache(self._tornado_fdb, project_cache)
-    self._group_updates_cache = GroupUpdatesNSCache(
-      self._tornado_fdb, project_cache)
+    self._data_cache = NSCache(self._tornado_fdb, project_cache, DataNamespace)
+    self._group_updates_cache = NSCache(
+      self._tornado_fdb, project_cache, GroupUpdatesNS)
 
   @gen.coroutine
   def get_latest(self, tr, key, read_vs=None, include_data=True):

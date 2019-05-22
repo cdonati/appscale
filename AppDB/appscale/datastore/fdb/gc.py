@@ -6,7 +6,6 @@ resource is still available.
 """
 import logging
 import monotonic
-import struct
 from collections import deque
 
 import six.moves as sm
@@ -14,8 +13,9 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
-from appscale.datastore.fdb.cache import DirectoryCache
-from appscale.datastore.fdb.codecs import decode_str, encode_path
+from appscale.datastore.fdb.cache import NSCache
+from appscale.datastore.fdb.codecs import (
+  decode_str, encode_path, encode_vs_index)
 from appscale.datastore.fdb.polling_lock import PollingLock
 from appscale.datastore.fdb.utils import (
   DS_ROOT, fdb, hash_tuple, KVIterator, VS_SIZE)
@@ -34,41 +34,6 @@ class DeletedVersionEntry(object):
     self.path = path
     self.original_vs = original_vs
     self.deleted_vs = deleted_vs
-
-
-class DeletedVersionIndexCache(DirectoryCache):
-  """ Caches DeletedVersionIndex objects to keep track of directory prefixes.
-  """
-
-  # The number of items the cache can hold.
-  SIZE = 512
-
-  def __init__(self, tornado_fdb, project_cache):
-    super(DeletedVersionIndexCache, self).__init__(
-      tornado_fdb, project_cache.root_dir, self.SIZE)
-    self._project_cache = project_cache
-
-  @gen.coroutine
-  def get(self, tr, project_id, namespace):
-    """ Gets a DeletedVersionIndex for the given project and namespace.
-
-    Args:
-      tr: An FDB transaction.
-      project_id: A string specifying the project ID.
-      namespace: A string specifying the namespace.
-    Returns:
-      A DeletedVersionIndex object.
-    """
-    yield self.validate_cache(tr)
-    key = (project_id, namespace)
-    if key not in self:
-      project_dir = yield self._project_cache.get(project_id)
-      # TODO: Make async.
-      ns_dir = project_dir.create_or_open(
-        tr, (DeletedVersionIndex.DIR_NAME, namespace))
-      self[key] = DeletedVersionIndex(ns_dir)
-
-    raise gen.Return(self[key])
 
 
 class DeletedVersionIndex(object):
@@ -142,17 +107,25 @@ class DeletedVersionIndex(object):
     if not isinstance(path, tuple):
       path = encode_path(path)
 
-    key = b''.join([
-      self.directory.rawPrefix, hash_tuple(path),
-      deleted_vs or b'\x00' * VS_SIZE, fdb.tuple.pack(path), original_vs])
-
+    scatter_byte = hash_tuple(path)
+    key = b''.join([self.directory.rawPrefix, scatter_byte,
+                    deleted_vs or b'\x00' * VS_SIZE,
+                    fdb.tuple.pack(path),
+                    original_vs])
     if not deleted_vs:
       vs_index = len(self.directory.rawPrefix) + len(scatter_byte)
-      key += struct.pack('<L', vs_index)
+      key += encode_vs_index(vs_index)
 
     return key
 
   def decode(self, kv):
+    """ Decodes a KV to a DeletedVersionEntry.
+
+    Args:
+      kv: An FDB KeyValue object.
+    Returns:
+      A DeletedVersionEntry object.
+    """
     deleted_vs = kv.key[self.del_vs_slice]
     path = fdb.tuple.unpack(kv.key[self.path_slice])
     original_vs = kv.key[self.original_vs_slice]
@@ -160,6 +133,17 @@ class DeletedVersionIndex(object):
                                original_vs, deleted_vs)
 
   def get_slice(self, byte_num, safe_vs):
+    """
+    Gets the range of keys within a scatter byte up to the given deleted
+    versionstamp.
+
+    Args:
+      byte_num: An integer specifying a scatter byte value.
+      safe_vs: A 10-byte value indicating the latest deleted versionstamp that
+        should be considered for deletion.
+    Returns:
+      A slice specifying the start and stop keys.
+    """
     scatter_byte = bytes(bytearray([byte_num]))
     prefix = self.directory.rawPrefix + scatter_byte
     return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
@@ -167,21 +151,41 @@ class DeletedVersionIndex(object):
 
 
 class SafeReadDir(object):
+  """
+  SafeReadDirs keep track of the most recent garbage collection versionstamps.
+  These versionstamps are used to invalidate stale transaction IDs.
+
+  When the datastore requests data inside a transaction, the SafeReadDir is
+  first checked to make sure that the garbage collector has not cleaned up an
+  entity that was mutated after the start of the transaction. Since a mutation
+  always means a new version entry, this ensures that valid reads always have
+  access to a version entry older than their read versionstamp.
+
+  Put another way, the newest versionstamp values in this directory are going
+  to be older than the transaction duration limit. Therefore, datastore
+  transactions that see a newer value than their read versionstamp are no
+  longer valid.
+
+  The directory path looks like (<project-dir>, 'safe-read', <namespace>).
+
+  Within this directory, keys are simply a single <scatter-byte> derived from
+  the entity group that was involved in the garbage collection. The entity
+  group is used in order to cover ancestory queries.
+
+  Values are 10-byte versionstamps that indicate the most recently deleted
+  entity version that has been garbage collected.
+  """
   DIR_NAME = u'safe-read'
 
   def __init__(self, directory):
     self.directory = directory
 
-  @classmethod
-  def from_cache(cls, project_id, directory_cache):
-    directory = directory_cache.get((project_id, cls.DIR_NAME))
-    return cls(directory)
-
   def encode_key(self, path):
     if not isinstance(path, tuple):
       path = encode_path(path)
 
-    return self.directory.rawPrefix + hash_tuple(path[:2])
+    entity_group = path[:2]
+    return self.directory.rawPrefix + hash_tuple(entity_group)
 
 
 class GarbageCollector(object):

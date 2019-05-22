@@ -8,6 +8,7 @@ from collections import deque
 from tornado import gen
 
 from appscale.datastore.dbconstants import InternalError
+from appscale.datastore.fdb.codecs import decode_str
 
 
 class DirectoryCache(object):
@@ -78,3 +79,53 @@ class ProjectCache(DirectoryCache):
       self[project_id] = self.root_dir.create_or_open(tr, (project_id,))
 
     raise gen.Return(self[project_id])
+
+
+class NSCache(DirectoryCache):
+  """ Caches namespace directories to keep track of directory prefixes. """
+
+  # The number of items the cache can hold.
+  SIZE = 512
+
+  def __init__(self, tornado_fdb, project_cache, dir_type):
+    super(NSCache, self).__init__(
+      tornado_fdb, project_cache.root_dir, self.SIZE)
+    self._project_cache = project_cache
+    self._dir_type = dir_type
+
+  @gen.coroutine
+  def get(self, tr, project_id, namespace):
+    """ Gets a namespace directory for the given project and namespace.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+      namespace: A string specifying the namespace.
+    Returns:
+      A namespace directory object of the directory type.
+    """
+    yield self.validate_cache(tr)
+    key = (project_id, namespace)
+    if key not in self:
+      project_dir = yield self._project_cache.get(project_id)
+      # TODO: Make async.
+      ns_dir = project_dir.create_or_open(
+        tr, (self._dir_type.DIR_NAME, namespace))
+      self[key] = self._dir_type(ns_dir)
+
+    raise gen.Return(self[key])
+
+  @gen.coroutine
+  def get_from_key(self, tr, key):
+    """ Gets a namespace directory for a protobuf reference object.
+
+    Args:
+      tr: An FDB transaction.
+      key: A protobuf reference object.
+    Returns:
+      A namespace directory object of the directory type.
+    """
+    project_id = decode_str(key.app())
+    namespace = decode_str(key.name_space())
+    ns_dir = yield self.get(tr, project_id, namespace)
+    raise gen.Return(ns_dir)
