@@ -2,7 +2,6 @@
 This module allows FDB clients to cache directory mappings and invalidate
 them when the schema changes.
 """
-
 from collections import deque
 
 from tornado import gen

@@ -150,6 +150,53 @@ class DeletedVersionIndex(object):
                  fdb.KeySelector.first_greater_than(prefix + safe_vs))
 
 
+class TransactionIndex(object):
+  """
+  A TransactionIndex handles the encoding and decoding details for transaction
+  index entries. These entries are used to clean up metadata for expired
+  transactions.
+
+  The directory path looks like
+  (<project-dir>, 'deleted-versions', <namespace>).
+
+  Within this directory, keys are encoded as
+  <scatter-byte> + <deleted-vs> + <path-tuple> + <original-vs>.
+
+  The <scatter-byte> is a single byte determined by hashing the entity path.
+  Its purpose is to spread writes more evenly across the cluster and minimize
+  hotspots. This is especially important for this index because each write is
+  given a new, larger <deleted-vs> value than the last.
+
+  The <deleted-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that deleted the entity version.
+
+  The <path-tuple> is an encoded tuple containing the entity path.
+
+  The <original-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that originally wrote the entity data.
+
+  None of the keys in this index have values.
+    """
+  DIR_NAME = u'safe-read'
+
+  def __init__(self, directory):
+    self.directory = directory
+
+  def encode_key(self, path):
+    """ Encodes a key for a safe read versionstamp entry.
+
+    Args:
+      path: A tuple or protobuf path object.
+    Returns:
+      A string containing an FDB key.
+    """
+    if not isinstance(path, tuple):
+      path = encode_path(path)
+
+    entity_group = path[:2]
+    return self.directory.rawPrefix + hash_tuple(entity_group)
+
+
 class SafeReadDir(object):
   """
   SafeReadDirs keep track of the most recent garbage collection versionstamps.
@@ -162,9 +209,9 @@ class SafeReadDir(object):
   access to a version entry older than their read versionstamp.
 
   Put another way, the newest versionstamp values in this directory are going
-  to be older than the transaction duration limit. Therefore, datastore
-  transactions that see a newer value than their read versionstamp are no
-  longer valid.
+  to be older than the datastore transaction duration limit. Therefore,
+  datastore transactions that see a newer value than their read versionstamp
+  are no longer valid.
 
   The directory path looks like (<project-dir>, 'safe-read', <namespace>).
 
@@ -181,6 +228,13 @@ class SafeReadDir(object):
     self.directory = directory
 
   def encode_key(self, path):
+    """ Encodes a key for a safe read versionstamp entry.
+
+    Args:
+      path: A tuple or protobuf path object.
+    Returns:
+      A string containing an FDB key.
+    """
     if not isinstance(path, tuple):
       path = encode_path(path)
 
@@ -207,13 +261,12 @@ class GarbageCollector(object):
   _BATCH_COUNT = int(_BATCH_PERCENT * 256)
 
   def __init__(self, db, tornado_fdb, data_manager, index_manager,
-               directory_cache):
+               project_cache):
     self._db = db
     self._queue = deque()
     self._tornado_fdb = tornado_fdb
     self._data_manager = data_manager
     self._index_manager = index_manager
-    self._directory_cache = directory_cache
     lock_key = self._directory_cache.root.pack((self._LOCK_KEY,))
     self._lock = PollingLock(self._db, self._tornado_fdb, lock_key)
 

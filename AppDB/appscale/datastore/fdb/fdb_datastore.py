@@ -59,7 +59,7 @@ class FDBDatastore(object):
                                           self._tornado_fdb)
     self._gc = GarbageCollector(
       self._db, self._tornado_fdb, self._data_manager, self.index_manager,
-      self._directory_cache)
+      project_cache)
     self._gc.start()
 
   @gen.coroutine
