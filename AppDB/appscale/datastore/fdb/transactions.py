@@ -118,7 +118,8 @@ class TransactionMetadata(object):
 
 
 class TransactionManager(object):
-  def __init__(self, directory_cache, tornado_fdb):
+  def __init__(self, gc, directory_cache, tornado_fdb):
+    self._gc = gc
     self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
 

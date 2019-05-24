@@ -80,8 +80,40 @@ class ProjectCache(DirectoryCache):
     raise gen.Return(self[project_id])
 
 
+class SectionCache(DirectoryCache):
+  """ Caches non-namespaced section directories within a project. """
+
+  # The number of items the cache can hold.
+  SIZE = 256
+
+  def __init__(self, tornado_fdb, project_cache, dir_type):
+    super(SectionCache, self).__init__(
+      tornado_fdb, project_cache.root_dir, self.SIZE)
+    self._project_cache = project_cache
+    self._dir_type = dir_type
+
+  @gen.coroutine
+  def get(self, tr, project_id):
+    """ Gets a section directory for the given project.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying the project ID.
+    Returns:
+      A namespace directory object of the directory type.
+    """
+    yield self.validate_cache(tr)
+    if project_id not in self:
+      project_dir = yield self._project_cache.get(project_id)
+      # TODO: Make async.
+      section_dir = project_dir.create_or_open(tr, (self._dir_type.DIR_NAME,))
+      self[project_id] = self._dir_type(section_dir)
+
+    raise gen.Return(self[project_id])
+
+
 class NSCache(DirectoryCache):
-  """ Caches namespace directories to keep track of directory prefixes. """
+  """ Caches namespaced sections to keep track of directory prefixes. """
 
   # The number of items the cache can hold.
   SIZE = 512

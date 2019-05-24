@@ -156,45 +156,52 @@ class TransactionIndex(object):
   index entries. These entries are used to clean up metadata for expired
   transactions.
 
-  The directory path looks like
-  (<project-dir>, 'deleted-versions', <namespace>).
+  The directory path looks like (<project-dir>, 'tx-index').
 
-  Within this directory, keys are encoded as
-  <scatter-byte> + <deleted-vs> + <path-tuple> + <original-vs>.
+  Within this directory, keys are encoded as <scatter-byte> + <read-vs>.
 
-  The <scatter-byte> is a single byte determined by hashing the entity path.
-  Its purpose is to spread writes more evenly across the cluster and minimize
+  The <scatter-byte> is a single byte derived from the datastore txid. Its
+  purpose is to spread writes more evenly across the cluster and minimize
   hotspots. This is especially important for this index because each write is
-  given a new, larger <deleted-vs> value than the last.
+  given a new, larger <read-vs> value than the last.
 
-  The <deleted-vs> is a 10-byte versionstamp that specifies the commit version
-  of the transaction that deleted the entity version.
-
-  The <path-tuple> is an encoded tuple containing the entity path.
-
-  The <original-vs> is a 10-byte versionstamp that specifies the commit version
-  of the transaction that originally wrote the entity data.
+  The <read-vs> is a 10-byte versionstamp that specifies the commit version
+  of the FDB transaction that created the datastore transaction.
 
   None of the keys in this index have values.
-    """
-  DIR_NAME = u'safe-read'
+  """
+  DIR_NAME = u'tx-index'
 
   def __init__(self, directory):
     self.directory = directory
 
-  def encode_key(self, path):
+  def encode_key(self, txid):
     """ Encodes a key for a safe read versionstamp entry.
 
     Args:
-      path: A tuple or protobuf path object.
+      txid: An integer specifying a datastore transaction ID.
     Returns:
       A string containing an FDB key.
     """
-    if not isinstance(path, tuple):
-      path = encode_path(path)
+    scatter_byte = bytes(bytearray([txid % 256]))
+    return self.directory.rawPrefix + scatter_byte
 
-    entity_group = path[:2]
-    return self.directory.rawPrefix + hash_tuple(entity_group)
+  # def get_slice(self, byte_num, safe_vs):
+  #   """
+  #   Gets the range of keys within a scatter byte up to the given versionstamp
+  #   associated with an expired datastore transaction.
+  #
+  #   Args:
+  #     byte_num: An integer specifying a scatter byte value.
+  #     safe_vs: A 10-byte value indicating the latest deleted versionstamp that
+  #       should be considered for deletion.
+  #   Returns:
+  #     A slice specifying the start and stop keys.
+  #   """
+  #   scatter_byte = bytes(bytearray([byte_num]))
+  #   prefix = self.directory.rawPrefix + scatter_byte
+  #   return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
+  #                fdb.KeySelector.first_greater_than(prefix + safe_vs))
 
 
 class SafeReadDir(object):
@@ -260,8 +267,7 @@ class GarbageCollector(object):
   # The number of ranges to groom within a single transaction.
   _BATCH_COUNT = int(_BATCH_PERCENT * 256)
 
-  def __init__(self, db, tornado_fdb, data_manager, index_manager,
-               project_cache):
+  def __init__(self, db, tornado_fdb, data_manager, index_manager):
     self._db = db
     self._queue = deque()
     self._tornado_fdb = tornado_fdb
