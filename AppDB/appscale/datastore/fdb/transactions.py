@@ -19,7 +19,8 @@ from tornado import gen
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
-from appscale.datastore.fdb.codecs import decode_str, encode_path
+from appscale.datastore.fdb.codecs import (
+  decode_str, encode_path, encode_sortable_int, encode_vs_index)
 from appscale.datastore.fdb.utils import (
   fdb, EncodedTypes, put_chunks, KVIterator, MAX_ENTITY_SIZE, VS_SIZE)
 
@@ -62,31 +63,31 @@ class TransactionMetadata(object):
   XG = b'\x01'
   LOOKUPS = b'\x02'
   QUERIES = b'\x03'
-  PUTS = b'\x04'
-  DELETES = b'\x05'
+  TASKS = b'\x04'
+  PUTS = b'\x05'
+  DELETES = b'\x06'
 
   FALSE = b'\x00'
   TRUE = b'\x01'
 
   _ENTITY_LEN_SIZE = 3
 
+  # The number of bytes used to encode datastore transaction IDs.
+  _TXID_SIZE = 8
+
   def __init__(self, directory):
     self.directory = directory
 
-  @classmethod
-  def from_cache(cls, project_id, directory_cache):
-    directory = directory_cache.get((project_id, cls.DIR_NAME))
-    return cls(directory)
-
   def tx_prefix(self, txid):
-    return self.directory.rawPrefix + struct.pack('<Q', txid)
+    return (self.directory.rawPrefix +
+            encode_sortable_int(txid, self._TXID_SIZE))
 
   def read_vs_key(self, txid):
     return self.tx_prefix(txid) + self.READ_VS
 
   def set_read_vs(self, tr, txid):
     tr.set_versionstamped_value(self.read_vs_key(txid),
-                                b'\x00' * VS_SIZE + struct.pack('<L', 0))
+                                b'\x00' * VS_SIZE + encode_vs_index(0))
 
   def xg_key(self, txid):
     return self.tx_prefix(txid) + self.XG
@@ -139,10 +140,12 @@ class TransactionManager(object):
     yield self._gc.index_txid(tr, project_id, txid)
     raise gen.Return(txid)
 
+  @gen.coroutine
   def delete(self, tr, project_id, txid):
     tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
     tx_dir.clear(tr, txid)
-    yield self._gc.clear_txid_index_entry(tr, project_id, txid)
+    read_vs = yield self.get_read_vs(tr, project_id, txid)
+    yield self._gc.clear_txid_index_entry(tr, project_id, txid, read_vs)
 
   @gen.coroutine
   def get_read_vs(self, tr, project_id, txid):

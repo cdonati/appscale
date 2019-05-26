@@ -13,9 +13,9 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
-from appscale.datastore.fdb.cache import SectionCache
+from appscale.datastore.fdb.cache import NSCache, SectionCache
 from appscale.datastore.fdb.codecs import (
-  decode_str, encode_path, encode_vs_index)
+  decode_str, encode_path, encode_sortable_int, encode_vs_index)
 from appscale.datastore.fdb.polling_lock import PollingLock
 from appscale.datastore.fdb.utils import (
   DS_ROOT, fdb, hash_tuple, KVIterator, VS_SIZE)
@@ -158,7 +158,8 @@ class TransactionIndex(object):
 
   The directory path looks like (<project-dir>, 'tx-index').
 
-  Within this directory, keys are encoded as <scatter-byte> + <read-vs>.
+  Within this directory, keys are encoded as
+  <scatter-byte> + <read-vs> + <txid>.
 
   The <scatter-byte> is a single byte derived from the datastore txid. Its
   purpose is to spread writes more evenly across the cluster and minimize
@@ -168,9 +169,15 @@ class TransactionIndex(object):
   The <read-vs> is a 10-byte versionstamp that specifies the commit version
   of the FDB transaction that created the datastore transaction.
 
+  The <txid> is an 8-byte encoded integer that specifies the datastore
+  transaction ID.
+
   None of the keys in this index have values.
   """
   DIR_NAME = u'tx-index'
+
+  # The number of bytes used to encode datastore transaction IDs.
+  _TXID_SIZE = 8
 
   def __init__(self, directory):
     self.directory = directory
@@ -188,7 +195,8 @@ class TransactionIndex(object):
     """
     scatter_byte = bytes(bytearray([txid % 256]))
     key = b''.join([self.directory.rawPrefix, scatter_byte,
-                    read_vs or b'\x00' * VS_SIZE])
+                    read_vs or b'\x00' * VS_SIZE,
+                    encode_sortable_int(txid, self._TXID_SIZE)])
     if not read_vs:
       vs_index = len(self.directory.rawPrefix) + len(scatter_byte)
       key += encode_vs_index(vs_index)
@@ -267,10 +275,15 @@ class GarbageCollector(object):
     self._tornado_fdb = tornado_fdb
     self._data_manager = data_manager
     self._index_manager = index_manager
-    lock_key = project_cache.root.pack((self._LOCK_KEY,))
+    self._project_cache = project_cache
+    lock_key = self._project_cache.root.pack((self._LOCK_KEY,))
     self._lock = PollingLock(self._db, self._tornado_fdb, lock_key)
+    self._del_version_index_cache = NSCache(
+      self._tornado_fdb, self._project_cache, DeletedVersionIndex)
     self._tx_index_cache = SectionCache(
-      self._tornado_fdb, project_cache, TransactionIndex)
+      self._tornado_fdb, self._project_cache, TransactionIndex)
+    self._safe_read_dir_cache = NSCache(
+      self._tornado_fdb, self._project_cache, SafeReadDir)
 
   def start(self):
     self._lock.start()
@@ -286,8 +299,7 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def safe_read_vs(self, tr, key):
-    project_id = decode_str(key.app())
-    safe_read_dir = SafeReadDir.from_cache(project_id, self._directory_cache)
+    safe_read_dir = yield self._safe_read_dir_cache.get_from_key(tr, key)
     safe_read_key = safe_read_dir.encode_key(key.path())
     # A concurrent change to the safe read VS does not affect what the current
     # transaction can read, so "snapshot" is used to reduce conflicts.
@@ -297,9 +309,10 @@ class GarbageCollector(object):
 
     raise gen.Return(vs.value)
 
+  @gen.coroutine
   def index_deleted_version(self, tr, version_entry):
-    index = DeletedVersionIndex.from_cache(
-      version_entry.project_id, version_entry.namespace, self._directory_cache)
+    index = yield self._del_version_index_cache.get(
+      tr, version_entry.project_id, version_entry.namespace)
     key = index.encode_key(version_entry.path, version_entry.commit_vs)
     tr.set_versionstamped_key(key, b'')
 
@@ -353,7 +366,7 @@ class GarbageCollector(object):
       try:
         yield self._lock.acquire()
         # TODO: Make the list operation async.
-        for project_id in self._directory_cache.root.list(self._db):
+        for project_id in self._project_cache.root.list(self._db):
           yield self._groom_project(project_id)
       except Exception:
         logger.exception(u'Unexpected error while grooming projects')

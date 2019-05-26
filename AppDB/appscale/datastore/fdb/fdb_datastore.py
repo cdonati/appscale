@@ -290,7 +290,7 @@ class FDBDatastore(object):
       old_entities = yield self._apply_mutations(
         tr, project_id, queried_groups, mutations, lookups, read_vs)
     finally:
-      self._tx_manager.delete(tr, project_id, txid)
+      yield self._tx_manager.delete(tr, project_id, txid)
 
     vs_future = None
     if old_entities:
@@ -310,7 +310,7 @@ class FDBDatastore(object):
     logger.debug(u'Rolling back {}:{}'.format(project_id, txid))
 
     tr = self._db.create_transaction()
-    self._tx_manager.delete(tr, project_id, txid)
+    yield self._tx_manager.delete(tr, project_id, txid)
     yield self._tornado_fdb.commit(tr)
 
   @gen.coroutine
@@ -340,7 +340,7 @@ class FDBDatastore(object):
     self.index_manager.put_entries(
       tr, old_entity.decoded, old_entity.commit_vs, entity)
     if old_entity.present:
-      self._gc.index_deleted_version(tr, old_entity)
+      yield self._gc.index_deleted_version(tr, old_entity)
 
     raise gen.Return(
       (entity.key(), old_entity, old_entity.commit_vs, new_version))
@@ -357,7 +357,7 @@ class FDBDatastore(object):
     self.index_manager.put_entries(
       tr, old_entity.decoded, old_entity.commit_vs, new_entity=None)
     if old_entity.present:
-      self._gc.index_deleted_version(tr, old_entity)
+      yield self._gc.index_deleted_version(tr, old_entity)
 
     raise gen.Return((old_entity.decoded, old_entity.commit_vs, new_version))
 
@@ -422,6 +422,6 @@ class FDBDatastore(object):
       self.index_manager.put_entries(
         tr, old_entity.decoded, old_entity.commit_vs, new_entity)
       if old_entity.present:
-        self._gc.index_deleted_version(tr, old_entity)
+        yield self._gc.index_deleted_version(tr, old_entity)
 
     raise gen.Return(old_entities)
