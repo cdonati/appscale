@@ -13,7 +13,7 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
-from appscale.datastore.fdb.cache import NSCache
+from appscale.datastore.fdb.cache import SectionCache
 from appscale.datastore.fdb.codecs import (
   decode_str, encode_path, encode_vs_index)
 from appscale.datastore.fdb.polling_lock import PollingLock
@@ -175,33 +175,25 @@ class TransactionIndex(object):
   def __init__(self, directory):
     self.directory = directory
 
-  def encode_key(self, txid):
-    """ Encodes a key for a safe read versionstamp entry.
+  def encode_key(self, txid, read_vs=None):
+    """ Encodes a key for a transaction ID index entry.
 
     Args:
       txid: An integer specifying a datastore transaction ID.
+      read_vs: A 10-byte string specifying the commit versionstamp that started
+        the datastore transaction.
     Returns:
-      A string containing an FDB key.
+      A string containing an FDB key. If read_vs was None, the key should be
+      used with set_versionstamped_key.
     """
     scatter_byte = bytes(bytearray([txid % 256]))
-    return self.directory.rawPrefix + scatter_byte
+    key = b''.join([self.directory.rawPrefix, scatter_byte,
+                    read_vs or b'\x00' * VS_SIZE])
+    if not read_vs:
+      vs_index = len(self.directory.rawPrefix) + len(scatter_byte)
+      key += encode_vs_index(vs_index)
 
-  # def get_slice(self, byte_num, safe_vs):
-  #   """
-  #   Gets the range of keys within a scatter byte up to the given versionstamp
-  #   associated with an expired datastore transaction.
-  #
-  #   Args:
-  #     byte_num: An integer specifying a scatter byte value.
-  #     safe_vs: A 10-byte value indicating the latest deleted versionstamp that
-  #       should be considered for deletion.
-  #   Returns:
-  #     A slice specifying the start and stop keys.
-  #   """
-  #   scatter_byte = bytes(bytearray([byte_num]))
-  #   prefix = self.directory.rawPrefix + scatter_byte
-  #   return slice(fdb.KeySelector.first_greater_or_equal(prefix + b'\x00'),
-  #                fdb.KeySelector.first_greater_than(prefix + safe_vs))
+    return key
 
 
 class SafeReadDir(object):
@@ -250,6 +242,7 @@ class SafeReadDir(object):
 
 
 class GarbageCollector(object):
+  # The FDB key used to acquire a GC lock.
   _LOCK_KEY = u'gc-lock'
 
   # The number of extra seconds to wait before checking which versions are safe
@@ -267,14 +260,17 @@ class GarbageCollector(object):
   # The number of ranges to groom within a single transaction.
   _BATCH_COUNT = int(_BATCH_PERCENT * 256)
 
-  def __init__(self, db, tornado_fdb, data_manager, index_manager):
+  def __init__(self, db, tornado_fdb, data_manager, index_manager,
+               project_cache):
     self._db = db
     self._queue = deque()
     self._tornado_fdb = tornado_fdb
     self._data_manager = data_manager
     self._index_manager = index_manager
-    lock_key = self._directory_cache.root.pack((self._LOCK_KEY,))
+    lock_key = project_cache.root.pack((self._LOCK_KEY,))
     self._lock = PollingLock(self._db, self._tornado_fdb, lock_key)
+    self._tx_index_cache = SectionCache(
+      self._tornado_fdb, project_cache, TransactionIndex)
 
   def start(self):
     self._lock.start()
@@ -306,6 +302,16 @@ class GarbageCollector(object):
       version_entry.project_id, version_entry.namespace, self._directory_cache)
     key = index.encode_key(version_entry.path, version_entry.commit_vs)
     tr.set_versionstamped_key(key, b'')
+
+  @gen.coroutine
+  def index_txid(self, tr, project_id, txid):
+    index = yield self._tx_index_cache.get(tr, project_id)
+    tr.set_versionstamped_key(index.encode_key(txid), b'')
+
+  @gen.coroutine
+  def clear_txid_index_entry(self, tr, project_id, txid, read_vs):
+    index = yield self._tx_index_cache.get(tr, project_id)
+    del tr[index.encode_key(txid, read_vs)]
 
   @gen.coroutine
   def _process_deferred_deletes(self):

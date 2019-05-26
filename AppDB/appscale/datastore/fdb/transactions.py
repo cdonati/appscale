@@ -136,11 +136,13 @@ class TransactionManager(object):
 
     tx_dir.set_read_vs(tr, txid)
     tx_dir.set_xg(tr, txid, is_xg)
+    yield self._gc.index_txid(tr, project_id, txid)
     raise gen.Return(txid)
 
   def delete(self, tr, project_id, txid):
     tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
     tx_dir.clear(tr, txid)
+    yield self._gc.clear_txid_index_entry(tr, project_id, txid)
 
   @gen.coroutine
   def get_read_vs(self, tr, project_id, txid):
