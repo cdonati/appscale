@@ -10,17 +10,19 @@ entries:
 ^6: Designates what version of the database read operations should see.
 """
 import logging
+import math
 import sys
 import struct
-import uuid
 
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
+from appscale.datastore.fdb.cache import SectionCache
 from appscale.datastore.fdb.codecs import (
-  decode_str, encode_path, encode_sortable_int, encode_vs_index)
+  decode_str, encode_path, encode_read_vs, encode_sortable_int,
+  encode_vs_index)
 from appscale.datastore.fdb.utils import (
   fdb, EncodedTypes, put_chunks, KVIterator, MAX_ENTITY_SIZE, VS_SIZE)
 
@@ -28,15 +30,6 @@ sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import datastore_pb, entity_pb
 
 logger = logging.getLogger(__name__)
-
-
-class MetadataKeys(object):
-  READ_VS = b'\x00'
-  XG = b'\x01'
-  LOOKUPS = b'\x02'
-  QUERIES = b'\x03'
-  PUTS = b'\x04'
-  DELETES = b'\x05'
 
 
 def decode_chunks(chunks, rpc_type):
@@ -59,52 +52,36 @@ def decode_chunks(chunks, rpc_type):
 class TransactionMetadata(object):
   DIR_NAME = u'transactions'
 
-  READ_VS = b'\x00'
-  XG = b'\x01'
-  LOOKUPS = b'\x02'
-  QUERIES = b'\x03'
-  TASKS = b'\x04'
-  PUTS = b'\x05'
-  DELETES = b'\x06'
+  LOOKUPS = b'\x00'
+  QUERIES = b'\x01'
+  TASKS = b'\x02'
+  PUTS = b'\x03'
+  DELETES = b'\x04'
 
-  FALSE = b'\x00'
-  TRUE = b'\x01'
+  # The max number of bytes for each FDB value.
+  _CHUNK_SIZE = 10000
 
   _ENTITY_LEN_SIZE = 3
-
-  # The number of bytes used to encode datastore transaction IDs.
-  _TXID_SIZE = 8
 
   def __init__(self, directory):
     self.directory = directory
 
-  def tx_prefix(self, txid):
-    return (self.directory.rawPrefix +
-            encode_sortable_int(txid, self._TXID_SIZE))
+  def encode_key(self, txid):
+    scatter_byte = bytes(bytearray([txid % 256]))
+    return self.directory.rawPrefix + scatter_byte + encode_read_vs(txid)
 
-  def read_vs_key(self, txid):
-    return self.tx_prefix(txid) + self.READ_VS
+  def get_txid_slice(self, txid):
+    prefix = self.encode_key(txid)
+    return slice(fdb.KeySelector.first_greater_or_equal(prefix),
+                 fdb.KeySelector.first_greater_than(prefix + b'\xff'))
 
-  def set_read_vs(self, tr, txid):
-    tr.set_versionstamped_value(self.read_vs_key(txid),
-                                b'\x00' * VS_SIZE + encode_vs_index(0))
-
-  def xg_key(self, txid):
-    return self.tx_prefix(txid) + self.XG
-
-  def set_xg(self, tr, txid, xg):
-    tr[self.xg_key(txid)] = self.TRUE if xg else self.FALSE
-
-  def clear(self, tr, txid):
-    tx_range = slice(
-      fdb.KeySelector.first_greater_or_equal(self.tx_prefix(txid)),
-      fdb.KeySelector.first_greater_than(self.tx_prefix(txid) + b'\xff'))
-    del tr[tx_range]
-
-  def log_put(self, tr, txid, entities):
+  def encode_put(self, txid, entities):
     encoded_entities = [entity.Encode() for entity in entities]
     value = b''.join([b''.join([self._encode_entity_len(entity), entity])
                       for entity in encoded_entities])
+    chunk_count = int(math.ceil(len(full_value) / self._CHUNK_SIZE))
+    return tuple(self._encode_kv(full_value, index, path, commit_vs=None)
+                 for index in sm.range(chunk_count))
     subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
 
   def _encode_entity_len(self, encoded_entity):
@@ -119,46 +96,45 @@ class TransactionMetadata(object):
 
 
 class TransactionManager(object):
-  def __init__(self, gc, directory_cache, tornado_fdb):
-    self._gc = gc
-    self._directory_cache = directory_cache
+  def __init__(self, tornado_fdb, project_cache):
     self._tornado_fdb = tornado_fdb
+    self._tx_metadata_cache = SectionCache(
+      self._tornado_fdb, project_cache, TransactionMetadata)
 
   @gen.coroutine
-  def create(self, tr, project_id, is_xg):
-    txid = uuid.uuid4().int & (1 << 64) - 1
-    tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
-    read_vs_key = tx_dir.read_vs_key(txid)
-    # This read can be removed when the API server starts mapping 64-bit txids
-    # to versionstamps.
-    read_vs = yield self._tornado_fdb.get(tr, read_vs_key)
-    if read_vs.present():
-      raise InternalError(u'The datastore chose an existing txid')
-
-    tx_dir.set_read_vs(tr, txid)
-    tx_dir.set_xg(tr, txid, is_xg)
-    yield self._gc.index_txid(tr, project_id, txid)
+  def create(self, tr, project_id):
+    txid, tx_dir = yield [self._tornado_fdb.get_read_version(tr),
+                          self._tx_metadata_cache.get(tr, project_id)]
+    tr[tx_dir.encode_key(txid)] = b''
     raise gen.Return(txid)
 
   @gen.coroutine
   def delete(self, tr, project_id, txid):
-    tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
-    tx_dir.clear(tr, txid)
-    read_vs = yield self.get_read_vs(tr, project_id, txid)
-    yield self._gc.clear_txid_index_entry(tr, project_id, txid, read_vs)
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
+    del tr[tx_dir.get_txid_slice(txid)]
 
   @gen.coroutine
-  def get_read_vs(self, tr, project_id, txid):
-    tx_dir = TransactionMetadata.from_cache(project_id, self._directory_cache)
-    read_vs = yield self._tornado_fdb.get(tr, tx_dir.read_vs_key(txid))
-    if not read_vs.present():
-      raise BadRequest(u'Transaction does not exist')
+  def log_put(self, tr, project_id, put_request):
+    txid = put_request.transaction().handle()
+    value = fdb.tuple.pack(
+      (EncodedTypes.ENTITY_V3,) +
+      tuple(entity.Encode() for entity in request.entity_list()))
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
+    subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
 
-    raise gen.Return(read_vs.value)
-
-  def log_rpc(self, tr, project_id, request):
-    txid = request.transaction().handle()
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
+    namespace = decode_str(query.name_space())
+    if not query.has_ancestor():
+      raise BadRequest(u'Queries in a transaction must specify an ancestor')
+
+    group_path = encode_path(query.ancestor().path())[:2]
+    key = tx_dir.pack_with_versionstamp(
+      (txid, MetadataKeys.QUERIES, fdb.tuple.Versionstamp()))
+    tr.set_versionstamped_key(key, fdb.tuple.pack((namespace,) + group_path))
+
+  @gen.coroutine
+  def log_rpc(self, tr, project_id, request):
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
     if isinstance(request, datastore_pb.PutRequest):
       value = fdb.tuple.pack(
         (EncodedTypes.ENTITY_V3,) +

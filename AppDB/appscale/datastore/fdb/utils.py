@@ -183,6 +183,14 @@ class TornadoFDB(object):
     get_future.on_ready(callback)
     return tornado_future
 
+  def get_read_version(self, tr):
+    tornado_future = TornadoFuture()
+    callback = lambda fdb_future: self._handle_fdb_result(
+      fdb_future, tornado_future)
+    get_future = tr.get_read_version()
+    get_future.on_ready(callback)
+    return tornado_future
+
   def _handle_fdb_result(self, fdb_future, tornado_future):
     try:
       result = fdb_future.wait()

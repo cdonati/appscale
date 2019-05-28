@@ -374,16 +374,19 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def _groom_project(self, project_id):
-    project_dir = self._directory_cache.get((project_id,))
+    tr = self._db.create_transaction()
+    project_dir = yield self._project_cache.get(tr, project_id)
     # TODO: Make the list operation async.
-    for namespace in project_dir.list(self._db):
+    for namespace in project_dir.list(tr):
       for batch_num in sm.range(int(1 / self._BATCH_PERCENT)):
         ranges = sm.range(batch_num * self._BATCH_COUNT,
                           (batch_num + 1) * self._BATCH_COUNT)
-        safe_vs = yield self._newest_vs(project_id, namespace, ranges)
+        safe_del_version_vs = yield self._newest_del_version_vs(
+          project_id, namespace, ranges)
         yield gen.sleep(self._SAFETY_INTERVAL)
-        if safe_vs is not None:
-          yield self._groom_ranges(project_id, namespace, safe_vs, ranges)
+        if safe_del_version_vs is not None:
+          yield self._groom_ranges(project_id, namespace, safe_del_version_vs,
+                                   ranges)
 
   @gen.coroutine
   def _newest_in_range(self, tr, index, byte_num):
@@ -397,11 +400,20 @@ class GarbageCollector(object):
     raise gen.Return(index.decode(kvs[0]).deleted_vs)
 
   @gen.coroutine
-  def _newest_vs(self, project_id, namespace, ranges):
+  def _newest_del_version_vs(self, project_id, namespace, ranges):
     yield self._lock.acquire()
     tr = self._db.create_transaction()
-    index = DeletedVersionIndex.from_cache(
-      project_id, namespace, self._directory_cache)
+    index = yield self._del_version_index_cache.get(tr, project_id, namespace)
+    deletion_stamps = yield [self._newest_in_range(tr, index, byte_num)
+                             for byte_num in ranges]
+    newest_vs = max([vs for vs in deletion_stamps if vs] or [None])
+    raise gen.Return(newest_vs)
+
+  @gen.coroutine
+  def _newest_tx_vs(self, project_id, namespace, ranges):
+    yield self._lock.acquire()
+    tr = self._db.create_transaction()
+    index = yield self._del_version_index_cache.get(tr, project_id, namespace)
     deletion_stamps = yield [self._newest_in_range(tr, index, byte_num)
                              for byte_num in ranges]
     newest_vs = max([vs for vs in deletion_stamps if vs] or [None])

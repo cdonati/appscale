@@ -10,6 +10,9 @@ from appscale.datastore.fdb.utils import fdb
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
 
+# The number of bytes used to encode a read versionstamp.
+READ_VS_SIZE = 8
+
 
 class V3Types(object):
   NULL = b'\x00'
@@ -270,6 +273,10 @@ def decode_sortable_int(encoded_value):
   format_size = 8 if len(encoded_value) > 4 else 4
   encoded_value = b'\x00' * (format_size - len(encoded_value)) + encoded_value
   return struct.unpack(format_str, encoded_value)[0]
+
+
+encode_read_vs = lambda read_version: encode_sortable_int(
+  read_version, READ_VS_SIZE)
 
 
 def encode_vs_index(vs_position):
