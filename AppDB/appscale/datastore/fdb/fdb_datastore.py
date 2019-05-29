@@ -65,6 +65,10 @@ class FDBDatastore(object):
   def dynamic_put(self, project_id, put_request, put_response):
     #logger.debug('put_request:\n{}'.format(put_request))
     project_id = decode_str(project_id)
+    # TODO: Enforce max key length (100 elements).
+    # Enforce max element size (1500 bytes).
+    # Enforce max kind size (1500 bytes).
+    # Enforce key name regex (reserved names match __.*__).
 
     if put_request.auto_id_policy() != put_request.CURRENT:
       raise BadRequest('Sequential allocator is not implemented')

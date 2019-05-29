@@ -12,8 +12,8 @@ entries:
 import logging
 import math
 import sys
-import struct
 
+import six.moves as sm
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
@@ -54,9 +54,9 @@ class TransactionMetadata(object):
 
   LOOKUPS = b'\x00'
   QUERIES = b'\x01'
-  TASKS = b'\x02'
-  PUTS = b'\x03'
-  DELETES = b'\x04'
+  PUTS = b'\x02'
+  DELETES = b'\x03'
+  TASKS = b'\x04'
 
   # The max number of bytes for each FDB value.
   _CHUNK_SIZE = 10000
@@ -66,33 +66,67 @@ class TransactionMetadata(object):
   def __init__(self, directory):
     self.directory = directory
 
-  def encode_key(self, txid):
-    scatter_byte = bytes(bytearray([txid % 256]))
-    return self.directory.rawPrefix + scatter_byte + encode_read_vs(txid)
+  def encode_start_key(self, txid):
+    return self._txid_prefix(txid)
 
-  def get_txid_slice(self, txid):
-    prefix = self.encode_key(txid)
-    return slice(fdb.KeySelector.first_greater_or_equal(prefix),
-                 fdb.KeySelector.first_greater_than(prefix + b'\xff'))
+  def encode_lookups(self, txid, keys):
+    section_prefix = self._txid_prefix(txid) + self.LOOKUPS
+    encoded_keys = [self._encode_ns_key(key) for key in keys]
+    # TODO: Encode keys more efficiently.
+    value = b''.join([b''.join([self._encode_entity_len(key), key])
+                      for key in encoded_keys])
+    return self._encode_chunks(section_prefix, value)
 
-  def encode_put(self, txid, entities):
+  def encode_query(self, txid, query):
+    section_prefix = self._txid_prefix(txid) + self.QUERIES
+    encoded_keys = [self._encode_ns_key(key) for key in keys]
+    # TODO: Encode keys more efficiently.
+    value = b''.join([b''.join([self._encode_entity_len(key), key])
+                      for key in encoded_keys])
+    return self._encode_chunks(section_prefix, value)
+
+  def encode_puts(self, txid, entities):
+    section_prefix = self._txid_prefix(txid) + self.PUTS
     encoded_entities = [entity.Encode() for entity in entities]
     value = b''.join([b''.join([self._encode_entity_len(entity), entity])
                       for entity in encoded_entities])
-    chunk_count = int(math.ceil(len(full_value) / self._CHUNK_SIZE))
-    return tuple(self._encode_kv(full_value, index, path, commit_vs=None)
-                 for index in sm.range(chunk_count))
-    subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
+    return self._encode_chunks(section_prefix, value)
+
+  def encode_deletes(self, txid, keys):
+    section_prefix = self._txid_prefix(txid) + self.DELETES
+    encoded_keys = [self._encode_ns_key(key) for key in keys]
+    # TODO: Encode keys more efficiently.
+    value = b''.join([b''.join([self._encode_entity_len(key), key])
+                      for key in encoded_keys])
+    return self._encode_chunks(section_prefix, value)
+
+  def get_txid_slice(self, txid):
+    prefix = self._txid_prefix(txid)
+    return slice(fdb.KeySelector.first_greater_or_equal(prefix),
+                 fdb.KeySelector.first_greater_than(prefix + b'\xff'))
+
+  def _encode_ns_key(self, key):
+    namespace = decode_str(key.name_space())
+    return fdb.tuple.pack((namespace,) + encode_path(key.path()))
+
+  def _txid_prefix(self, txid):
+    scatter_byte = bytes(bytearray([txid % 256]))
+    return self.directory.rawPrefix + scatter_byte + encode_read_vs(txid)
 
   def _encode_entity_len(self, encoded_entity):
     if len(encoded_entity) > MAX_ENTITY_SIZE:
       raise BadRequest(u'Entity exceeds maximum size')
 
-    encoded_len = struct.pack('<L', len(encoded_entity))
-    if any(byte != b'\x00' for byte in encoded_len[self._ENTITY_LEN_SIZE:]):
-      raise InternalError(u'Entity length exceeds maximum size')
+    return encode_sortable_int(len(encoded_entity), self._ENTITY_LEN_SIZE)
 
-    return encoded_len[:self._ENTITY_LEN_SIZE]
+  def _encode_chunks(self, section_prefix, value):
+    full_prefix = section_prefix + b'\x00' * VS_SIZE
+    vs_index = encode_vs_index(len(section_prefix))
+    chunk_count = int(math.ceil(len(value) / self._CHUNK_SIZE))
+    return tuple(
+      (full_prefix + bytes(bytearray((index,))) + vs_index,
+       value[index * self._CHUNK_SIZE:(index + 1) * self._CHUNK_SIZE])
+      for index in sm.range(chunk_count))
 
 
 class TransactionManager(object):
@@ -105,56 +139,32 @@ class TransactionManager(object):
   def create(self, tr, project_id):
     txid, tx_dir = yield [self._tornado_fdb.get_read_version(tr),
                           self._tx_metadata_cache.get(tr, project_id)]
-    tr[tx_dir.encode_key(txid)] = b''
+    tr[tx_dir.encode_start_key(txid)] = b''
     raise gen.Return(txid)
 
   @gen.coroutine
-  def delete(self, tr, project_id, txid):
+  def log_lookups(self, tr, project_id, get_request):
+    txid = get_request.transaction().handle()
     tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
-    del tr[tx_dir.get_txid_slice(txid)]
+    for key, value in tx_dir.encode_lookups(txid, get_request.key_list()):
+      tr.set_versionstamped_key(key, value)
+
 
   @gen.coroutine
-  def log_put(self, tr, project_id, put_request):
+  def log_puts(self, tr, project_id, put_request):
     txid = put_request.transaction().handle()
-    value = fdb.tuple.pack(
-      (EncodedTypes.ENTITY_V3,) +
-      tuple(entity.Encode() for entity in request.entity_list()))
     tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
-    subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
-
-    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    namespace = decode_str(query.name_space())
-    if not query.has_ancestor():
-      raise BadRequest(u'Queries in a transaction must specify an ancestor')
-
-    group_path = encode_path(query.ancestor().path())[:2]
-    key = tx_dir.pack_with_versionstamp(
-      (txid, MetadataKeys.QUERIES, fdb.tuple.Versionstamp()))
-    tr.set_versionstamped_key(key, fdb.tuple.pack((namespace,) + group_path))
+    for key, value in tx_dir.encode_puts(txid, put_request.entity_list()):
+      tr.set_versionstamped_key(key, value)
 
   @gen.coroutine
-  def log_rpc(self, tr, project_id, request):
+  def log_deletes(self, tr, project_id, delete_request):
+    txid = delete_request.transaction().handle()
     tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
-    if isinstance(request, datastore_pb.PutRequest):
-      value = fdb.tuple.pack(
-        (EncodedTypes.ENTITY_V3,) +
-        tuple(entity.Encode() for entity in request.entity_list()))
-      subspace = tx_dir.subspace((txid, MetadataKeys.PUTS))
-    elif isinstance(request, datastore_pb.GetRequest):
-      value = fdb.tuple.pack(
-        (EncodedTypes.KEY_V3,) +
-        tuple(key.Encode() for key in request.key_list()))
-      subspace = tx_dir.subspace((txid, MetadataKeys.LOOKUPS))
-    elif isinstance(request, datastore_pb.DeleteRequest):
-      value = fdb.tuple.pack(
-        (EncodedTypes.KEY_V3,) +
-        tuple(key.Encode() for key in request.key_list()))
-      subspace = tx_dir.subspace((txid, MetadataKeys.DELETES))
-    else:
-      raise BadRequest(u'Unexpected RPC type')
+    for key, value in tx_dir.encode_deletes(txid, delete_request.key_list()):
+      tr.set_versionstamped_key(key, value)
 
-    put_chunks(tr, value, subspace, add_vs=True)
-
+  @gen.coroutine
   def log_query(self, tr, project_id, query):
     txid = query.transaction().handle()
     tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
@@ -166,6 +176,11 @@ class TransactionManager(object):
     key = tx_dir.pack_with_versionstamp(
       (txid, MetadataKeys.QUERIES, fdb.tuple.Versionstamp()))
     tr.set_versionstamped_key(key, fdb.tuple.pack((namespace,) + group_path))
+
+  @gen.coroutine
+  def delete(self, tr, project_id, txid):
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
+    del tr[tx_dir.get_txid_slice(txid)]
 
   @gen.coroutine
   def get_metadata(self, tr, project_id, txid):
