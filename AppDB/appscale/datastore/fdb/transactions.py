@@ -77,13 +77,13 @@ class TransactionMetadata(object):
                       for key in encoded_keys])
     return self._encode_chunks(section_prefix, value)
 
-  def encode_query(self, txid, query):
+  def encode_query_key(self, txid, namespace, ancestor):
+    if not isinstance(ancestor, tuple):
+      ancestor = encode_path(ancestor)
+
     section_prefix = self._txid_prefix(txid) + self.QUERIES
-    encoded_keys = [self._encode_ns_key(key) for key in keys]
-    # TODO: Encode keys more efficiently.
-    value = b''.join([b''.join([self._encode_entity_len(key), key])
-                      for key in encoded_keys])
-    return self._encode_chunks(section_prefix, value)
+    ns_path = fdb.tuple.pack((namespace,) + ancestor[:2])
+    return section_prefix + ns_path
 
   def encode_puts(self, txid, entities):
     section_prefix = self._txid_prefix(txid) + self.PUTS
@@ -149,6 +149,15 @@ class TransactionManager(object):
     for key, value in tx_dir.encode_lookups(txid, get_request.key_list()):
       tr.set_versionstamped_key(key, value)
 
+  @gen.coroutine
+  def log_query(self, tr, project_id, query):
+    txid = query.transaction().handle()
+    namespace = decode_str(query.name_space())
+    if not query.has_ancestor():
+      raise BadRequest(u'Queries in a transaction must specify an ancestor')
+
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
+    tr[tx_dir.encode_query_key(txid, namespace, query.ancestor())] = b''
 
   @gen.coroutine
   def log_puts(self, tr, project_id, put_request):
@@ -165,30 +174,25 @@ class TransactionManager(object):
       tr.set_versionstamped_key(key, value)
 
   @gen.coroutine
-  def log_query(self, tr, project_id, query):
-    txid = query.transaction().handle()
-    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    namespace = decode_str(query.name_space())
-    if not query.has_ancestor():
-      raise BadRequest(u'Queries in a transaction must specify an ancestor')
-
-    group_path = encode_path(query.ancestor().path())[:2]
-    key = tx_dir.pack_with_versionstamp(
-      (txid, MetadataKeys.QUERIES, fdb.tuple.Versionstamp()))
-    tr.set_versionstamped_key(key, fdb.tuple.pack((namespace,) + group_path))
-
-  @gen.coroutine
   def delete(self, tr, project_id, txid):
     tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
     del tr[tx_dir.get_txid_slice(txid)]
 
   @gen.coroutine
   def get_metadata(self, tr, project_id, txid):
-    tx_dir = self._directory_cache.get((project_id, self.DIRECTORY))
-    metadata_subspace = tx_dir.subspace((txid,))
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
+    iterator = KVIterator(tr, self._tornado_fdb, tx_dir.get_txid_slice(txid))
+    all_kvs = []
+    while True:
+      kvs, more_results = yield iterator.next_page()
+      all_kvs.extend(kvs)
+      if not more_results:
+        break
 
-    read_vs = None
-    xg = None
+    if not all_kvs:
+      raise BadRequest(u'Transaction not found')
+
+    return tx_dir.decode_metadata(all_kvs)
     lookups = set()
     queried_groups = set()
     mutations = []
@@ -197,7 +201,6 @@ class TransactionManager(object):
     tmp_rpc_vs = None
     tmp_rpc_type = None
 
-    iterator = KVIterator(tr, self._tornado_fdb, metadata_subspace.range())
     while True:
       kvs, more_results = yield iterator.next_page()
       for kv in kvs:
@@ -242,7 +245,6 @@ class TransactionManager(object):
       mutations.extend(decode_chunks(tmp_chunks, tmp_rpc_type))
 
     if read_vs is None or xg is None:
-      raise BadRequest(u'Transaction not found')
 
     lookup_groups = set()
     for key in lookups:
