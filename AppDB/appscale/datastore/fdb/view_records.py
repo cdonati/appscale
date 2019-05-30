@@ -8,7 +8,7 @@ import six
 import tabulate
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.fdb.codecs import decode_str, unpack_value
+from appscale.datastore.fdb.codecs import unpack_value
 from appscale.datastore.fdb.indexes import (
   KindIndex, KindlessIndex, SinglePropIndex)
 
@@ -16,7 +16,7 @@ sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.api import datastore
 from google.appengine.datastore import entity_pb
 
-fdb.api_version(600)
+fdb.api_version(610)
 
 db = fdb.open()
 

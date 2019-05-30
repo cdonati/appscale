@@ -4,10 +4,12 @@ them when the schema changes.
 """
 from collections import deque
 
+from fdb.directory_impl import DirectorySubspace
 from tornado import gen
 
 from appscale.datastore.dbconstants import InternalError
 from appscale.datastore.fdb.codecs import decode_str
+from appscale.datastore.fdb.utils import KVIterator
 
 
 class DirectoryCache(object):
@@ -61,6 +63,12 @@ class ProjectCache(DirectoryCache):
   def __init__(self, tornado_fdb, root_dir):
     super(ProjectCache, self).__init__(tornado_fdb, root_dir, self.SIZE)
 
+  @property
+  def subdirs_subspace(self):
+    dir_layer = self.root_dir._directory_layer
+    parent_subspace = dir_layer._node_with_prefix(self.root_dir.rawPrefix)
+    return parent_subspace.subspace((dir_layer.SUBDIRS,))
+
   @gen.coroutine
   def get(self, tr, project_id):
     """ Gets a project's directory.
@@ -78,6 +86,22 @@ class ProjectCache(DirectoryCache):
       self[project_id] = self.root_dir.create_or_open(tr, (project_id,))
 
     raise gen.Return(self[project_id])
+
+  @gen.coroutine
+  def list(self, tr):
+    yield self.validate_cache(tr)
+    kvs = yield KVIterator(tr, self._tornado_fdb,
+                           self.subdirs_subspace.range()).list()
+    directories = []
+    for kv in kvs:
+      project_id = self.subdirs_subspace.unpack(kv.key)[0]
+      directory = DirectorySubspace(
+        self.root_dir.get_path() + (project_id,), kv.value)
+      if project_id not in self:
+        self[project_id] = directory
+      directories.append(directory)
+
+    raise gen.Return(directories)
 
 
 class SectionCache(DirectoryCache):

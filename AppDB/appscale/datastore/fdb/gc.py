@@ -13,12 +13,12 @@ from tornado import gen
 from tornado.ioloop import IOLoop
 
 from appscale.datastore.dbconstants import MAX_TX_DURATION
-from appscale.datastore.fdb.cache import NSCache, SectionCache
+from appscale.datastore.fdb.cache import NSCache
 from appscale.datastore.fdb.codecs import (
-  decode_str, encode_path, encode_sortable_int, encode_vs_index)
+  decode_str, encode_path, encode_vs_index)
 from appscale.datastore.fdb.polling_lock import PollingLock
 from appscale.datastore.fdb.utils import (
-  DS_ROOT, fdb, hash_tuple, KVIterator, VS_SIZE)
+  DS_ROOT, fdb, hash_tuple, KVIterator, MAX_FDB_TX_DURATION, VS_SIZE)
 
 logger = logging.getLogger(__name__)
 
@@ -150,60 +150,6 @@ class DeletedVersionIndex(object):
                  fdb.KeySelector.first_greater_than(prefix + safe_vs))
 
 
-class TransactionIndex(object):
-  """
-  A TransactionIndex handles the encoding and decoding details for transaction
-  index entries. These entries are used to clean up metadata for expired
-  transactions.
-
-  The directory path looks like (<project-dir>, 'tx-index').
-
-  Within this directory, keys are encoded as
-  <scatter-byte> + <read-vs> + <txid>.
-
-  The <scatter-byte> is a single byte derived from the datastore txid. Its
-  purpose is to spread writes more evenly across the cluster and minimize
-  hotspots. This is especially important for this index because each write is
-  given a new, larger <read-vs> value than the last.
-
-  The <read-vs> is a 10-byte versionstamp that specifies the commit version
-  of the FDB transaction that created the datastore transaction.
-
-  The <txid> is an 8-byte encoded integer that specifies the datastore
-  transaction ID.
-
-  None of the keys in this index have values.
-  """
-  DIR_NAME = u'tx-index'
-
-  # The number of bytes used to encode datastore transaction IDs.
-  _TXID_SIZE = 8
-
-  def __init__(self, directory):
-    self.directory = directory
-
-  def encode_key(self, txid, read_vs=None):
-    """ Encodes a key for a transaction ID index entry.
-
-    Args:
-      txid: An integer specifying a datastore transaction ID.
-      read_vs: A 10-byte string specifying the commit versionstamp that started
-        the datastore transaction.
-    Returns:
-      A string containing an FDB key. If read_vs was None, the key should be
-      used with set_versionstamped_key.
-    """
-    scatter_byte = bytes(bytearray([txid % 256]))
-    key = b''.join([self.directory.rawPrefix, scatter_byte,
-                    read_vs or b'\x00' * VS_SIZE,
-                    encode_sortable_int(txid, self._TXID_SIZE)])
-    if not read_vs:
-      vs_index = len(self.directory.rawPrefix) + len(scatter_byte)
-      key += encode_vs_index(vs_index)
-
-    return key
-
-
 class SafeReadDir(object):
   """
   SafeReadDirs keep track of the most recent garbage collection versionstamps.
@@ -256,7 +202,7 @@ class GarbageCollector(object):
   # The number of extra seconds to wait before checking which versions are safe
   # to delete. A larger value results in fewer GC transactions. It also results
   # in a more relaxed max transaction duration.
-  _DEFERRED_DEL_PADDING = 2
+  _DEFERRED_DEL_PADDING = 30
 
   # Give the deferred deletion process a chance to succeed before grooming.
   _SAFETY_INTERVAL = MAX_TX_DURATION * 2
@@ -280,8 +226,6 @@ class GarbageCollector(object):
     self._lock = PollingLock(self._db, self._tornado_fdb, lock_key)
     self._del_version_index_cache = NSCache(
       self._tornado_fdb, self._project_cache, DeletedVersionIndex)
-    self._tx_index_cache = SectionCache(
-      self._tornado_fdb, self._project_cache, TransactionIndex)
     self._safe_read_dir_cache = NSCache(
       self._tornado_fdb, self._project_cache, SafeReadDir)
 
@@ -317,16 +261,6 @@ class GarbageCollector(object):
     tr.set_versionstamped_key(key, b'')
 
   @gen.coroutine
-  def index_txid(self, tr, project_id, txid):
-    index = yield self._tx_index_cache.get(tr, project_id)
-    tr.set_versionstamped_key(index.encode_key(txid), b'')
-
-  @gen.coroutine
-  def clear_txid_index_entry(self, tr, project_id, txid, read_vs):
-    index = yield self._tx_index_cache.get(tr, project_id)
-    del tr[index.encode_key(txid, read_vs)]
-
-  @gen.coroutine
   def _process_deferred_deletes(self):
     while True:
       try:
@@ -340,7 +274,7 @@ class GarbageCollector(object):
   @gen.coroutine
   def _process_queue(self):
     current_time = monotonic.monotonic()
-    tx_deadline = current_time + 2.5
+    tx_deadline = current_time + MAX_FDB_TX_DURATION - 1
     tr = None
     while True:
       safe_time = next(iter(self._queue), [current_time + MAX_TX_DURATION])[0]
@@ -365,8 +299,10 @@ class GarbageCollector(object):
     while True:
       try:
         yield self._lock.acquire()
-        # TODO: Make the list operation async.
-        for project_id in self._project_cache.root.list(self._db):
+        tr = self._db.create_transaction()
+        projects = yield self._project_cache.list(tr)
+        for project_id in projects:
+          project_dir = yield self._project_cache.get(tr, project_id)
           yield self._groom_project(project_id)
       except Exception:
         logger.exception(u'Unexpected error while grooming projects')

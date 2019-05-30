@@ -427,7 +427,8 @@ class DataManager(object):
     """
     data_ns = yield self._data_cache.get(tr, project_id, namespace)
     desired_slice = data_ns.get_slice(path, commit_vs)
-    kvs = yield self._get_range(tr, desired_slice, snapshot)
+    kvs = yield KVIterator(tr, self._tornado_fdb, desired_slice,
+                           snapshot=snapshot).list()
     raise gen.Return(data_ns.decode(kvs))
 
   @gen.coroutine
@@ -506,26 +507,5 @@ class DataManager(object):
     end_key = data_ns.encode_key(entry.path, entry.commit_vs, entry.index)
     remaining_slice = slice(version_slice.start,
                             fdb.KeySelector.first_greater_or_equal(end_key))
-    kvs = self._get_range(tr, remaining_slice)
+    kvs = yield KVIterator(tr, self._tornado_fdb, remaining_slice).list()
     raise gen.Return(data_ns.decode(kvs + [last_kv]))
-
-  @gen.coroutine
-  def _get_range(self, tr, data_range, snapshot=False):
-    """ Gets a list of KVs for a given slice.
-
-    Args:
-      tr: An FDB transaction.
-      data_range: A slice specifying the start and stop keys.
-      snapshot: If True, the read will not cause a transaction conflict.
-    Returns:
-      A list of KVs in the given range.
-    """
-    iterator = KVIterator(tr, self._tornado_fdb, data_range, snapshot=snapshot)
-    all_kvs = []
-    while True:
-      kvs, more_results = yield iterator.next_page()
-      all_kvs.extend(kvs)
-      if not more_results:
-        break
-
-    raise gen.Return(all_kvs)

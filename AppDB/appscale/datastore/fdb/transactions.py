@@ -12,41 +12,25 @@ entries:
 import logging
 import math
 import sys
+from collections import defaultdict
 
+import six
 import six.moves as sm
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.dbconstants import (
-  BadRequest, InternalError, MAX_GROUPS_FOR_XG, TooManyGroupsException)
+from appscale.datastore.dbconstants import BadRequest, InternalError
 from appscale.datastore.fdb.cache import SectionCache
 from appscale.datastore.fdb.codecs import (
-  decode_str, encode_path, encode_read_vs, encode_sortable_int,
-  encode_vs_index)
+  decode_path, decode_sortable_int, decode_str, encode_path, encode_read_vs,
+  encode_sortable_int, encode_vs_index)
 from appscale.datastore.fdb.utils import (
-  fdb, EncodedTypes, put_chunks, KVIterator, MAX_ENTITY_SIZE, VS_SIZE)
+  DS_ROOT, fdb, KVIterator, MAX_ENTITY_SIZE, VS_SIZE)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
-from google.appengine.datastore import datastore_pb, entity_pb
+from google.appengine.datastore import entity_pb
 
 logger = logging.getLogger(__name__)
-
-
-def decode_chunks(chunks, rpc_type):
-  if rpc_type == MetadataKeys.PUTS:
-    expected_encoding = EncodedTypes.ENTITY_V3
-    pb_class = entity_pb.EntityProto
-  elif rpc_type in (MetadataKeys.LOOKUPS, MetadataKeys.DELETES):
-    expected_encoding = EncodedTypes.KEY_V3
-    pb_class = entity_pb.Reference
-  else:
-    raise InternalError(u'Unexpected RPC type')
-
-  elements = fdb.tuple.unpack(''.join(chunks))
-  if elements[0] != expected_encoding:
-    raise InternalError(u'Unexpected encoding')
-
-  return [pb_class(encoded_value) for encoded_value in elements[1:]]
 
 
 class TransactionMetadata(object):
@@ -56,7 +40,6 @@ class TransactionMetadata(object):
   QUERIES = b'\x01'
   PUTS = b'\x02'
   DELETES = b'\x03'
-  TASKS = b'\x04'
 
   # The max number of bytes for each FDB value.
   _CHUNK_SIZE = 10000
@@ -66,16 +49,16 @@ class TransactionMetadata(object):
   def __init__(self, directory):
     self.directory = directory
 
+  @property
+  def project_id(self):
+    return self.directory.get_path()[len(DS_ROOT)]
+
   def encode_start_key(self, txid):
     return self._txid_prefix(txid)
 
   def encode_lookups(self, txid, keys):
     section_prefix = self._txid_prefix(txid) + self.LOOKUPS
-    encoded_keys = [self._encode_ns_key(key) for key in keys]
-    # TODO: Encode keys more efficiently.
-    value = b''.join([b''.join([self._encode_entity_len(key), key])
-                      for key in encoded_keys])
-    return self._encode_chunks(section_prefix, value)
+    return self._encode_chunks(section_prefix, self._encode_keys(keys))
 
   def encode_query_key(self, txid, namespace, ancestor):
     if not isinstance(ancestor, tuple):
@@ -94,11 +77,49 @@ class TransactionMetadata(object):
 
   def encode_deletes(self, txid, keys):
     section_prefix = self._txid_prefix(txid) + self.DELETES
-    encoded_keys = [self._encode_ns_key(key) for key in keys]
-    # TODO: Encode keys more efficiently.
-    value = b''.join([b''.join([self._encode_entity_len(key), key])
-                      for key in encoded_keys])
-    return self._encode_chunks(section_prefix, value)
+    return self._encode_chunks(section_prefix, self._encode_keys(keys))
+
+  def decode_metadata(self, txid, kvs):
+    lookup_rpcs = defaultdict(list)
+    queried_groups = set()
+    mutation_rpcs = []
+
+    rpc_type_index = len(self._txid_prefix(txid))
+    current_vs = None
+    for kv in kvs:
+      rpc_type = kv.key[rpc_type_index]
+      if rpc_type == self.QUERIES:
+        ns_path = fdb.tuple.unpack(kv.key[rpc_type_index + 1:])
+        queried_groups.add((ns_path[0], ns_path[1:]))
+        continue
+
+      vs_index = rpc_type_index + 1
+      rpc_vs = kv.key[vs_index:vs_index + VS_SIZE]
+      if rpc_type == self.LOOKUPS:
+        lookup_rpcs[rpc_vs].append(kv.value)
+      elif rpc_type in (self.PUTS, self.DELETES):
+        if current_vs == rpc_vs:
+          mutation_rpcs[-1].append(kv.value)
+        else:
+          current_vs = rpc_vs
+          mutation_rpcs.append([rpc_type, kv.value])
+      else:
+        raise InternalError(u'Unrecognized RPC type')
+
+    lookups = set()
+    mutations = []
+    for chunks in six.itervalues(lookup_rpcs):
+      lookups.update(self._unpack_keys(b''.join(chunks)))
+
+    for rpc_info in mutation_rpcs:
+      rpc_type = rpc_info[0]
+      blob = b''.join(rpc_info[1:])
+      if rpc_type == self.PUTS:
+        mutations.extend(self._unpack_entities(blob))
+      else:
+        mutations.extend(self._unpack_keys(blob))
+
+    return lookups, queried_groups, mutations
 
   def get_txid_slice(self, txid):
     prefix = self._txid_prefix(txid)
@@ -112,6 +133,46 @@ class TransactionMetadata(object):
   def _txid_prefix(self, txid):
     scatter_byte = bytes(bytearray([txid % 256]))
     return self.directory.rawPrefix + scatter_byte + encode_read_vs(txid)
+
+  def _encode_keys(self, keys):
+    return b''.join(
+      [b''.join([self._encode_key_len(key), self._encode_ns_key(key)])
+       for key in keys])
+
+  def _unpack_keys(self, blob):
+    keys = []
+    position = 0
+    while position < len(blob):
+      element_count = ord(blob[position])
+      position += 1
+      namespace, position = fdb.tuple._decode(blob, position)
+
+      elements = []
+      for _ in sm.range(element_count):
+        element, position = fdb.tuple._decode(blob, position)
+        elements.append(element)
+
+      key = entity_pb.Reference()
+      key.set_app(self.project_id)
+      key.set_name_space(namespace)
+      key.mutable_path().MergeFrom(decode_path(elements))
+      keys.append(key)
+
+    return keys
+
+  def _unpack_entities(self, blob):
+    pos = 0
+    entities = []
+    while pos < len(blob):
+      entity_len = decode_sortable_int(blob[pos:pos + self._ENTITY_LEN_SIZE])
+      pos += self._ENTITY_LEN_SIZE
+      entities.append(entity_pb.EntityProto(blob[pos:pos + entity_len]))
+      pos += entity_len
+
+    return entities
+
+  def _encode_key_len(self, key):
+    return bytes(bytearray([key.path().element_size()]))
 
   def _encode_entity_len(self, encoded_entity):
     if len(encoded_entity) > MAX_ENTITY_SIZE:
@@ -181,88 +242,10 @@ class TransactionManager(object):
   @gen.coroutine
   def get_metadata(self, tr, project_id, txid):
     tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
-    iterator = KVIterator(tr, self._tornado_fdb, tx_dir.get_txid_slice(txid))
-    all_kvs = []
-    while True:
-      kvs, more_results = yield iterator.next_page()
-      all_kvs.extend(kvs)
-      if not more_results:
-        break
+    kvs = yield KVIterator(tr, self._tornado_fdb,
+                           tx_dir.get_txid_slice(txid)).list()
 
-    if not all_kvs:
+    if not kvs or kvs[0].key != tx_dir.encode_start_key(txid):
       raise BadRequest(u'Transaction not found')
 
-    return tx_dir.decode_metadata(all_kvs)
-    lookups = set()
-    queried_groups = set()
-    mutations = []
-
-    tmp_chunks = []
-    tmp_rpc_vs = None
-    tmp_rpc_type = None
-
-    while True:
-      kvs, more_results = yield iterator.next_page()
-      for kv in kvs:
-        key_parts = metadata_subspace.unpack(kv.key)
-        metadata_key = key_parts[0]
-        if metadata_key == MetadataKeys.READ_VS:
-          read_vs = kv.value
-          continue
-
-        if metadata_key == MetadataKeys.XG:
-          xg = kv.value == XG
-          continue
-
-        if metadata_key == MetadataKeys.QUERIES:
-          unpacked_value = fdb.tuple.unpack(kv.value)
-          namespace = unpacked_value[0]
-          group_path = unpacked_value[1:]
-          queried_groups.add((namespace, group_path))
-          continue
-
-        rpc_vs = key_parts[1]
-        if rpc_vs == tmp_rpc_vs:
-          tmp_chunks.append(kv.value)
-          continue
-
-        if tmp_rpc_type == MetadataKeys.LOOKUPS:
-          lookups.update(decode_chunks(tmp_chunks, tmp_rpc_type))
-        elif tmp_rpc_type in (MetadataKeys.PUTS, MetadataKeys.DELETES):
-          mutations.extend(decode_chunks(tmp_chunks, tmp_rpc_type))
-
-        tmp_chunks = [kv.value]
-        tmp_rpc_vs = rpc_vs
-        tmp_rpc_type = metadata_key
-
-      if not more_results:
-        break
-
-    if tmp_chunks and tmp_rpc_type == MetadataKeys.LOOKUPS:
-      lookups.update(decode_chunks(tmp_chunks, tmp_rpc_type))
-    elif tmp_chunks and tmp_rpc_type in (MetadataKeys.PUTS,
-                                         MetadataKeys.DELETES):
-      mutations.extend(decode_chunks(tmp_chunks, tmp_rpc_type))
-
-    if read_vs is None or xg is None:
-
-    lookup_groups = set()
-    for key in lookups:
-      group_path = encode_path(key.path())[:2]
-      lookup_groups.add((key.name_space(), group_path))
-
-    mutated_groups = set()
-    for mutation in mutations:
-      key = mutation
-      if isinstance(mutation, entity_pb.EntityProto):
-        key = mutation.key()
-
-      group_path = encode_path(key.path())[:2]
-      mutated_groups.add((key.name_space(), group_path))
-
-    tx_groups = queried_groups | lookup_groups | mutated_groups
-    max_groups = MAX_GROUPS_FOR_XG if xg else 1
-    if len(tx_groups) > max_groups:
-      raise TooManyGroupsException(u'Too many groups in transaction')
-
-    raise gen.Return((read_vs, lookups, queried_groups, mutations))
+    raise gen.Return(tx_dir.decode_metadata(txid, kvs[1:]))

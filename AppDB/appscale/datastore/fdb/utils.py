@@ -5,13 +5,12 @@ import time
 import fdb
 import mmh3
 import six
-import struct
 from tornado import gen
 from tornado.concurrent import Future as TornadoFuture
 
-from appscale.datastore.dbconstants import InternalError, SCATTER_CHANCE
+from appscale.datastore.dbconstants import SCATTER_CHANCE
 
-fdb.api_version(600)
+fdb.api_version(610)
 logger = logging.getLogger(__name__)
 
 MAX_FDB_TX_DURATION = 5
@@ -238,7 +237,8 @@ class KVIterator(object):
       self._done = False
 
   @gen.coroutine
-  def next_page(self):
+  def next_page(self, mode=None):
+    mode = mode or self._mode
     if self._done:
       raise gen.Return(([], False))
 
@@ -247,7 +247,7 @@ class KVIterator(object):
       tmp_limit = self._limit - self._fetched
 
     kvs, count, more = yield self._tornado_fdb.get_range(
-      self._tr, slice(self._bsel, self._esel), tmp_limit, self._mode,
+      self._tr, slice(self._bsel, self._esel), tmp_limit, mode,
       self._iteration, self._reverse, self._snapshot)
     self._fetched += count
     self._iteration += 1
@@ -263,6 +263,17 @@ class KVIterator(object):
     self.done_with_range = not more and not reached_limit
 
     raise gen.Return((kvs, not self._done))
+
+  @gen.coroutine
+  def list(self):
+    all_kvs = []
+    while True:
+      kvs, more_results = yield self.next_page(fdb.StreamingMode.want_all)
+      all_kvs.extend(kvs)
+      if not more_results:
+        break
+
+    raise gen.Return(all_kvs)
 
 
 def next_entity_version(old_version):
