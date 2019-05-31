@@ -53,6 +53,12 @@ class DirectoryCache(object):
       self._directory_dict.clear()
       self._directory_keys.clear()
 
+  @staticmethod
+  def subdirs_subspace(directory):
+    dir_layer = directory._directory_layer
+    parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
+    return parent_subspace.subspace((dir_layer.SUBDIRS,))
+
 
 class ProjectCache(DirectoryCache):
   """ A directory cache that keeps track of projects. """
@@ -62,12 +68,6 @@ class ProjectCache(DirectoryCache):
 
   def __init__(self, tornado_fdb, root_dir):
     super(ProjectCache, self).__init__(tornado_fdb, root_dir, self.SIZE)
-
-  @property
-  def subdirs_subspace(self):
-    dir_layer = self.root_dir._directory_layer
-    parent_subspace = dir_layer._node_with_prefix(self.root_dir.rawPrefix)
-    return parent_subspace.subspace((dir_layer.SUBDIRS,))
 
   @gen.coroutine
   def get(self, tr, project_id):
@@ -90,16 +90,18 @@ class ProjectCache(DirectoryCache):
   @gen.coroutine
   def list(self, tr):
     yield self.validate_cache(tr)
+    subdirs_subspace = self.subdirs_subspace(self.root_dir)
     kvs = yield KVIterator(tr, self._tornado_fdb,
-                           self.subdirs_subspace.range()).list()
+                           subdirs_subspace.range()).list()
     directories = []
     for kv in kvs:
-      project_id = self.subdirs_subspace.unpack(kv.key)[0]
+      project_id = subdirs_subspace.unpack(kv.key)[0]
       directory = DirectorySubspace(
         self.root_dir.get_path() + (project_id,), kv.value)
       if project_id not in self:
         self[project_id] = directory
-      directories.append(directory)
+
+      directories.append(self[project_id])
 
     raise gen.Return(directories)
 
@@ -163,9 +165,9 @@ class NSCache(DirectoryCache):
     key = (project_id, namespace)
     if key not in self:
       project_dir = yield self._project_cache.get(project_id)
+      section_dir = yield self.get_section(tr, project_dir)
       # TODO: Make async.
-      ns_dir = project_dir.create_or_open(
-        tr, (self._dir_type.DIR_NAME, namespace))
+      ns_dir = section_dir.create_or_open(tr, (namespace,))
       self[key] = self._dir_type(ns_dir)
 
     raise gen.Return(self[key])
@@ -184,3 +186,33 @@ class NSCache(DirectoryCache):
     namespace = decode_str(key.name_space())
     ns_dir = yield self.get(tr, project_id, namespace)
     raise gen.Return(ns_dir)
+
+  @gen.coroutine
+  def get_section(self, tr, project_dir):
+    project_id = project_dir.get_path()[-1]
+    if project_id not in self:
+      # TODO: Make async.
+      section_dir = project_dir.create_or_open(tr, (self._dir_type.DIR_NAME,))
+      self[project_id] = section_dir
+
+    raise gen.Return(self[project_id])
+
+  @gen.coroutine
+  def list(self, tr, project_dir):
+    project_id = project_dir.get_path()[-1]
+    section_dir = yield self.get_section(tr, project_dir)
+    subdirs_subspace = self.subdirs_subspace(section_dir)
+    kvs = yield KVIterator(tr, self._tornado_fdb,
+                           subdirs_subspace.range()).list()
+    ns_directories = []
+    for kv in kvs:
+      namespace = subdirs_subspace.unpack(kv.key)[0]
+      ns_directory = DirectorySubspace(
+        section_dir.get_path() + (namespace,), kv.value)
+      key = (project_id, namespace)
+      if key not in self:
+        self[key] = self._dir_type(ns_directory)
+
+      ns_directories.append(self[key])
+
+    raise gen.Return(ns_directories)

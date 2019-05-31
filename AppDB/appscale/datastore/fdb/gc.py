@@ -4,6 +4,7 @@ deletes them when sufficient time has passed. The GarbageCollector is the main
 interface that clients can use to mark resources as old and determine if a
 resource is still available.
 """
+from __future__ import division
 import logging
 import monotonic
 from collections import deque
@@ -15,12 +16,17 @@ from tornado.ioloop import IOLoop
 from appscale.datastore.dbconstants import MAX_TX_DURATION
 from appscale.datastore.fdb.cache import NSCache
 from appscale.datastore.fdb.codecs import (
-  decode_str, encode_path, encode_vs_index)
+  decode_str, encode_path, encode_read_vs, encode_vs_index)
 from appscale.datastore.fdb.polling_lock import PollingLock
 from appscale.datastore.fdb.utils import (
   DS_ROOT, fdb, hash_tuple, KVIterator, MAX_FDB_TX_DURATION, VS_SIZE)
 
 logger = logging.getLogger(__name__)
+
+
+class NoProjects(Exception):
+  """ Indicates that there are no existing projects. """
+  pass
 
 
 class DeletedVersionEntry(object):
@@ -212,7 +218,10 @@ class GarbageCollector(object):
   _BATCH_PERCENT = .125
 
   # The number of ranges to groom within a single transaction.
-  _BATCH_COUNT = int(_BATCH_PERCENT * 256)
+  _BATCH_SIZE = int(_BATCH_PERCENT * 256)
+
+  # The total number of batches in a directory.
+  _TOTAL_BATCHES = int(1 / _BATCH_PERCENT)
 
   def __init__(self, db, tornado_fdb, data_manager, index_manager,
                project_cache):
@@ -296,22 +305,95 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def _groom_projects(self):
+    cursor = (u'', u'', 0)  # Last (project_id, namespace, batch) groomed.
     while True:
       try:
         yield self._lock.acquire()
         tr = self._db.create_transaction()
-        projects = yield self._project_cache.list(tr)
-        for project_id in projects:
-          project_dir = yield self._project_cache.get(tr, project_id)
+        safe_version = yield self._tornado_fdb.get_read_version(tr)
+        safe_vs = encode_read_vs(safe_version)
+        yield gen.sleep(self._SAFETY_INTERVAL)
+
+        yield self._lock.acquire()
+        tr = self._db.create_transaction()
+        try:
+          project_id, namespace, batch = yield self._next_batch(tr, *cursor)
+        except NoProjects as error:
+          logger.info(str(error))
+          yield gen.sleep(self._SAFETY_INTERVAL)
+          continue
+
+        yield self._groom_deleted_versions(
+          tr, project_id, namespace, batch, safe_vs)
+        for project_dir in project_dirs:
+          del_version_dirs = yield self._del_version_index_cache.list(
+            tr, project_dir)
+          for del_version_dir in del_version_dirs:
+            yield self._gro
           yield self._groom_project(project_id)
       except Exception:
         logger.exception(u'Unexpected error while grooming projects')
         yield gen.sleep(10)
 
   @gen.coroutine
-  def _groom_project(self, project_id):
-    tr = self._db.create_transaction()
-    project_dir = yield self._project_cache.get(tr, project_id)
+  def _next_batch(self, tr, project_id, namespace, batch_num):
+    project_dirs = yield self._project_cache.list(tr)
+    project_ids = [p_dir.get_path()[-1] for p_dir in project_dirs]
+    if not project_ids:
+      raise NoProjects(u'There are no projects to groom')
+
+    previous_dir_found = True
+    if project_id not in project_ids:
+      project_id = next((project for project in project_ids
+                         if project > project_id), project_ids[0])
+      namespace = u''
+      batch_num = 0
+      previous_dir_found = False
+
+    project_dir = next(p_dir for p_dir in project_dirs
+                       if p_dir.get_path()[-1] == project_id)
+    namespace_dirs = yield self._del_version_index_cache.list(tr, project_dir)
+    namespaces = [p_dir.namespace for p_dir in namespace_dirs] or [u'']
+    if namespace not in namespaces:
+      namespace = next((ns for ns in namespaces if ns > namespace),
+                       namespaces[0])
+      batch_num = 0
+      previous_dir_found = False
+
+    if previous_dir_found:
+      batch_num += 1
+
+    if batch_num >= self._TOTAL_BATCHES:
+      namespace = next((ns for ns in namespaces if ns > namespace), None)
+      if namespace is None:
+        project_id = next((project for project in project_ids
+                           if project > project_id), project_ids[0])
+        project_dir = next(p_dir for p_dir in project_dirs
+                           if p_dir.get_path()[-1] == project_id)
+        namespace_dirs = yield self._del_version_index_cache.list(
+          tr, project_dir)
+        namespace = next((p_dir.namespace for p_dir in namespace_dirs), u'')
+
+      batch_num = 0
+
+    raise gen.Return((project_id, namespace, batch_num))
+
+  @gen.coroutine
+  def _groom_deleted_versions(self, tr, project_id, namespace, batch_num,
+                              safe_vs):
+    del_version_dir = yield self._del_version_index_cache.get(
+      tr, project_id, namespace)
+    ranges = sm.range(batch_num * self._BATCH_SIZE,
+                      (batch_num + 1) * self._BATCH_SIZE)
+    tx_deadline = monotonic.monotonic() + MAX_FDB_TX_DURATION - 1
+    delete_counts = yield [
+      self._groom_range(tr, del_version_dir, byte_num, safe_vs, tx_deadline)
+      for byte_num in ranges]
+    yield self._tornado_fdb.commit(tr)
+    deleted = sum(delete_counts)
+    if deleted:
+      logger.debug(u'GC deleted {} entities'.format(deleted))
+
     # TODO: Make the list operation async.
     for namespace in project_dir.list(tr):
       for batch_num in sm.range(int(1 / self._BATCH_PERCENT)):
@@ -334,41 +416,6 @@ class GarbageCollector(object):
       return
 
     raise gen.Return(index.decode(kvs[0]).deleted_vs)
-
-  @gen.coroutine
-  def _newest_del_version_vs(self, project_id, namespace, ranges):
-    yield self._lock.acquire()
-    tr = self._db.create_transaction()
-    index = yield self._del_version_index_cache.get(tr, project_id, namespace)
-    deletion_stamps = yield [self._newest_in_range(tr, index, byte_num)
-                             for byte_num in ranges]
-    newest_vs = max([vs for vs in deletion_stamps if vs] or [None])
-    raise gen.Return(newest_vs)
-
-  @gen.coroutine
-  def _newest_tx_vs(self, project_id, namespace, ranges):
-    yield self._lock.acquire()
-    tr = self._db.create_transaction()
-    index = yield self._del_version_index_cache.get(tr, project_id, namespace)
-    deletion_stamps = yield [self._newest_in_range(tr, index, byte_num)
-                             for byte_num in ranges]
-    newest_vs = max([vs for vs in deletion_stamps if vs] or [None])
-    raise gen.Return(newest_vs)
-
-  @gen.coroutine
-  def _groom_ranges(self, project_id, namespace, safe_vs, ranges):
-    yield self._lock.acquire()
-    tr = self._db.create_transaction()
-    tx_deadline = monotonic.monotonic() + 2.5
-    index = DeletedVersionIndex.from_cache(
-      project_id, namespace, self._directory_cache)
-    delete_counts = yield [
-      self._groom_range(tr, index, byte_num, safe_vs, tx_deadline)
-      for byte_num in ranges]
-    yield self._tornado_fdb.commit(tr)
-    deleted = sum(delete_counts)
-    if deleted:
-      logger.debug(u'GC deleted {} entities'.format(deleted))
 
   @gen.coroutine
   def _groom_range(self, tr, index, byte_num, safe_vs, tx_deadline):
