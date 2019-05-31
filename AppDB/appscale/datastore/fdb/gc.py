@@ -298,7 +298,7 @@ class GarbageCollector(object):
       if tr is None:
         tr = self._db.create_transaction()
 
-      self._hard_delete(tr, old_entity, original_vs, deleted_vs)
+      yield self._hard_delete(tr, old_entity, original_vs, deleted_vs)
       if monotonic.monotonic() > tx_deadline:
         yield self._tornado_fdb.commit(tr)
         break
@@ -394,28 +394,8 @@ class GarbageCollector(object):
     if deleted:
       logger.debug(u'GC deleted {} entities'.format(deleted))
 
-    # TODO: Make the list operation async.
-    for namespace in project_dir.list(tr):
-      for batch_num in sm.range(int(1 / self._BATCH_PERCENT)):
-        ranges = sm.range(batch_num * self._BATCH_COUNT,
-                          (batch_num + 1) * self._BATCH_COUNT)
-        safe_del_version_vs = yield self._newest_del_version_vs(
-          project_id, namespace, ranges)
-        yield gen.sleep(self._SAFETY_INTERVAL)
-        if safe_del_version_vs is not None:
-          yield self._groom_ranges(project_id, namespace, safe_del_version_vs,
-                                   ranges)
+  def _groom_expired_transactions(self, tr, project_id, batch_num, safe_vs):
 
-  @gen.coroutine
-  def _newest_in_range(self, tr, index, byte_num):
-    scatter_byte = bytes(bytearray([byte_num]))
-    hash_range = index.directory.range((scatter_byte,))
-    kvs = yield self._tornado_fdb.get_range(
-      tr, hash_range, limit=1, reverse=True, snapshot=True)
-    if not kvs:
-      return
-
-    raise gen.Return(index.decode(kvs[0]).deleted_vs)
 
   @gen.coroutine
   def _groom_range(self, tr, index, byte_num, safe_vs, tx_deadline):
@@ -437,17 +417,18 @@ class GarbageCollector(object):
 
     raise gen.Return(deleted)
 
+  @gen.coroutine
   def _hard_delete(self, tr, entity, original_vs, deleted_vs):
     project_id = decode_str(entity.key().app())
     namespace = decode_str(entity.key().name_space())
 
-    self._data_manager.hard_delete(tr, entity.key(), original_vs)
+    yield self._data_manager.hard_delete(tr, entity.key(), original_vs)
     self._index_manager.hard_delete_entries(tr, entity, original_vs)
-    index = DeletedVersionIndex.from_cache(
-      project_id, namespace, self._directory_cache)
+    index = yield self._del_version_index_cache.get(tr, project_id, namespace)
     del tr[index.encode_key(entity.key().path(), original_vs, deleted_vs)]
 
     # Keep track of safe versionstamps to invalidate stale txids.
-    safe_read_dir = SafeReadDir.from_cache(project_id, self._directory_cache)
+    safe_read_dir = yield self._safe_read_dir_cache.get(
+      tr, project_id, namespace)
     safe_read_key = safe_read_dir.encode_key(entity.key().path())
     tr.byte_max(safe_read_key, deleted_vs)

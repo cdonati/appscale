@@ -249,3 +249,8 @@ class TransactionManager(object):
       raise BadRequest(u'Transaction not found')
 
     raise gen.Return(tx_dir.decode_metadata(txid, kvs[1:]))
+
+  @gen.coroutine
+  def clear_ranges(self, tr, project_id, ranges, safe_vs):
+    tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
+    

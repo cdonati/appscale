@@ -468,6 +468,7 @@ class DataManager(object):
       tr, data_ns.project_id, data_ns.namespace)
     tr.set_versionstamped_value(*group_ns.encode(key.path()))
 
+  @gen.coroutine
   def hard_delete(self, tr, key, commit_vs):
     """ Deletes a version entry. Only the GC should use this.
 
