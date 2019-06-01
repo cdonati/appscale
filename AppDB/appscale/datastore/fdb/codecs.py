@@ -1,3 +1,7 @@
+"""
+This module contains shared encoding and decoding utilities for translating
+datastore types to bytestrings and vice versa.
+"""
 import struct
 import sys
 
@@ -56,6 +60,7 @@ class V3Types(object):
 
 
 def decode_str(string):
+  """ Converts byte strings to unicode strings. """
   if isinstance(string, six.text_type):
     return string
 
@@ -63,6 +68,7 @@ def decode_str(string):
 
 
 def encode_element(element):
+  """ Converts a path element protobuf object to a tuple. """
   if element.has_id():
     id_or_name = element.id()
   elif element.has_name():
@@ -74,6 +80,7 @@ def encode_element(element):
 
 
 def decode_element(element_tuple):
+  """ Converts a tuple to a path element protobuf object. """
   path_element = entity_pb.Path_Element()
   path_element.set_type(element_tuple[0])
   if isinstance(element_tuple[1], int):
@@ -85,6 +92,7 @@ def decode_element(element_tuple):
 
 
 def encode_ancestor_range(subspace, path):
+  """ Determines the start and stop key selectors for an ancestor range. """
   embedded_value = fdb.tuple.pack(path)
   # In order to exclude the ancestor itself, the range is manually selected
   # using the potential values for the next element in the key path. It's
@@ -100,6 +108,7 @@ def encode_ancestor_range(subspace, path):
 
 
 def encode_path(path):
+  """ Converts a key path protobuf object to a tuple. """
   if isinstance(path, entity_pb.PropertyValue):
     element_list = path.referencevalue().pathelement_list()
   elif isinstance(path, entity_pb.PropertyValue_ReferenceValue):
@@ -112,6 +121,7 @@ def encode_path(path):
 
 
 def decode_path(encoded_path, reference_value=False):
+  """ Converts a tuple to a key path protobuf object. """
   if reference_value:
     path = entity_pb.PropertyValue_ReferenceValue()
   else:
@@ -130,7 +140,17 @@ def decode_path(encoded_path, reference_value=False):
 
 
 def reverse_encode_string(unicode_string):
+  """ Encodes strings so that they will be sorted in reverse order. """
   byte_array = bytearray(unicode_string, encoding='utf-8')
+  # In order to place smaller byte values before larger ones, each byte is
+  # inverted. In order to ensure that the shorter of two strings with otherwise
+  # identical prefixes will be placed after the longer string, the largest byte
+  # value (255) is used to terminate the string.
+  # Since b'\x00' would normally be encoded as the terminator with this
+  # conversion, each value is first shifted up a value before being inverted.
+  # For example, b'\x00' -> b'\x01' -> b'\xfe'. Luckily, b'\xff' is not used
+  # by UTF-8, so every encoded UTF-8 byte can be incremented without exceeding
+  # the largest byte value.
   for index, byte_value in enumerate(byte_array):
     byte_array[index] = 255 - (byte_value + 1)
 
@@ -138,6 +158,7 @@ def reverse_encode_string(unicode_string):
 
 
 def reverse_decode_string(byte_string):
+  """ Recovers the original unicode string from a reverse-encoded one. """
   byte_array = bytearray(byte_string[:-1])
   for index, byte_value in enumerate(byte_array):
     byte_array[index] = (255 - byte_value) - 1
@@ -146,6 +167,7 @@ def reverse_decode_string(byte_string):
 
 
 def decode_point(val):
+  """ Converts a tuple to a PointValue property value object. """
   point_val = entity_pb.PropertyValue_PointValue()
   point_val.set_x(val[0])
   point_val.set_y(val[1])
@@ -153,6 +175,7 @@ def decode_point(val):
 
 
 def decode_user(val):
+  """ Converts a tuple to a UserValue property value object. """
   user_val = entity_pb.PropertyValue_UserValue()
   user_val.set_email(val[0])
   user_val.set_auth_domain(val[1])
@@ -160,12 +183,14 @@ def decode_user(val):
 
 
 def encode_reference(val):
+  """ Converts an entity key protobuf object to a tuple. """
   project_id = decode_str(val.app())
   namespace = decode_str(val.name_space())
   return (project_id, namespace) + encode_path(val)
 
 
 def decode_reference(val):
+  """ Converts a tuple to an entity key protobuf object. """
   reference_val = entity_pb.PropertyValue_ReferenceValue()
   reference_val.set_app(val[0])
   reference_val.set_name_space(val[1])
@@ -223,6 +248,7 @@ DECODERS = {
 
 
 def unpack_value(value):
+  """  """
   for type_name, encoded_type in V3Types.accessible:
     if getattr(value, 'has_{}value'.format(type_name))():
       return encoded_type, getattr(value, '{}value'.format(type_name))()

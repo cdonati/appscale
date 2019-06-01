@@ -55,6 +55,10 @@ class DirectoryCache(object):
 
   @staticmethod
   def subdirs_subspace(directory):
+    """
+    Returns the subspace used by the directory layer to keep track of
+    subdirectories.
+    """
     dir_layer = directory._directory_layer
     parent_subspace = dir_layer._node_with_prefix(directory.rawPrefix)
     return parent_subspace.subspace((dir_layer.SUBDIRS,))
@@ -89,6 +93,12 @@ class ProjectCache(DirectoryCache):
 
   @gen.coroutine
   def list(self, tr):
+    """ Gets a project's subdirectories.
+    Args:
+      tr: An FDB transaction.
+    Returns:
+      A list of DirectorySubspace objects.
+    """
     yield self.validate_cache(tr)
     subdirs_subspace = self.subdirs_subspace(self.root_dir)
     kvs = yield KVIterator(tr, self._tornado_fdb,
@@ -189,6 +199,14 @@ class NSCache(DirectoryCache):
 
   @gen.coroutine
   def get_section(self, tr, project_dir):
+    """ Gets a project's directory type section.
+    Args:
+      tr: An FDB transaction.
+      project_dir: The project's DirectorySubspace.
+    Returns:
+      A DirectorySubpace object with the path of
+      (<ds-root>, <project-id>, <section>).
+    """
     project_id = project_dir.get_path()[-1]
     if project_id not in self:
       # TODO: Make async.
@@ -199,6 +217,14 @@ class NSCache(DirectoryCache):
 
   @gen.coroutine
   def list(self, tr, project_dir):
+    """ Gets the namepsace directories from the project's relevant section.
+    Args:
+      tr: An FDB transaction.
+      project_dir: The project's DirectorySubspace.
+    Returns:
+      A list of DirectorySubspace objects with the path of
+      (<ds-root>, <project-id>, <section>, <namespace>).
+    """
     project_id = project_dir.get_path()[-1]
     section_dir = yield self.get_section(tr, project_dir)
     subdirs_subspace = self.subdirs_subspace(section_dir)

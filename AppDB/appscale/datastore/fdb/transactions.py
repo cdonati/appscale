@@ -126,6 +126,11 @@ class TransactionMetadata(object):
     return slice(fdb.KeySelector.first_greater_or_equal(prefix),
                  fdb.KeySelector.first_greater_than(prefix + b'\xff'))
 
+  def get_expired_slice(self, scatter_byte, safe_vs):
+    prefix = self.directory.rawPrefix + scatter_byte
+    return slice(fdb.KeySelector.first_greater_or_equal(prefix),
+                 fdb.KeySelector.first_greater_than(prefix + safe_vs))
+
   def _encode_ns_key(self, key):
     namespace = decode_str(key.name_space())
     return fdb.tuple.pack((namespace,) + encode_path(key.path()))
@@ -251,6 +256,6 @@ class TransactionManager(object):
     raise gen.Return(tx_dir.decode_metadata(txid, kvs[1:]))
 
   @gen.coroutine
-  def clear_ranges(self, tr, project_id, ranges, safe_vs):
+  def clear_range(self, tr, project_id, scatter_byte, safe_vs):
     tx_dir = yield self._tx_metadata_cache.get(tr, project_id)
-    
+    del tr[tx_dir.get_expired_slice(scatter_byte, safe_vs)]

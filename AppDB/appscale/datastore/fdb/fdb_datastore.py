@@ -54,11 +54,10 @@ class FDBDatastore(object):
     self._data_manager = DataManager(self._tornado_fdb, project_cache)
     self.index_manager = IndexManager(self._db, self._directory_cache,
                                       self._tornado_fdb, self._data_manager)
+    self._tx_manager = TransactionManager(self._tornado_fdb, project_cache)
     self._gc = GarbageCollector(
       self._db, self._tornado_fdb, self._data_manager, self.index_manager,
-      project_cache)
-    self._tx_manager = TransactionManager(
-      self._tornado_fdb, self._gc, project_cache)
+      self._tx_manager, project_cache)
     self._gc.start()
 
   @gen.coroutine

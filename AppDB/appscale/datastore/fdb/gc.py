@@ -223,13 +223,14 @@ class GarbageCollector(object):
   # The total number of batches in a directory.
   _TOTAL_BATCHES = int(1 / _BATCH_PERCENT)
 
-  def __init__(self, db, tornado_fdb, data_manager, index_manager,
+  def __init__(self, db, tornado_fdb, data_manager, index_manager, tx_manager,
                project_cache):
     self._db = db
     self._queue = deque()
     self._tornado_fdb = tornado_fdb
     self._data_manager = data_manager
     self._index_manager = index_manager
+    self._tx_manager = tx_manager
     self._project_cache = project_cache
     lock_key = self._project_cache.root.pack((self._LOCK_KEY,))
     self._lock = PollingLock(self._db, self._tornado_fdb, lock_key)
@@ -325,12 +326,7 @@ class GarbageCollector(object):
 
         yield self._groom_deleted_versions(
           tr, project_id, namespace, batch, safe_vs)
-        for project_dir in project_dirs:
-          del_version_dirs = yield self._del_version_index_cache.list(
-            tr, project_dir)
-          for del_version_dir in del_version_dirs:
-            yield self._gro
-          yield self._groom_project(project_id)
+        yield self._groom_expired_transactions(tr, project_id, batch, safe_vs)
       except Exception:
         logger.exception(u'Unexpected error while grooming projects')
         yield gen.sleep(10)
@@ -394,8 +390,12 @@ class GarbageCollector(object):
     if deleted:
       logger.debug(u'GC deleted {} entities'.format(deleted))
 
+  @gen.coroutine
   def _groom_expired_transactions(self, tr, project_id, batch_num, safe_vs):
-
+    ranges = sm.range(batch_num * self._BATCH_SIZE,
+                      (batch_num + 1) * self._BATCH_SIZE)
+    yield [self._tx_manager.clear_range(tr, project_id, byte_num, safe_vs)
+           for byte_num in ranges]
 
   @gen.coroutine
   def _groom_range(self, tr, index, byte_num, safe_vs, tx_deadline):
