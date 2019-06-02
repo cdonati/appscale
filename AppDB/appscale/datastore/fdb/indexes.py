@@ -15,12 +15,12 @@ import itertools
 import logging
 import monotonic
 import sys
-import time
 
 import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
+from appscale.datastore.fdb.cache import DirectoryCache, NSCache
 from appscale.datastore.fdb.codecs import (
   decode_element, decode_path, decode_str, decode_value, encode_ancestor_range,
   encode_path, encode_value)
@@ -475,6 +475,7 @@ class MergeJoinIterator(object):
 
 
 class Index(object):
+  """ The base class for different datastore index types. """
   __SLOTS__ = [u'directory']
 
   def __init__(self, directory):
@@ -552,13 +553,21 @@ class Index(object):
 
 
 class KindlessIndex(Index):
-  DIR_NAME = u'kindless'
+  """
+  A KindlessIndex handles the encoding and decoding details for kind index
+  entries. These are just paths that point to entity keys.
 
-  @classmethod
-  def from_cache(cls, project_id, namespace, directory_cache):
-    directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME))
-    return cls(directory)
+  The FDB directory for a kindless index looks like
+  (<project-dir>, 'indexes', <namespace>, 'kindless').
+
+  Within this directory, keys are encoded as (<path-tuple>, <commit-vs>).
+
+  The <path-tuple> is an encoded tuple containing the entity path.
+
+  The <commit-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that wrote the index entry.
+  """
+  DIR_NAME = u'kindless'
 
   def __repr__(self):
     return u'KindlessIndex(%r)' % self.directory
@@ -583,13 +592,24 @@ class KindlessIndex(Index):
 
 
 class KindIndex(Index):
-  DIR_NAME = u'kind'
+  """
+  A KindIndex handles the encoding and decoding details for kind index entries.
+  These are paths grouped by kind that point to entity keys.
 
-  @classmethod
-  def from_cache(cls, project_id, namespace, kind, directory_cache):
-    directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, kind))
-    return cls(directory)
+  The FDB directory for a kind index looks like
+  (<project-dir>, 'indexes', <namespace>, 'kind', <kind>).
+
+  Within this directory, keys are encoded as
+  (<kindless-path-tuple>, <commit-vs>).
+
+  The <kindless-path-tuple> is an encoded tuple containing the entity path
+  with the kind missing from the last path element. This is omitted since the
+  directory path contains this.
+
+  The <commit-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that wrote the index entry.
+  """
+  DIR_NAME = u'kind'
 
   @property
   def kind(self):
@@ -620,13 +640,30 @@ class KindIndex(Index):
 
 
 class SinglePropIndex(Index):
-  DIR_NAME = u'single-property'
+  """
+  A SinglePropIndex handles the encoding and decoding details for single-prop
+  index entries. These are property values for a particular kind that point to
+  entity keys.
 
-  @classmethod
-  def from_cache(cls, project_id, namespace, kind, prop_name, directory_cache):
-    directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME, kind, prop_name))
-    return cls(directory)
+  The FDB directory for a single-prop index looks like
+  (<project-dir>, 'indexes', <namespace>, 'single-property', <kind>,
+   <prop-name>).
+
+  Within this directory, keys are encoded as
+  (<encoded-value>, <kindless-path-tuple>, <commit-vs>).
+
+  The <encoded-value> is a tuple in the form of
+  (<encoded-type>, <encoded-value). See the codecs module for details about
+  how different datastore value types are encoded.
+
+  The <kindless-path-tuple> is an encoded tuple containing the entity path
+  with the kind missing from the last path element. This is omitted since the
+  directory path contains this.
+
+  The <commit-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that wrote the index entry.
+  """
+  DIR_NAME = u'single-property'
 
   @property
   def kind(self):
@@ -759,6 +796,39 @@ class SinglePropIndex(Index):
 
 
 class CompositeIndex(Index):
+  """
+  A CompositeIndex handles the encoding and decoding details for composite
+  index entries.
+
+  The FDB directory for a composite index looks like
+  (<project-dir>, 'indexes', <namespace>, 'composite', <index-id>).
+
+  Within this directory, keys are encoded as
+  (<ancestor-fragment (optional)>, <encoded-values>, <remaining-path-tuple>,
+   <commit-vs>).
+
+  If the index definition requires an ancestor, the <ancestor-fragment>
+  contains an encoded tuple specifying the full or partial path of the entity's
+  ancestor. The number of entries written for ancestor composite indexes is
+  equal to the number of ancestor path elements. For example, an entity with
+  three path elements would be encoded with the following two entries:
+  (('Kind1', 'key1'), <encoded-values>, ('Kind2', 'key2', 'key3'), <commit-vs>)
+  (('Kind1', 'key1, 'Kind2', 'key2'), <encoded-values>, ('key3',), <commit-vs>)
+
+  The <encoded-values> portion is a nested tuple in the form of
+  (<encoded-value1>, <encoded-value2>, ...). The number of values depends on
+  the index definition. Each <encoded-value> is a tuple in the form of
+  (<encoded-type>, <encoded-value). See the codecs module for details about how
+  different datastore value types are encoded.
+
+  The <remaining-path-tuple> is an encoded tuple containing the portion of the
+  entity path that isn't specified by the <ancestor-fragment>. If the index
+  definition does not require an ancestor, this is equivalent to the
+  <kindless-path> portion of a kind or single-prop index.
+
+  The <commit-vs> is a 10-byte versionstamp that specifies the commit version
+  of the transaction that wrote the index entry.
+  """
   __SLOTS__ = [u'kind', u'ancestor', u'order_info']
 
   DIR_NAME = u'composite'
@@ -776,14 +846,6 @@ class CompositeIndex(Index):
   @property
   def prop_names(self):
     return tuple(prop_name for prop_name, _ in self.order_info)
-
-  @classmethod
-  def from_cache(cls, project_id, namespace, index_id, kind, ancestor,
-                 order_info, directory_cache):
-    directory = directory_cache.get(
-      (project_id, INDEX_DIR, namespace, cls.DIR_NAME,
-       six.text_type(index_id)))
-    return cls(directory, kind, ancestor, order_info)
 
   def __repr__(self):
     return u'CompositeIndex(%r, %r, %r, %r)' % (
@@ -980,26 +1042,45 @@ class CompositeIndex(Index):
 
 
 class IndexManager(object):
+  """
+  The IndexManager is the main interface that clients can use to interact with
+  the index layer. It makes use of KindlessIndex, KindIndex, SinglePropIndex,
+  and CompositeIndex namespace directories to handle the encoding and decoding
+  details when satisfying requests. When a client requests data, the
+  IndexManager encapsulates index data in an IndexEntry object.
+  """
   _MAX_RESULTS = 300
 
-  def __init__(self, db, directory_cache, tornado_fdb, data_manager):
+  def __init__(self, db, tornado_fdb, data_manager, project_cache):
     self.composite_index_manager = None
     self._db = db
-    self._directory_cache = directory_cache
     self._tornado_fdb = tornado_fdb
     self._data_manager = data_manager
+    self._kindless_index_cache = NSCache(
+      self._tornado_fdb, project_cache, KindlessIndex)
+    self._kind_index_cache = NSCache(
+      self._tornado_fdb, project_cache, KindIndex)
+    self._single_prop_index_cache = NSCache(
+      self._tornado_fdb, project_cache, SinglePropIndex)
+    self._composite_index_cache = NSCache(
+      self._tornado_fdb, project_cache, CompositeIndex)
 
+  @gen.coroutine
   def put_entries(self, tr, old_entity, old_vs, new_entity):
     if old_entity is not None:
-      for key in self._get_index_keys(old_entity, old_vs):
+      keys = yield self._get_index_keys(tr, old_entity, old_vs)
+      for key in keys:
         tr.set_versionstamped_value(key, b'\x00' * 14)
 
     if new_entity is not None:
-      for key in self._get_index_keys(new_entity):
+      keys = yield self._get_index_keys(tr, new_entity)
+      for key in keys:
         tr.set_versionstamped_key(key, b'')
 
+  @gen.coroutine
   def hard_delete_entries(self, tr, old_entity, old_vs):
-    for key in self._get_index_keys(old_entity, old_vs):
+    keys = self._get_index_keys(tr, old_entity, old_vs)
+    for key in keys:
       del tr[key]
 
   def rpc_limit(self, query):
@@ -1034,6 +1115,7 @@ class IndexManager(object):
 
     return False
 
+  @gen.coroutine
   def get_iterator(self, tr, query, read_vs=None):
     project_id = decode_str(query.app())
     namespace = decode_str(query.name_space())
@@ -1056,7 +1138,7 @@ class IndexManager(object):
     if check_more_results:
       fetch_limit += 1
 
-    index = self._get_perfect_index(query)
+    index = yield self._get_perfect_index(tr, query)
     reverse = get_scan_direction(query, index) == Query_Order.DESCENDING
 
     if index is None:
@@ -1073,9 +1155,9 @@ class IndexManager(object):
       other_props = [filter_prop for filter_prop in filter_props
                      if filter_prop.name != KEY_PROP]
       for filter_prop in other_props:
-        index = SinglePropIndex.from_cache(
-          project_id, namespace, decode_str(query.kind()), filter_prop.name,
-          self._directory_cache)
+        index = yield self._single_prop_index_cache.get(
+          tr, project_id, namespace, decode_str(query.kind()),
+          filter_prop.name)
         for op, value in filter_prop.filters:
           tmp_filter_prop = FilterProperty(filter_prop.name, [(op, value)])
           if equality_prop is not None:
@@ -1087,9 +1169,9 @@ class IndexManager(object):
                                   start_cursor, end_cursor)
           indexes.append([index, slice, filter_prop.name, value])
 
-      return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
-                               fetch_limit, read_vs, ancestor_path,
-                               snapshot=True)
+      raise gen.Return(
+        MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
+                          fetch_limit, read_vs, ancestor_path, snapshot=True))
 
     equality_prop = next(
       (filter_prop for filter_prop in filter_props if filter_prop.equality),
@@ -1109,9 +1191,9 @@ class IndexManager(object):
           tmp_filter_props, ancestor_path, start_cursor, end_cursor, reverse)
         indexes.append([index, desired_slice, equality_prop.name, value])
 
-      return MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
-                               fetch_limit, read_vs, ancestor_path,
-                               snapshot=True)
+      raise gen.Return(
+        MergeJoinIterator(tr, self._tornado_fdb, filter_props, indexes,
+                          fetch_limit, read_vs, ancestor_path, snapshot=True))
 
     desired_slice = index.get_slice(filter_props, ancestor_path, start_cursor,
                                     end_cursor, reverse)
@@ -1119,9 +1201,10 @@ class IndexManager(object):
     iterator = IndexIterator(tr, self._tornado_fdb, index, desired_slice,
                              fetch_limit, reverse, read_vs, snapshot=True)
 
-    return iterator
+    raise gen.Return(iterator)
 
-  def _get_index_keys(self, entity, commit_vs=None):
+  @gen.coroutine
+  def _get_index_keys(self, tr, entity, commit_vs=None):
     if commit_vs is None:
       commit_vs = fdb.tuple.Versionstamp()
 
@@ -1130,10 +1213,10 @@ class IndexManager(object):
     path = encode_path(entity.key().path())
     kind = path[-2]
 
-    kindless_index = KindlessIndex.from_cache(
-      project_id, namespace, self._directory_cache)
-    kind_index = KindIndex.from_cache(
-      project_id, namespace, kind, self._directory_cache)
+    kindless_index = yield self._kindless_index_cache.get(
+      tr, project_id, namespace)
+    kind_index = yield self._kind_index_cache.get(
+      tr, project_id, namespace, kind)
     composite_indexes = self._get_indexes(project_id, namespace, kind)
 
     all_keys = [kindless_index.encode(path, commit_vs),
@@ -1142,14 +1225,14 @@ class IndexManager(object):
     for prop in entity.property_list():
       prop_name = decode_str(prop.name())
       entity_prop_names.append(prop_name)
-      index = SinglePropIndex.from_cache(
-        project_id, namespace, kind, prop_name, self._directory_cache)
+      index = yield self._single_prop_index_cache.get(
+        tr, project_id, namespace, kind, prop_name)
       all_keys.append(index.encode(prop.value(), path, commit_vs))
 
     scatter_val = get_scatter_val(path)
     if scatter_val is not None:
-      index = SinglePropIndex.from_cache(
-        project_id, namespace, kind, SCATTER_PROP, self._directory_cache)
+      index = yield self._single_prop_index_cache.get(
+        tr, project_id, namespace, kind, SCATTER_PROP)
       all_keys.append(index.encode(scatter_val, path, commit_vs))
 
     for index in composite_indexes:
@@ -1159,9 +1242,10 @@ class IndexManager(object):
 
       all_keys.extend(index.encode(entity.property_list(), path, commit_vs))
 
-    return all_keys
+    raise gen.Return(all_keys)
 
-  def _get_perfect_index(self, query):
+  @gen.coroutine
+  def _get_perfect_index(self, tr, query):
     project_id = decode_str(query.app())
     namespace = decode_str(query.name_space())
     filter_props = group_filters(query)
@@ -1179,11 +1263,13 @@ class IndexManager(object):
         raise BadRequest(u'kind must be specified when filtering or ordering '
                          u'properties other than __key__')
 
-      return KindlessIndex.from_cache(
-        project_id, namespace, self._directory_cache)
+      kindless_index = yield self._kindless_index_cache.get(
+        tr, project_id, namespace)
+      raise gen.Return(kindless_index)
 
     kind = decode_str(query.kind())
     if all(prop_name == KEY_PROP for prop_name in prop_names):
+      kind_index = yield self._kind_index_cache.get
       return KindIndex.from_cache(
         project_id, namespace, kind, self._directory_cache)
 

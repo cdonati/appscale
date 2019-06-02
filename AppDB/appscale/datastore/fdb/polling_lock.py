@@ -1,6 +1,5 @@
 import logging
 import monotonic
-import time
 import uuid
 
 from tornado import gen

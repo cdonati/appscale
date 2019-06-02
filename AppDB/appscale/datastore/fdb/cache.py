@@ -94,6 +94,7 @@ class ProjectCache(DirectoryCache):
   @gen.coroutine
   def list(self, tr):
     """ Gets a project's subdirectories.
+
     Args:
       tr: An FDB transaction.
     Returns:
@@ -161,7 +162,7 @@ class NSCache(DirectoryCache):
     self._dir_type = dir_type
 
   @gen.coroutine
-  def get(self, tr, project_id, namespace):
+  def get(self, tr, project_id, namespace, *args):
     """ Gets a namespace directory for the given project and namespace.
 
     Args:
@@ -177,7 +178,7 @@ class NSCache(DirectoryCache):
       project_dir = yield self._project_cache.get(project_id)
       section_dir = yield self.get_section(tr, project_dir)
       # TODO: Make async.
-      ns_dir = section_dir.create_or_open(tr, (namespace,))
+      ns_dir = section_dir.create_or_open(tr, (namespace,) + tuple(args))
       self[key] = self._dir_type(ns_dir)
 
     raise gen.Return(self[key])
@@ -200,6 +201,7 @@ class NSCache(DirectoryCache):
   @gen.coroutine
   def get_section(self, tr, project_dir):
     """ Gets a project's directory type section.
+
     Args:
       tr: An FDB transaction.
       project_dir: The project's DirectorySubspace.
@@ -218,6 +220,7 @@ class NSCache(DirectoryCache):
   @gen.coroutine
   def list(self, tr, project_dir):
     """ Gets the namepsace directories from the project's relevant section.
+
     Args:
       tr: An FDB transaction.
       project_dir: The project's DirectorySubspace.

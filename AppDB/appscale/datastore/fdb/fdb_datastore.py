@@ -8,6 +8,8 @@ Within each project directory, there is a directory for each of the following:
 data: encoded entity data
 indexes: entity key references by property values
 transactions: transaction metadata
+
+See each submodule for more implementation details.
 """
 import logging
 import sys

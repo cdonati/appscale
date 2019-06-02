@@ -451,6 +451,7 @@ class DataManager(object):
 
     raise gen.Return(last_updated_vs.value)
 
+  @gen.coroutine
   def put(self, tr, key, version, encoded_entity):
     """ Writes a new version entry and updates the entity group VS.
 

@@ -240,11 +240,13 @@ class GarbageCollector(object):
       self._tornado_fdb, self._project_cache, SafeReadDir)
 
   def start(self):
+    """ Starts the garbage collection work. """
     self._lock.start()
     IOLoop.current().spawn_callback(self._process_deferred_deletes)
     IOLoop.current().spawn_callback(self._groom_projects)
 
   def clear_later(self, entities, new_vs):
+    """ Clears deleted entities after sufficient time has passed. """
     safe_time = monotonic.monotonic() + MAX_TX_DURATION
     for old_entity, old_vs in entities:
       # TODO: Strip raw properties and enforce a max queue size to keep memory
@@ -253,6 +255,10 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def safe_read_vs(self, tr, key):
+    """
+    Retrieves the safe read versionstamp for an entity key. Read versionstamps
+    that are larger than this value are safe to use.
+    """
     safe_read_dir = yield self._safe_read_dir_cache.get_from_key(tr, key)
     safe_read_key = safe_read_dir.encode_key(key.path())
     # A concurrent change to the safe read VS does not affect what the current
@@ -265,6 +271,7 @@ class GarbageCollector(object):
 
   @gen.coroutine
   def index_deleted_version(self, tr, version_entry):
+    """ Marks a deleted entity version as a candidate for a later cleanup. """
     index = yield self._del_version_index_cache.get(
       tr, version_entry.project_id, version_entry.namespace)
     key = index.encode_key(version_entry.path, version_entry.commit_vs)

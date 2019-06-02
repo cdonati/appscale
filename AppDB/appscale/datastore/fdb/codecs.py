@@ -248,7 +248,13 @@ DECODERS = {
 
 
 def unpack_value(value):
-  """  """
+  """ Extracts the value from a V3 PropertyValue object.
+
+  Args:
+    value: A PropertyValue protobuf object.
+  Returns:
+    A tuple in the form of (<value-type>, <value>).
+  """
   for type_name, encoded_type in V3Types.accessible:
     if getattr(value, 'has_{}value'.format(type_name))():
       return encoded_type, getattr(value, '{}value'.format(type_name))()
@@ -257,6 +263,7 @@ def unpack_value(value):
 
 
 def encode_value(value, reverse=False):
+  """ Converts a PropertyValue to a tuple. """
   if isinstance(value, six.integer_types):
     encoded_type = V3Types.INT64
   else:
@@ -269,6 +276,7 @@ def encode_value(value, reverse=False):
 
 
 def decode_value(encoded_value):
+  """ Converts a tuple to a PropertyValue. """
   prop_value = entity_pb.PropertyValue()
   encoded_type = encoded_value[0]
   if V3Types.null(encoded_type):
@@ -286,6 +294,7 @@ def decode_value(encoded_value):
 
 
 def encode_sortable_int(value, byte_count):
+  """ Encodes an integer using the specified number of bytes. """
   format_str = u'>Q' if byte_count > 4 else u'>I'
   encoded = struct.pack(format_str, value)
   if any(byte != b'\x00' for byte in encoded[:-1 * byte_count]):
@@ -295,6 +304,7 @@ def encode_sortable_int(value, byte_count):
 
 
 def decode_sortable_int(encoded_value):
+  """ Converts a byte string to an integer. """
   format_str = u'>Q' if len(encoded_value) > 4 else u'>I'
   format_size = 8 if len(encoded_value) > 4 else 4
   encoded_value = b'\x00' * (format_size - len(encoded_value)) + encoded_value
@@ -306,4 +316,5 @@ encode_read_vs = lambda read_version: encode_sortable_int(
 
 
 def encode_vs_index(vs_position):
+  """ Encodes an FDB key index position. """
   return struct.pack(u'<L', vs_position)
