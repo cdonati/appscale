@@ -1,13 +1,7 @@
 """
-indexes: This contains a directory for each index that the datastore needs in
-order to satisfy basic queries along with indexes that the project has defined
-for composite queries. Here is an example template:
-
-  ([index dir^4], <type>, <value>, [path], <commit versionstamp>) -> ''
-
-^4: The index's directory path. For example,
-    (appscale, datastore, <project>, indexes, <namespace>, single-property,
-     <kind>, <property name>)
+This module stores and queries entity indexes. The IndexManager is the main
+interface that clients can use to interact with the index layer. See its
+documentation for implementation details.
 """
 from __future__ import division
 
@@ -20,7 +14,7 @@ import six
 from tornado import gen
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
-from appscale.datastore.fdb.cache import DirectoryCache, NSCache
+from appscale.datastore.fdb.cache import NSCache
 from appscale.datastore.fdb.codecs import (
   decode_element, decode_path, decode_str, decode_value, encode_ancestor_range,
   encode_path, encode_value)
@@ -1056,14 +1050,15 @@ class IndexManager(object):
     self._db = db
     self._tornado_fdb = tornado_fdb
     self._data_manager = data_manager
+    self._project_cache = project_cache
     self._kindless_index_cache = NSCache(
-      self._tornado_fdb, project_cache, KindlessIndex)
+      self._tornado_fdb, self._project_cache, KindlessIndex)
     self._kind_index_cache = NSCache(
-      self._tornado_fdb, project_cache, KindIndex)
+      self._tornado_fdb, self._project_cache, KindIndex)
     self._single_prop_index_cache = NSCache(
-      self._tornado_fdb, project_cache, SinglePropIndex)
+      self._tornado_fdb, self._project_cache, SinglePropIndex)
     self._composite_index_cache = NSCache(
-      self._tornado_fdb, project_cache, CompositeIndex)
+      self._tornado_fdb, self._project_cache, CompositeIndex)
 
   @gen.coroutine
   def put_entries(self, tr, old_entity, old_vs, new_entity):
@@ -1217,7 +1212,8 @@ class IndexManager(object):
       tr, project_id, namespace)
     kind_index = yield self._kind_index_cache.get(
       tr, project_id, namespace, kind)
-    composite_indexes = self._get_indexes(project_id, namespace, kind)
+    composite_indexes = yield self._get_indexes(
+      tr, project_id, namespace, kind)
 
     all_keys = [kindless_index.encode(path, commit_vs),
                 kind_index.encode(path, commit_vs)]
@@ -1269,32 +1265,31 @@ class IndexManager(object):
 
     kind = decode_str(query.kind())
     if all(prop_name == KEY_PROP for prop_name in prop_names):
-      kind_index = yield self._kind_index_cache.get
-      return KindIndex.from_cache(
-        project_id, namespace, kind, self._directory_cache)
+      kind_index = yield self._kind_index_cache.get(
+        tr, project_id, namespace, kind)
+      raise gen.Return(kind_index)
 
     if sum(prop_name != KEY_PROP for prop_name in prop_names) == 1:
       prop_name = next(prop_name for prop_name in prop_names
                        if prop_name != KEY_PROP)
       ordered_prop = prop_name in [order_name for order_name, _ in order_info]
       if not query.has_ancestor() or not ordered_prop:
-        return SinglePropIndex.from_cache(
-          project_id, namespace, decode_str(query.kind()), prop_name,
-          self._directory_cache)
+        single_prop_index = yield self._single_prop_index_cache.get(
+          tr, project_id, namespace, decode_str(query.kind()), prop_name)
+        raise gen.Return(single_prop_index)
 
     index_pb = _FindIndexToUse(query, self._get_indexes_pb(project_id))
     if index_pb is not None:
       index_order_info = tuple(
         (decode_str(prop.name()), prop.direction())
         for prop in index_pb.definition().property_list())
-      return CompositeIndex.from_cache(
-        project_id, namespace, index_pb.id(), kind,
-        index_pb.definition().ancestor(), index_order_info,
-        self._directory_cache)
+      composite_index = yield self._composite_index_cache.get(
+        tr, project_id, namespace, index_pb.id(), kind=kind,
+        ancestor=index_pb.definition().ancestor(), order_info=index_order_info)
+      raise gen.Return(composite_index)
 
-    return None
-
-  def _get_indexes(self, project_id, namespace, kind):
+  @gen.coroutine
+  def _get_indexes(self, tr, project_id, namespace, kind):
     try:
       project_index_manager = self.composite_index_manager.projects[project_id]
     except KeyError:
@@ -1310,11 +1305,12 @@ class IndexManager(object):
                      else Query_Order.ASCENDING)
         order_info.append((prop.name, direction))
 
-      fdb_indexes.append(CompositeIndex.from_cache(
-        project_id, namespace, index.id, index.kind, index.ancestor,
-        order_info, self._directory_cache))
+      composite_index = yield self._composite_index_cache.get(
+        tr, project_id, namespace, index.id, kind=index.kind,
+        ancestor=index.ancestor, order_info=order_info)
+      fdb_indexes.append(composite_index)
 
-    return fdb_indexes
+    raise gen.Return(fdb_indexes)
 
   def _get_indexes_pb(self, project_id):
     try:
@@ -1336,20 +1332,25 @@ class IndexManager(object):
     ancestor = index_pb.definition().ancestor()
     order_info = ((prop.name(), prop.direction())
                   for prop in index_pb.definition().property_list())
-    indexes_dir = self._directory_cache.get((project_id, INDEX_DIR))
+
     tr = self._db.create_transaction()
+    project_dir = yield self._project_cache.get(tr, project_id)
+    # TODO: Make async.
+    indexes_dir = project_dir.create_or_open(tr, (INDEX_DIR,))
     deadline = monotonic.monotonic() + MAX_FDB_TX_DURATION / 2
     for namespace in indexes_dir.list(tr):
       if start_ns is not None and namespace < start_ns:
         continue
 
       u_index_id = six.text_type(index_pb.id())
+      # TODO: Make async.
       composite_index_dir = indexes_dir.create_or_open(
         tr, (namespace, CompositeIndex.DIR_NAME, u_index_id))
       composite_index = CompositeIndex(composite_index_dir, kind, ancestor,
                                        order_info)
       logger.info(u'Backfilling {}'.format(composite_index))
       try:
+        # TODO: Make async.
         kind_index_dir = indexes_dir.open(
           tr, (namespace, KindIndex.DIR_NAME, kind))
       except ValueError:

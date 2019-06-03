@@ -161,8 +161,9 @@ class NSCache(DirectoryCache):
     self._project_cache = project_cache
     self._dir_type = dir_type
 
+  # TODO: This interface is really clumsy. Rethink arguments.
   @gen.coroutine
-  def get(self, tr, project_id, namespace, *args):
+  def get(self, tr, project_id, namespace, *args, **kwargs):
     """ Gets a namespace directory for the given project and namespace.
 
     Args:
@@ -179,7 +180,7 @@ class NSCache(DirectoryCache):
       section_dir = yield self.get_section(tr, project_dir)
       # TODO: Make async.
       ns_dir = section_dir.create_or_open(tr, (namespace,) + tuple(args))
-      self[key] = self._dir_type(ns_dir)
+      self[key] = self._dir_type(ns_dir, **kwargs)
 
     raise gen.Return(self[key])
 

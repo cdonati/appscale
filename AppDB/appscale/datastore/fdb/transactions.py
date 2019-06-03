@@ -1,13 +1,7 @@
 """
-transactions: This maps transaction handles to metadata that the datastore
-needs in order to handle operations for the transaction. Here are a few example
-entries:
-
-  ([directory^5], <handle id>, read_vs) -> <read versionstamp^6>
-  ([directory], <handle>, lookups, <rpc versionstamp>) -> (<encoding>, <key>)
-
-^5: A directory located at (appscale, datastore, <project>, transactions).
-^6: Designates what version of the database read operations should see.
+This module stores and retrieves datastore transaction metadata. The
+TransactionManager is the main interface that clients can use to interact with
+the transaction layer. See its documentation for implementation details.
 """
 import logging
 import math
@@ -34,6 +28,36 @@ logger = logging.getLogger(__name__)
 
 
 class TransactionMetadata(object):
+  """
+  A TransactionMetadata directory handles the encoding and decoding details for
+  transaction metadata for a specific project.
+
+  The directory path looks like (<project-dir>, 'transactions').
+  Within this directory, keys are encoded as
+  <scatter-byte> + <txid> + <rpc-type (optional)> + <rpc-details (optional)>.
+
+  The <scatter-byte> is a single byte derived from the txid. Its purpose is to
+  spread writes more evenly across the cluster and minimize hotspots. This is
+  especially important for this index because each write is given a new, larger
+  <txid> value than the last.
+
+  The <txid> is an 8-byte integer that serves as a handle for the client to
+  identify a transaction. It also serves as a read versionstamp for FDB
+  transactions used within the datastore transaction.
+
+  The initial creation of the datastore transaction does not specify any RPC
+  details. The purpose of that KV is to verify that the datastore transaction
+  exists (and the garbage collector hasn't cleaned it up) before committing it.
+
+  The <rpc-type> is a single byte that indicates what kind of RPC is being
+  logged as having occurred inside the transaction.
+
+  The <rpc-details> encodes the necessary details in order for the datastore
+  to reconstruct the RPCs that occurreed during the transaction when it comes
+  time to commit the mutations.
+
+  # TODO: Go into more detail about how different RPC types are encoded.
+  """
   DIR_NAME = u'transactions'
 
   LOOKUPS = b'\x00'
@@ -196,6 +220,11 @@ class TransactionMetadata(object):
 
 
 class TransactionManager(object):
+  """
+  The TransactionManager is the main interface that clients can use to interact
+  with the transaction layer. It makes use of TransactionMetadata directories
+  to handle the encoding and decoding details when satisfying requests.
+  """
   def __init__(self, tornado_fdb, project_cache):
     self._tornado_fdb = tornado_fdb
     self._tx_metadata_cache = SectionCache(

@@ -21,7 +21,7 @@ from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import (
   BadRequest, ConcurrentModificationException, InternalError)
 from appscale.datastore.fdb.cache import ProjectCache
-from appscale.datastore.fdb.codecs import decode_str
+from appscale.datastore.fdb.codecs import decode_str, encode_read_vs
 from appscale.datastore.fdb.data import DataManager
 from appscale.datastore.fdb.gc import GarbageCollector
 from appscale.datastore.fdb.indexes import (
@@ -54,8 +54,8 @@ class FDBDatastore(object):
     ds_dir = fdb.directory.create_or_open(self._db, DS_ROOT)
     project_cache = ProjectCache(self._tornado_fdb, ds_dir)
     self._data_manager = DataManager(self._tornado_fdb, project_cache)
-    self.index_manager = IndexManager(self._db, self._directory_cache,
-                                      self._tornado_fdb, self._data_manager)
+    self.index_manager = IndexManager(
+      self._db, self._tornado_fdb, self._data_manager, project_cache)
     self._tx_manager = TransactionManager(self._tornado_fdb, project_cache)
     self._gc = GarbageCollector(
       self._db, self._tornado_fdb, self._data_manager, self.index_manager,
@@ -78,7 +78,7 @@ class FDBDatastore(object):
 
     if put_request.has_transaction():
       logger.debug('put in tx: {}'.format(put_request.transaction().handle()))
-      self._tx_manager.log_rpc(tr, project_id, put_request)
+      yield self._tx_manager.log_puts(tr, project_id, put_request)
       writes = [(entity.key(), None, None, None)
                 for entity in put_request.entity_list()]
     else:
@@ -115,15 +115,13 @@ class FDBDatastore(object):
 
     read_vs = None
     if get_request.has_transaction():
-      read_vs_future = self._tx_manager.get_read_vs(
-        tr, project_id, get_request.transaction().handle())
-      self._tx_manager.log_rpc(tr, project_id, get_request)
+      yield self._tx_manager.log_lookups(tr, project_id, get_request)
 
       # Ensure the GC hasn't cleaned up an entity written after the tx start.
       safe_read_stamps = yield [self._gc.safe_read_vs(tr, key)
                                 for key in get_request.key_list()]
       safe_read_stamps = [vs for vs in safe_read_stamps if vs is not None]
-      read_vs = yield read_vs_future
+      read_vs = encode_read_vs(get_request.transaction().handle())
       if any(safe_vs > read_vs for safe_vs in safe_read_stamps):
         raise BadRequest(u'The specified transaction has expired')
 
@@ -154,7 +152,7 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
 
     if delete_request.has_transaction():
-      self._tx_manager.log_rpc(tr, project_id, delete_request)
+      yield self._tx_manager.log_deletes(tr, project_id, delete_request)
       deletes = [(None, None, None) for _ in delete_request.key_list()]
     else:
       futures = []
@@ -185,20 +183,18 @@ class FDBDatastore(object):
     tr = self._db.create_transaction()
     read_vs = None
     if query.has_transaction():
-      read_vs_future = self._tx_manager.get_read_vs(
-        tr, project_id, query.transaction().handle())
-      self._tx_manager.log_query(tr, project_id, query)
+      yield self._tx_manager.log_query(tr, project_id, query)
 
       # Ensure the GC hasn't cleaned up an entity written after the tx start.
       safe_vs = yield self._gc.safe_read_vs(tr, query.ancestor())
-      read_vs = yield read_vs_future
+      read_vs = encode_read_vs(query.transaction().handle())
       if safe_vs is not None and safe_vs > read_vs:
         raise BadRequest(u'The specified transaction has expired')
 
     fetch_data = self.index_manager.include_data(query)
     rpc_limit, check_more_results = self.index_manager.rpc_limit(query)
 
-    iterator = self.index_manager.get_iterator(tr, query, read_vs)
+    iterator = yield self.index_manager.get_iterator(tr, query, read_vs)
     for prop_name in query.property_name_list():
       prop_name = decode_str(prop_name)
       if prop_name not in iterator.prop_names:
@@ -287,8 +283,9 @@ class FDBDatastore(object):
     logger.debug(u'Applying {}:{}'.format(project_id, txid))
     project_id = decode_str(project_id)
     tr = self._db.create_transaction()
-    tx_metadata = yield self._tx_manager.get_metadata(tr, project_id, txid)
-    read_vs, lookups, queried_groups, mutations = tx_metadata
+    read_vs = encode_read_vs(txid)
+    lookups, queried_groups, mutations = yield self._tx_manager.get_metadata(
+      tr, project_id, txid)
 
     try:
       old_entities = yield self._apply_mutations(
@@ -340,8 +337,9 @@ class FDBDatastore(object):
       raise InternalError('The datastore chose an existing ID')
 
     new_version = next_entity_version(old_entity.version)
-    self._data_manager.put(tr, entity.key(), new_version, entity.Encode())
-    self.index_manager.put_entries(
+    yield self._data_manager.put(
+      tr, entity.key(), new_version, entity.Encode())
+    yield self.index_manager.put_entries(
       tr, old_entity.decoded, old_entity.commit_vs, entity)
     if old_entity.present:
       yield self._gc.index_deleted_version(tr, old_entity)
@@ -357,8 +355,8 @@ class FDBDatastore(object):
       raise gen.Return((None, None, None))
 
     new_version = next_entity_version(old_entity.version)
-    self._data_manager.put(tr, key, new_version, b'')
-    self.index_manager.put_entries(
+    yield self._data_manager.put(tr, key, new_version, b'')
+    yield self.index_manager.put_entries(
       tr, old_entity.decoded, old_entity.commit_vs, new_entity=None)
     if old_entity.present:
       yield self._gc.index_deleted_version(tr, old_entity)
@@ -421,9 +419,9 @@ class FDBDatastore(object):
 
       new_version = next_entity_version(old_entity.version)
       new_encoded = mutation.Encode() if op == 'put' else b''
-      self._data_manager.put(tr, key, new_version, new_encoded)
+      yield self._data_manager.put(tr, key, new_version, new_encoded)
       new_entity = mutation if op == 'put' else None
-      self.index_manager.put_entries(
+      yield self.index_manager.put_entries(
         tr, old_entity.decoded, old_entity.commit_vs, new_entity)
       if old_entity.present:
         yield self._gc.index_deleted_version(tr, old_entity)
