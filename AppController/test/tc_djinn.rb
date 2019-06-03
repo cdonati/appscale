@@ -49,7 +49,6 @@ class TestDjinn < Test::Unit::TestCase
     assert_equal(BAD_SECRET_MSG, djinn.is_done_initializing(@secret))
     assert_equal(BAD_SECRET_MSG, djinn.get_role_info(@secret))
     assert_equal(BAD_SECRET_MSG, djinn.get_app_info_map(@secret))
-    assert_equal(BAD_SECRET_MSG, djinn.kill(false, @secret))
     assert_equal(BAD_SECRET_MSG, djinn.set_parameters("", "", @secret))
     assert_equal(BAD_SECRET_MSG, djinn.get_node_stats_json(@secret))
     assert_equal(BAD_SECRET_MSG, djinn.get_cluster_stats_json(@secret))
@@ -68,21 +67,21 @@ class TestDjinn < Test::Unit::TestCase
     role1 = {
       "public_ip" => "public_ip",
       "private_ip" => "private_ip",
-      "jobs" => ["shadow"],
+      "roles" => ["shadow"],
       "instance_id" => "instance_id"
     }
 
     role2 = {
       "public_ip" => "public_ip2",
       "private_ip" => "private_ip2",
-      "jobs" => ["compute"],
+      "roles" => ["compute"],
       "instance_id" => "instance_id2"
     }
 
     keyname = "appscale"
 
-    node1 = DjinnJobData.new(role1, keyname)
-    node2 = DjinnJobData.new(role2, keyname)
+    node1 = NodeInfo.new(role1, keyname)
+    node2 = NodeInfo.new(role2, keyname)
 
     # Instead of mocking out "valid_secret?" like we do elsewhere, let's
     # mock out the read_file function, which provides the same effect but
@@ -99,14 +98,14 @@ class TestDjinn < Test::Unit::TestCase
     # make sure role1 got hashed fine
     assert_equal("public_ip", role1_to_hash['public_ip'])
     assert_equal("private_ip", role1_to_hash['private_ip'])
-    assert_equal(["shadow"], role1_to_hash['jobs'])
+    assert_equal(["shadow"], role1_to_hash['roles'])
     assert_equal("instance_id", role1_to_hash['instance_id'])
     assert_equal("cloud1", role1_to_hash['cloud'])
 
     # and make sure role2 got hashed fine
     assert_equal("public_ip2", role2_to_hash['public_ip'])
     assert_equal("private_ip2", role2_to_hash['private_ip'])
-    assert_equal(["compute"], role2_to_hash['jobs'])
+    assert_equal(["compute"], role2_to_hash['roles'])
     assert_equal("instance_id2", role2_to_hash['instance_id'])
     assert_equal("cloud1", role2_to_hash['cloud'])
   end
@@ -123,7 +122,7 @@ class TestDjinn < Test::Unit::TestCase
     one_node_info = JSON.dump([{
       'public_ip' => 'public_ip',
       'private_ip' => 'private_ip',
-      'jobs' => ['some_role'],
+      'roles' => ['some_role'],
       'instance_id' => 'instance_id'
     }])
 
@@ -159,8 +158,8 @@ class TestDjinn < Test::Unit::TestCase
     one_node_info = JSON.dump([{
       'public_ip' => 'public_ip',
       'private_ip' => 'private_ip',
-      'jobs' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
-        'load_balancer', 'login', 'zookeeper', 'memcache'],
+      'roles' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
+                  'load_balancer', 'zookeeper', 'memcache'],
       'instance_id' => 'instance_id',
       'instance_type' => 'instance_type'
     }])
@@ -192,8 +191,8 @@ class TestDjinn < Test::Unit::TestCase
     one_node_info = JSON.dump([{
       'public_ip' => 'public_ip',
       'private_ip' => '1.2.3.4',
-      'jobs' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
-        'load_balancer', 'login', 'zookeeper', 'memcache'],
+      'roles' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
+                  'load_balancer', 'zookeeper', 'memcache'],
       'instance_id' => 'instance_id',
       'instance_type' => 'instance_type'
     }])
@@ -216,13 +215,13 @@ class TestDjinn < Test::Unit::TestCase
     master_role = {
       "public_ip" => "public_ip",
       "private_ip" => "private_ip",
-      "jobs" => ["taskqueue_master"],
+      "roles" => ["taskqueue_master"],
       "instance_id" => "instance_id"
     }
 
     djinn = Djinn.new
     djinn.my_index = 0
-    djinn.nodes = [DjinnJobData.new(master_role, "appscale")]
+    djinn.nodes = [NodeInfo.new(master_role, "appscale")]
 
     # Set the clear_datastore option.
     djinn.options = {'clear_datastore' => 'false',
@@ -253,20 +252,20 @@ class TestDjinn < Test::Unit::TestCase
     master_role = {
       "public_ip" => "public_ip1",
       "private_ip" => "private_ip1",
-      "jobs" => ["taskqueue_master"],
+      "roles" => ["taskqueue_master"],
       "instance_id" => "instance_id1"
     }
 
     slave_role = {
       "public_ip" => "public_ip2",
       "private_ip" => "private_ip2",
-      "jobs" => ["taskqueue_slave"],
+      "roles" => ["taskqueue_slave"],
       "instance_id" => "instance_id2"
     }
 
     djinn = Djinn.new
     djinn.my_index = 1
-    djinn.nodes = [DjinnJobData.new(master_role, "appscale"), DjinnJobData.new(slave_role, "appscale")]
+    djinn.nodes = [NodeInfo.new(master_role, "appscale"), NodeInfo.new(slave_role, "appscale")]
 
     # Set the clear_datastore option.
     djinn.options = {'clear_datastore' => 'false',
@@ -292,10 +291,12 @@ class TestDjinn < Test::Unit::TestCase
     flexmock(HAProxy).should_receive(:create_tq_server_config).and_return()
     flexmock(MonitInterface).should_receive(:start_daemon).and_return()
     flexmock(MonitInterface).should_receive(:start).and_return()
-    flexmock(Resolv).should_receive("getname").with("private_ip1").and_return("")
+    flexmock(Addrinfo).should_receive('ip.getnameinfo').and_return(["hostname-ip1"])
 
-    flexmock(HelperFunctions).should_receive(:sleep_until_port_is_open).
-      and_return()
+    flexmock(HelperFunctions).should_receive(:sleep_until_port_is_open).and_return()
+
+    flexmock(Djinn).should_receive(:log_run).and_return()
+
     assert_equal(true, djinn.start_taskqueue_slave())
   end
 
@@ -304,14 +305,14 @@ class TestDjinn < Test::Unit::TestCase
     role = {
       "public_ip" => "public_ip",
       "private_ip" => "private_ip",
-      "jobs" => ["shadow"],
+      "roles" => ["shadow"],
       "instance_id" => "instance_id"
     }
 
     djinn = Djinn.new
     djinn.my_index = 0
     djinn.done_loading = true
-    my_node = DjinnJobData.new(role, "appscale")
+    my_node = NodeInfo.new(role, "appscale")
     djinn.nodes = [my_node]
 
     baz = flexmock("baz")
@@ -450,14 +451,14 @@ class TestDjinn < Test::Unit::TestCase
     role = {
       "public_ip" => "1.2.3.4",
       "private_ip" => "1.2.3.4",
-      "jobs" => ["login","shadow"],
+      "roles" => ["shadow"],
       "instance_id" => "instance_id"
     }
 
     djinn = Djinn.new
     djinn.my_index = 0
     djinn.done_loading = true
-    my_node = DjinnJobData.new(role, "appscale")
+    my_node = NodeInfo.new(role, "appscale")
     djinn.nodes = [my_node]
     djinn.app_info_map = {
       'myapp' => {
@@ -486,14 +487,14 @@ class TestDjinn < Test::Unit::TestCase
     role = {
       "public_ip" => "1.2.3.4",
       "private_ip" => "1.2.3.4",
-      "jobs" => ["login","shadow"],
+      "roles" => ["shadow"],
       "instance_id" => "instance_id"
     }
 
     djinn = Djinn.new
     djinn.my_index = 0
     djinn.done_loading = true
-    my_node = DjinnJobData.new(role, "appscale")
+    my_node = NodeInfo.new(role, "appscale")
     djinn.nodes = [my_node]
     djinn.app_info_map = {
       'myapp' => {
@@ -523,14 +524,14 @@ class TestDjinn < Test::Unit::TestCase
     role = {
       "public_ip" => "1.2.3.4",
       "private_ip" => "1.2.3.4",
-      "jobs" => ["login","shadow"],
+      "roles" => ["shadow"],
       "instance_id" => "instance_id"
     }
 
     djinn = Djinn.new
     djinn.my_index = 0
     djinn.done_loading = true
-    my_node = DjinnJobData.new(role, "appscale")
+    my_node = NodeInfo.new(role, "appscale")
     djinn.nodes = [my_node]
     djinn.app_info_map = {
       'myapp' => {
@@ -560,14 +561,14 @@ class TestDjinn < Test::Unit::TestCase
     role = {
       "public_ip" => "1.2.3.4",
       "private_ip" => "1.2.3.4",
-      "jobs" => ["login","shadow"],
+      "roles" => ["shadow"],
       "instance_id" => "instance_id"
     }
 
     djinn = Djinn.new
     djinn.my_index = 0
     djinn.done_loading = true
-    my_node = DjinnJobData.new(role, "appscale")
+    my_node = NodeInfo.new(role, "appscale")
     djinn.nodes = [my_node]
     djinn.app_info_map = {
       'myapp' => {
@@ -607,8 +608,8 @@ class TestDjinn < Test::Unit::TestCase
     one_node_info = JSON.dump([{
       'public_ip' => 'public_ip',
       'private_ip' => '1.2.3.4',
-      'jobs' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
-        'load_balancer', 'login', 'zookeeper', 'memcache'],
+      'roles' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
+                  'load_balancer', 'zookeeper', 'memcache'],
       'instance_id' => 'instance_id',
       'instance_type' => 'instance_type'
     }])
@@ -646,8 +647,8 @@ class TestDjinn < Test::Unit::TestCase
     one_node_info = JSON.dump([{
       'public_ip' => 'public_ip',
       'private_ip' => '1.2.3.4',
-      'jobs' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
-        'load_balancer', 'login', 'zookeeper', 'memcache'],
+      'roles' => ['compute', 'shadow', 'taskqueue_master', 'db_master',
+                  'load_balancer', 'zookeeper', 'memcache'],
       'instance_id' => 'instance_id',
       'instance_type' => 'instance_type'
     }])
@@ -729,11 +730,11 @@ class TestDjinn < Test::Unit::TestCase
     role = {
         "public_ip" => "my public ip",
         "private_ip" => "my private ip",
-        "jobs" => ["login"]
+        "roles" => []
     }
     djinn = flexmock(Djinn.new())
     djinn.my_index = 0
-    djinn.nodes = [DjinnJobData.new(role, "appscale")]
+    djinn.nodes = [NodeInfo.new(role, "appscale")]
     djinn.done_loading = true
     djinn
   end
