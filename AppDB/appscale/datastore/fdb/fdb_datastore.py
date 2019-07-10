@@ -26,10 +26,11 @@ from appscale.datastore.fdb.data import DataManager, VersionEntry
 from appscale.datastore.fdb.gc import GarbageCollector
 from appscale.datastore.fdb.indexes import (
   get_order_info, IndexManager, KEY_PROP)
+from appscale.datastore.fdb.sequential_ids import SequentialIDsNS
 from appscale.datastore.fdb.transactions import TransactionManager
 from appscale.datastore.fdb.utils import (
-  ABSENT_VERSION, fdb, FDBErrorCodes, next_entity_version, DS_ROOT,
-  ScatteredAllocator, TornadoFDB)
+  _MAX_SEQUENTIAL_ID, ABSENT_VERSION, fdb, FDBErrorCodes, next_entity_version,
+  DS_ROOT, ScatteredAllocator, TornadoFDB)
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -53,17 +54,17 @@ class FDBDatastore(object):
     self._db = fdb.open()
     self._tornado_fdb = TornadoFDB(IOLoop.current())
     ds_dir = fdb.directory.create_or_open(self._db, DS_ROOT)
-    directory_cache = DirectoryCache(self._db, self._tornado_fdb, ds_dir)
-    directory_cache.initialize()
+    self._directory_cache = DirectoryCache(self._db, self._tornado_fdb, ds_dir)
+    self._directory_cache.initialize()
 
-    self._data_manager = DataManager(self._tornado_fdb, directory_cache)
+    self._data_manager = DataManager(self._tornado_fdb, self._directory_cache)
     self.index_manager = IndexManager(
-      self._db, self._tornado_fdb, self._data_manager, directory_cache)
+      self._db, self._tornado_fdb, self._data_manager, self._directory_cache)
     self._tx_manager = TransactionManager(
-      self._db, self._tornado_fdb, directory_cache)
+      self._db, self._tornado_fdb, self._directory_cache)
     self._gc = GarbageCollector(
       self._db, self._tornado_fdb, self._data_manager, self.index_manager,
-      self._tx_manager, directory_cache)
+      self._tx_manager, self._directory_cache)
     self._gc.start()
 
   @gen.coroutine
@@ -356,6 +357,78 @@ class FDBDatastore(object):
   def update_composite_index(self, project_id, index):
     project_id = decode_str(project_id)
     yield self.index_manager.update_composite_index(project_id, index)
+
+  @gen.coroutine
+  def allocate_size(self, project_id, namespace, path_prefix, size, retries=5):
+    tr = self._db.create_transaction()
+
+    dir_path = SequentialIDsNS.directory_path(project_id, namespace)
+    directory = yield self._directory_cache.get(tr, dir_path)
+    sequential_ids_ns = SequentialIDsNS(directory)
+    desired_slice = sequential_ids_ns.get_slice(path_prefix)
+    results, count, more_results = yield self._tornado_fdb.get_range(
+      tr, desired_slice, limit=1, reverse=True)
+    old_max = 0
+    if results:
+      old_max = sequential_ids_ns.decode(results[0])
+
+    new_max = old_max + size
+    # TODO: Check behavior on reaching max sequential ID.
+    if new_max > _MAX_SEQUENTIAL_ID:
+      raise BadRequest(
+        u'There are not enough remaining IDs to satisfy request')
+
+    tr[sequential_ids_ns.encode(path_prefix, new_max)] = b''
+
+    try:
+      yield self._tornado_fdb.commit(tr)
+    except fdb.FDBError as fdb_error:
+      if fdb_error.code != FDBErrorCodes.NOT_COMMITTED:
+        raise InternalError(fdb_error.description)
+
+      retries -= 1
+      if retries < 0:
+        raise InternalError(fdb_error.description)
+
+      range_start, range_end = yield self.allocate_size(
+        project_id, namespace, path_prefix, size, retries)
+      raise gen.Return((range_start, range_end))
+
+    raise gen.Return((old_max + 1, new_max))
+
+  @gen.coroutine
+  def allocate_max(self, project_id, namespace, path_prefix, new_max,
+                   retries=5):
+    tr = self._db.create_transaction()
+
+    dir_path = SequentialIDsNS.directory_path(project_id, namespace)
+    directory = yield self._directory_cache.get(tr, dir_path)
+    sequential_ids_ns = SequentialIDsNS(directory)
+    desired_slice = sequential_ids_ns.get_slice(path_prefix)
+    results, count, more_results = yield self._tornado_fdb.get_range(
+      tr, desired_slice, limit=1, reverse=True)
+    old_max = 0
+    if results:
+      old_max = sequential_ids_ns.decode(results[0])
+
+    if new_max > old_max:
+      tr[sequential_ids_ns.encode(path_prefix, new_max)] = b''
+
+    try:
+      yield self._tornado_fdb.commit(tr)
+    except fdb.FDBError as fdb_error:
+      if fdb_error.code != FDBErrorCodes.NOT_COMMITTED:
+        raise InternalError(fdb_error.description)
+
+      retries -= 1
+      if retries < 0:
+        raise InternalError(fdb_error.description)
+
+      range_start, range_end = yield self.allocate_max(
+        project_id, namespace, path_prefix, new_max, retries)
+      raise gen.Return((range_start, range_end))
+
+    raise gen.Return((old_max + 1, max(new_max, old_max)))
 
   @gen.coroutine
   def _upsert(self, tr, entity):

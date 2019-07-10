@@ -11,9 +11,10 @@ import logging
 import os
 import sys
 import time
+
+import six
 import tornado.httpserver
 import tornado.web
-
 from appscale.common import appscale_info
 from appscale.common.appscale_info import get_load_balancer_ips
 from appscale.common.async_retrying import retry_data_watch_coroutine
@@ -28,9 +29,7 @@ from .. import dbconstants
 from ..appscale_datastore_batch import DatastoreFactory
 from ..datastore_distributed import DatastoreDistributed
 from ..index_manager import IndexManager
-from ..utils import (clean_app_id,
-                     logger,
-                     UnprocessedQueryResult)
+from ..utils import clean_app_id, flatten_path, logger, UnprocessedQueryResult
 from ..zkappscale import zktransaction
 from ..zkappscale.transaction_manager import TransactionManager
 
@@ -573,12 +572,19 @@ class MainHandler(tornado.web.RequestHandler):
         ('', datastore_pb.Error.BAD_REQUEST,
          'Either size or max must be set.'))
 
+    if not request.has_model_key():
+      raise gen.Return(('', datastore_pb.Error.BAD_REQUEST,
+                        'Model key must be set'))
+
+    namespace = six.text_type(request.model_key().name_space())
+    path_prefix = flatten_path(request.model_key().path())[:-1]
+
     if request.has_size():
       coroutine = datastore_access.allocate_size
-      args = (app_id, request.size())
+      args = (app_id, namespace, path_prefix, request.size())
     else:
       coroutine = datastore_access.allocate_max
-      args = (app_id, request.max())
+      args = (app_id, namespace, path_prefix, request.max())
 
     try:
       start, end = yield coroutine(*args)

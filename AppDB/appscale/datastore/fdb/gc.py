@@ -6,9 +6,10 @@ resource is still available.
 """
 from __future__ import division
 import logging
-import monotonic
 from collections import deque
 
+import monotonic
+import six
 import six.moves as sm
 from tornado import gen
 from tornado.ioloop import IOLoop
@@ -166,7 +167,7 @@ class DeletedVersionIndex(object):
     Returns:
       A slice specifying the start and stop keys.
     """
-    scatter_byte = bytes(bytearray([byte_num]))
+    scatter_byte = six.int2byte(byte_num)
     prefix = self.directory.rawPrefix + scatter_byte
     return slice(
       fdb.KeySelector.first_greater_or_equal(prefix),

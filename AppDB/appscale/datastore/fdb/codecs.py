@@ -11,6 +11,7 @@ import six
 
 from appscale.common.unpackaged import APPSCALE_PYTHON_APPSERVER
 from appscale.datastore.dbconstants import BadRequest, InternalError
+from appscale.datastore.utils import decode_str, flatten_element, flatten_path
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -48,14 +49,6 @@ def reverse_bits(blob):
 
 def encode_marker(marker, reverse):
   return six.int2byte(marker ^ 0xFF) if reverse else six.int2byte(marker)
-
-
-def decode_str(string):
-  """ Converts byte strings to unicode strings. """
-  if isinstance(string, six.text_type):
-    return string
-
-  return string.decode('utf-8')
 
 
 class Int64(object):
@@ -341,18 +334,7 @@ class Path(object):
 
     return tuple(items), pos
 
-  @staticmethod
-  def flatten(path):
-    """ Converts a key path protobuf object to a tuple. """
-    if isinstance(path, entity_pb.PropertyValue):
-      element_list = path.referencevalue().pathelement_list()
-    elif isinstance(path, entity_pb.PropertyValue_ReferenceValue):
-      element_list = path.pathelement_list()
-    else:
-      element_list = path.element_list()
-
-    return tuple(item for element in element_list
-                 for item in Path.encode_element(element))
+  flatten = staticmethod(flatten_path)
 
   @staticmethod
   def decode(flat_path, reference_value=False):
@@ -376,18 +358,6 @@ class Path(object):
         element.set_name(id_or_name.encode('utf-8'))
 
     return path
-
-  @staticmethod
-  def encode_element(element):
-    """ Converts a path element protobuf object to a tuple. """
-    if element.has_id():
-      id_or_name = int(element.id())
-    elif element.has_name():
-      id_or_name = decode_str(element.name())
-    else:
-      raise BadRequest(u'All path elements must either have a name or ID')
-
-    return decode_str(element.type()), id_or_name
 
   @staticmethod
   def decode_element(element_tuple):

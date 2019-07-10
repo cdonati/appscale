@@ -201,7 +201,7 @@ class TransactionMetadata(object):
     return entities
 
   def _encode_key_len(self, key):
-    return bytes(bytearray([key.path().element_size()]))
+    return six.int2byte(key.path().element_size())
 
   def _encode_entity_len(self, encoded_entity):
     if len(encoded_entity) > MAX_ENTITY_SIZE:
