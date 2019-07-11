@@ -29,7 +29,7 @@ from .. import dbconstants
 from ..appscale_datastore_batch import DatastoreFactory
 from ..datastore_distributed import DatastoreDistributed
 from ..index_manager import IndexManager
-from ..utils import clean_app_id, flatten_path, logger, UnprocessedQueryResult
+from ..utils import clean_app_id, flatten_element, logger, UnprocessedQueryResult
 from ..zkappscale import zktransaction
 from ..zkappscale.transaction_manager import TransactionManager
 
@@ -577,7 +577,15 @@ class MainHandler(tornado.web.RequestHandler):
                         'Model key must be set'))
 
     namespace = six.text_type(request.model_key().name_space())
-    path_prefix = flatten_path(request.model_key().path())[:-1]
+    model_path = request.model_key().path()
+    if model_path.element_size() > 1:
+      parent_path = tuple(
+        item for element in model_path.element_list()[:-1]
+        for item in flatten_element(element))
+    else:
+      parent_path = ()
+
+    path_prefix = parent_path + (model_path.element(-1).type(),)
 
     if request.has_size():
       coroutine = datastore_access.allocate_size
