@@ -63,6 +63,7 @@ from .constants import (
   VersionNotChanged
 )
 from .controller_state import ControllerState
+from .iam import ServiceAccountsHandler
 from .operation import (
   DeleteServiceOperation,
   CreateVersionOperation,
@@ -1397,6 +1398,8 @@ def main():
     ('/api/datastore/index/add', UpdateIndexesHandler,
      {'zk_client': zk_client, 'ua_client': ua_client}),
     ('/api/queue/update', UpdateQueuesHandler,
+     {'zk_client': zk_client, 'ua_client': ua_client}),
+    ('/v1/projects/([^/]*)/serviceAccounts', ServiceAccountsHandler,
      {'zk_client': zk_client, 'ua_client': ua_client})
   ])
   logger.info('Starting AdminServer')
