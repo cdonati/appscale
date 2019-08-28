@@ -2680,13 +2680,25 @@ class Djinn
   end
 
   def update_ua_haproxy
-    begin
-      servers = ZKInterface.get_ua_servers.map { |machine_ip, port|
-        {'ip' => machine_ip, 'port' => port}
+    if ZKInterface.is_connected?
+      begin
+        servers = ZKInterface.get_ua_servers.map { |machine_ip, port|
+          {'ip' => machine_ip, 'port' => port}
+        }
+      rescue FailedZooKeeperOperationException
+        Djinn.log_warn('Unable to fetch list of UA servers')
+        return false
+      end
+    else
+      # If there is no ZK connection, guess the locations for now.
+      servers = []
+      @state_change_lock.synchronize {
+        servers = @nodes.map { |node|
+          if node.is_db_master? or node.is_db_slave?
+            {'ip' => node.private_ip, 'port' => UserAppClient::SERVER_PORT}
+          end
+        }
       }
-    rescue FailedZooKeeperOperationException
-      Djinn.log_warn('Unable to fetch list of UA servers')
-      return false
     end
 
     HAProxy.create_app_config(
