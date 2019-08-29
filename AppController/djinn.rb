@@ -2697,7 +2697,7 @@ class Djinn
           if node.is_db_master? or node.is_db_slave?
             {'ip' => node.private_ip, 'port' => UserAppClient::SERVER_PORT}
           end
-        }
+        }.compact
       }
     end
 
