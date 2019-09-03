@@ -98,7 +98,9 @@ public final class LocalBlobstoreService extends AbstractLocalRpcService
         {
             session.setGoogleStorageBucketName(request.getGsBucketName());
         }
+        logger.info("about to create upload session");
         String sessionId = this.uploadSessionStorage.createSession(session);
+        logger.info("done creating upload session");
 
         /*
          * AppScale - changed upload URL to NGINX address and port

@@ -108,6 +108,7 @@ def _execute_request(request, request_id=None):
   """
   service = request.service_name()
   method = request.method()
+  logging.warning('{}.{}'.format(service, method))
   if not request_id:
     if request.has_request_id():
       request_id = request.request_id()
@@ -139,6 +140,7 @@ def _execute_request(request, request_id=None):
   else:
     with GLOBAL_API_LOCK:
       make_request()
+  logging.warning('done with {}.{}'.format(service, method))
   return response_data
 
 

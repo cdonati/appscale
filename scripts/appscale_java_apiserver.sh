@@ -22,4 +22,4 @@ while test -n "${1}"; do
   shift
 done
 
-exec python2 /root/appscale/AppServer/api_server.py ${API_ARGS}
+exec python2 /root/appscale/AppServer/api_server.py ${API_ARGS} >> /var/log/appscale/standalone_api_server.log 2>&1
