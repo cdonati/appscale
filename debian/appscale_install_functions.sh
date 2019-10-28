@@ -576,6 +576,15 @@ installsoappy()
     pipwrapper SOAPpy==0.12.22
 }
 
+installxmpppy()
+{
+    # The version of xmpppy on bionic frequently fails to send messages on
+    # multinode setups ("Client instance has no attribute 'Dispatcher'").
+    if [ "${DIST}" = "bionic" ]; then
+        pipwrapper xmpppy==0.5.0rc1
+    fi
+}
+
 preplogserver()
 {
     LOGSERVER_DIR="/opt/appscale/logserver"

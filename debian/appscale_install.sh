@@ -44,6 +44,7 @@ case "$1" in
         installpymemcache
         installpyyaml
         installsoappy
+        installxmpppy
         installzookeeper
         postinstallzookeeper
         installcassandra
