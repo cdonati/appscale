@@ -578,10 +578,10 @@ installsoappy()
 
 installxmpppy()
 {
-    # The version of xmpppy on bionic frequently fails to send messages on
-    # multinode setups ("Client instance has no attribute 'Dispatcher'").
+    # The version of xmpppy on bionic has not been updated to work with recent
+    # versions of Python.
     if [ "${DIST}" = "bionic" ]; then
-        pipwrapper xmpppy==0.5.0rc1
+        pip install git+https://github.com/ArchipelProject/xmpppy
     fi
 }
 
