@@ -36,7 +36,7 @@ class FunctionalTestAppDashboard(unittest.TestCase):
 
   def setUp(self):
     acc = flexmock(AppControllerClient)
-    acc.should_receive('get_uaserver_host').and_return('public1')
+    acc.should_receive('get_uaserver_location').and_return('public1:4341')
     acc.should_receive('get_cluster_stats').and_return([
       # TODO make up example of cluster stats
       # TODO and make sure that this change doesn't break tests
@@ -68,7 +68,6 @@ class FunctionalTestAppDashboard(unittest.TestCase):
           "used": 886620160
         },
         "services": {
-          # For each Process monitored by monit
           "cassandra": "Running",
         },
         "loadavg": {
@@ -121,7 +120,6 @@ class FunctionalTestAppDashboard(unittest.TestCase):
           "used": 0
         },
         "services": {
-          # For each Process monitored by monit
           # TODO
         },
         "loadavg": {

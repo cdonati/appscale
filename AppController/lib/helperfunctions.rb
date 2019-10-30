@@ -42,6 +42,9 @@ module HelperFunctions
 
   APPSCALE_KEYS_DIR = "#{APPSCALE_CONFIG_DIR}/keys/cloud1".freeze
 
+  # Temporary location for runtime files
+  APPSCALE_RUN_DIR = '/run/appscale'.freeze
+
   # Generic sleep time to take while waiting for remote operation to
   # complete.
   SLEEP_TIME = 10
@@ -914,7 +917,7 @@ module HelperFunctions
     write_file(APPCONTROLLER_CRASHLOG_LOCATION, Time.new.to_s + ': ' +
       message)
     # Try to also log to the normal log file.
-    Djinn.log_error("FATAL: #{message}")
+    Djinn.log_fatal("#{message}")
 
     # If asked for, wait for a while before crashing. This will help the
     # tools to collect the status report or crashlog.

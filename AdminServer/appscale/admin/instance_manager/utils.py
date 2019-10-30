@@ -9,7 +9,7 @@ import subprocess
 
 from appscale.admin.constants import InvalidSource
 from appscale.admin.instance_manager.constants import (
-  CONFLICTING_JARS, LOGROTATE_CONFIG_DIR, MODIFIED_JARS, MONIT_INSTANCE_PREFIX)
+  CONFLICTING_JARS, LOGROTATE_CONFIG_DIR, MODIFIED_JARS)
 from appscale.common.constants import CONFIG_DIR
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ def setup_logrotate(app_name, log_size):
   app_logrotate_script = "{0}/appscale-{1}".\
     format(LOGROTATE_CONFIG_DIR, app_name)
 
-  log_prefix = ''.join([MONIT_INSTANCE_PREFIX, app_name])
+  log_prefix = 'app___{}'.format(app_name)
 
   # Application logrotate script content.
   contents = """/var/log/appscale/{log_prefix}*.log {{
@@ -147,7 +147,17 @@ def setup_logrotate(app_name, log_size):
   notifempty
   copytruncate
 }}
-""".format(log_prefix=log_prefix, size=log_size)
+
+/opt/appscale/logserver/requests-{app_name}*.log {{
+  size {size}
+  missingok
+  rotate 3
+  compress
+  delaycompress
+  notifempty
+  copytruncate
+}}
+""".format(log_prefix=log_prefix, app_name=app_name, size=log_size)
   logger.debug("Logrotate file: {} - Contents:\n{}".
     format(app_logrotate_script, contents))
 

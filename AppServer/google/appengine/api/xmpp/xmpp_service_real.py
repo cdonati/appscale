@@ -63,7 +63,7 @@ class XmppService(apiproxy_stub.APIProxyStub):
     super(XmppService, self).__init__(service_name)
     self.log = log
     self.xmpp_domain = domain
-    self.uaserver = "https://" + uaserver
+    self.uaserver = "http://" + uaserver
     self.login = "https://localhost:17443"
 
     if not uasecret:
@@ -201,14 +201,20 @@ class XmppService(apiproxy_stub.APIProxyStub):
     if '@' in application_key:
       raise apiproxy_errors.ApplicationError(
           channel_service_pb.ChannelServiceError.INVALID_CHANNEL_KEY)
-  
+
+    # Ejabberd 18.01 does not invoke the external auth script if username has
+    # any uppercase characters.
+    if application_key != application_key.lower():
+      raise apiproxy_errors.ApplicationError(
+        channel_service_pb.ChannelServiceError.INVALID_CHANNEL_KEY)
+
     appname = os.environ['APPNAME']
     unique_app_id = hashlib.sha1(appname + application_key).hexdigest()
     client_id = 'channel~%s~%s@%s' % (unique_app_id,
                                       application_key,
                                       self.xmpp_domain)
 
-    server = SOAPpy.SOAPProxy(self.uaserver, transport=UnverifiedTransport)
+    server = SOAPpy.SOAPProxy(self.uaserver)
     password = application_key
     encry_pw = hashlib.sha1(client_id+password)
     ret = server.commit_new_user(client_id, 

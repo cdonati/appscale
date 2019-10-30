@@ -39,6 +39,7 @@ case "$1" in
         installappserverjava
         installtornado
         installpycrypto
+        installurllib3
         installpycapnp
         installpymemcache
         installpyyaml
@@ -52,7 +53,6 @@ case "$1" in
         installsolr7
         installservice
         postinstallservice
-        postinstallmonit
         postinstallejabberd
         setulimits
         increaseconnections
