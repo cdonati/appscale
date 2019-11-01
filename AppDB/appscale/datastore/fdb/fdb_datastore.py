@@ -448,6 +448,13 @@ class FDBDatastore(object):
       raise BadRequest(
         u'There are not enough remaining IDs to satisfy request')
 
+    # Avoid allocating any existing IDs. If an ID exists within the range that
+    # the sequential allocator chose, allocate up to that ID, but do not return
+    # that range to the client.
+    existing_id = yield self._data_manager.max_id_in_range(
+      tr, project_id, namespace, path_prefix, old_max, new_max)
+    new_max = existing_id or new_max
+
     tr[key] = SequentialIDsNamespace.encode_value(new_max)
 
     try:
@@ -464,6 +471,15 @@ class FDBDatastore(object):
         project_id, namespace, path_prefix, size, retries)
       raise gen.Return((range_start, range_end))
 
+    # TODO: This could be really inefficient if the size is small and the
+    #  there are many existing IDs in the range being requested. However, that
+    #  should be a rare situation in practice.
+    if existing_id is not None:
+      logger.debug(u'Allocated range is not empty. Requesting more IDs.')
+      range_start, range_end = yield self.allocate_size(
+        project_id, namespace, path_prefix, size, retries)
+      raise gen.Return((range_start, range_end))
+
     raise gen.Return((old_max + 1, new_max))
 
   @gen.coroutine
@@ -474,6 +490,11 @@ class FDBDatastore(object):
     key = yield sequential_id_key(tr, project_id, namespace, path_prefix,
                                   self._directory_cache)
     old_max = yield old_max_id(tr, key, self._tornado_fdb)
+
+    # Avoid allocating any existing IDs.
+    existing_id = yield self._data_manager.max_id_in_range(
+      tr, project_id, namespace, path_prefix, old_max, new_max)
+    old_max = existing_id or old_max
 
     if new_max > old_max:
       tr[key] = SequentialIDsNamespace.encode_value(new_max)

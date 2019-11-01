@@ -523,6 +523,34 @@ class DataManager(object):
     del tr[version_slice.start.key:version_slice.stop.key]
 
   @gen.coroutine
+  def max_id_in_range(self, tr, project_id, namespace, path_prefix, start,
+                      stop):
+    """ Determines the largest existing ID in a range of entities.
+
+    Args:
+      tr: An FDB transaction.
+      project_id: A string specifying a project ID.
+      namespace: A string specifying a namespace.
+      path_prefix: A tuple specifying a path that's missing the ID from the
+        last element.
+      start: The minimum ID in the range.
+      stop: The maximum ID in the range.
+    Returns:
+      An integer if the range contains an entity.
+      None if the range does not contain an entity.
+    """
+    data_ns = yield self._data_ns(tr, project_id, namespace)
+    min_key = data_ns.get_slice(path_prefix + (start,)).start
+    max_key = data_ns.get_slice(path_prefix + (stop,)).stop
+    results, count, more_results = yield self._tornado_fdb.get_range(
+      tr, slice(min_key, max_key), limit=1, reverse=True)
+    if not results:
+      return
+
+    entry = data_ns.decode(results)
+    raise gen.Return(entry.path[-1])
+
+  @gen.coroutine
   def _data_ns(self, tr, project_id, namespace):
     directory = yield self._directory_cache.get(
       tr, DataNamespace.directory_path(project_id, namespace))
